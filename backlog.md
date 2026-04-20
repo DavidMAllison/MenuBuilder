@@ -34,6 +34,14 @@
 ### WeeklyMealCalendar.app Improvements
 - Handle edge cases: recipes with no cook time, multi-component meals
 
+### Replace PDF Recipe Storage with a Better Format
+- PDFs are cumbersome to generate (requires fpdf), can't be read by Claude for SMS/text queries, and aren't easily diffable or editable
+- **Goal**: migrate recipes to a plain-text or structured format that Claude can read directly and that works on mobile
+- **Candidates**: Markdown (`.md`) per recipe, or a single structured JSON with full recipe content alongside metadata
+- Markdown is the likely winner — human-readable, Dropbox-accessible on phone, Claude can read it natively via SMS context
+- **Migration**: write a script to extract content from existing PDFs into Markdown files; update WeeklyMealCalendar.app and WeeklyShoppingList.app if recipe links change
+- **Dropbox links**: update meal plan URL format from `?preview=Filename.pdf` to the equivalent Markdown file
+
 ### Consolidate meal plan to JSON format
 - Currently meal plan is `.txt` (for WeeklyShoppingList.app and WeeklyMealCalendar.app) with a separate feedback JSON
 - Goal: single `mealplan_YYYY-MM-DD.json` containing meals + feedback together
