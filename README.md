@@ -17,7 +17,7 @@ A personal meal planning system built around real family constraints — health 
 
 **Scoring over hard rules.** `suggest_meals.py` produces a ranked candidate list rather than making the final selection. A scoring function penalizes recently-cooked meals, overused recipes, and indulgent options while rewarding heart-healthy choices, family favorites, and in-season grill meals. The human makes the final call from the ranked list.
 
-**Constraint-driven health balance.** The family has specific dietary goals (lowering LDL, reducing blood pressure). Rather than tracking macros, the system classifies each recipe as Heart-Healthy / Moderate / Indulgent and enforces a weekly ratio (5-6 heart-healthy, max 1 indulgent). Simple enough to maintain, effective enough to shift eating patterns.
+**Constraint-driven health balance.** The family has specific dietary goals (managing cholesterol and blood pressure). Rather than tracking macros, the system classifies each recipe as Heart-Healthy / Moderate / Indulgent and enforces a weekly ratio (5-6 heart-healthy, max 1 indulgent). Simple enough to maintain, effective enough to shift eating patterns.
 
 **Kids-friendly layered cooking.** Recipes are structured where possible so kids' plain portions can be pulled before adding adult sauces — one meal, two outcomes, no separate cooking.
 
