@@ -87,12 +87,12 @@
 ## Dietary Preferences & Restrictions
 
 ### Health Requirements (PRIORITY)
-- **Adult 1**: Needs to reduce lipoprotein levels
+- **Adult 1**: Managing cholesterol
   - Focus on: Lean proteins, fiber-rich foods, healthy fats (olive oil, avocado)
   - Limit: Saturated fats, red meat frequency, full-fat dairy, fried foods
   - Prioritize: Fish, chicken breast, whole grains, vegetables, fruits
 
-- **Adult 2**: Needs to lower blood pressure
+- **Adult 2**: Managing blood pressure
   - Focus on: Low-sodium meals, potassium-rich foods (bananas, sweet potatoes, spinach)
   - Limit: Salt/sodium, processed foods, canned items with high sodium
   - Prioritize: Fresh ingredients, herbs for flavor instead of salt, DASH diet principles
