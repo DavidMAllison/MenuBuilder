@@ -34,6 +34,14 @@
 ### WeeklyMealCalendar.app Improvements
 - Handle edge cases: recipes with no cook time, multi-component meals
 
+### PDF-to-Markdown Migration Script
+- Write a script to batch-convert all active recipe PDFs to `.md` files in the same `recipes/` folder
+- Pull ingredients from JSON (already populated) rather than parsing PDFs, since PDFs are truncated
+- Instructions will need to be extracted from PDFs or sourced manually where PDFs are truncated
+- After migration: update `recipe_metadata.json` `filename` field from `.pdf` to `.md` for each recipe
+- Update meal plan URL format from `?preview=Filename.pdf` to `?preview=Filename.md`
+- Delete PDFs once Markdown versions are verified
+
 ### Replace PDF Recipe Storage with a Better Format
 - PDFs are cumbersome to generate (requires fpdf), can't be read by Claude for SMS/text queries, and aren't easily diffable or editable
 - **Goal**: migrate recipes to a plain-text or structured format that Claude can read directly and that works on mobile
