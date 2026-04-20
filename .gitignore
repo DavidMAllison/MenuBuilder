@@ -1,0 +1,24 @@
+# Personal config and data — not committed
+config.json
+schedule.md
+recipe_data.txt
+
+# One-off batch scripts (not part of the core tool)
+CREATE_ALL_25_RECIPES.py
+create_mediterranean_recipes.py
+generate_all_recipes.py
+process_jpg_recipes.py
+process_recipes.py
+recipeideas_to_recipes.py
+
+# Claude Code local settings
+.claude/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
