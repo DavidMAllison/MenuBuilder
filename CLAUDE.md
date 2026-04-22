@@ -170,7 +170,9 @@
 
 ### Recipe Links
 - **ALWAYS include full Dropbox HTTP URLs** in meal plans for each recipe
-- Format: `https://www.dropbox.com/home/LLMContext/cooking/recipes?preview=Filename.pdf`
+- Format: `https://www.dropbox.com/scl/fo/lynuzkbdyhbze0purlgif/AESQnTvTVpo-hEUdszNhmug?rlkey=h4ah0na6roua836hhm3qh0gv0&preview=Filename.pdf`
+- This is a shared folder link — works for anyone, no Dropbox login required
+- For Markdown recipes use the same base URL with `&preview=Filename.md`
 
 ### Recipe Processing
 - When converting recipes from recipeideas to recipes folder, **delete the source file from recipeideas** after the standardized PDF is created
