@@ -12,10 +12,10 @@
 - Can try new complex recipes
 
 ## Recipe Collection Location
-- All recipes stored as PDFs in: `~/Dropbox/LLMContext/cooking/recipes/`
+- All recipes stored as Markdown files (`.md`) in: `~/Dropbox/LLMContext/cooking/recipes/`
 - Recipes follow standardized format: Title, Time, Ingredients, Instructions, Notes
 - Cloud-based (Dropbox) for access on phone while cooking
-- **PDF generation**: MUST use Python `fpdf` library to create real PDFs. Do NOT write plain text to a `.pdf` file -- it won't open. Use the `fpdf` PDF generation approach for all recipe PDFs.
+- **New recipes**: Always create as `.md` files. Do NOT create PDFs for new recipes.
 
 ### Recipe Metadata System
 - **Metadata file**: `~/Dropbox/LLMContext/cooking/recipe_metadata.json`
@@ -31,9 +31,9 @@
   - **Last Cooked Date**: `last_cooked_date` field (YYYY-MM-DD) — updated every time a meal is logged as cooked. Used by candidate filter to avoid repeating recent meals.
   - **Cooking Method**: `stovetop`, `oven`, `grill`, `slow_cooker`, `multi` -- all recipes populated as of Mar 2026
   - **Nutritional Info** (when available): Calories, fat, saturated fat, sodium, protein, fiber per serving
-- **Usage**: JSON is the single source of truth for all metadata and ingredients. PDFs contain only recipe content (title, ingredients, instructions, notes) -- no metadata footer.
+- **Usage**: JSON is the single source of truth for all metadata and ingredients. Recipe files contain only recipe content (title, ingredients, instructions, notes) -- no metadata footer.
 - **Ingredients**: Each recipe entry has an `ingredients` array: `[{"name", "quantity", "unit", "category"}]`. Categories: Proteins, Produce, Dairy, Pantry/Asian, Dry Goods, Spices/Herbs. Populate when a recipe is first used in a meal plan.
-- **Status**: `"active"` (in collection, PDF exists) | `"idea"` (in recipeideas, not yet tried) | `"disliked"` (tried, didn't like — PDF deleted, entry kept as tombstone)
+- **Status**: `"active"` (in collection, .md file exists) | `"idea"` (in recipeideas, not yet tried) | `"disliked"` (tried, didn't like — .md file deleted, entry kept as tombstone)
 - **Updates**: Times cooked increments automatically when user reports cooking a meal
 
 ## Weekly Meal Plans
@@ -133,7 +133,7 @@
 
 - **New meal suggestions**: Can recommend new meals not yet in the recipe collection during weekly planning
 - **Feedback loop**: After the family tries a new meal:
-  - If they liked it: Create standardized PDF, add to `~/Dropbox/LLMContext/cooking/recipes/`, add metadata entry
+  - If they liked it: Create standardized `.md` file, add to `~/Dropbox/LLMContext/cooking/recipes/`, add metadata entry
   - If they didn't like it: Document what specifically they didn't like to avoid in future recommendations
 
 ## Recipe Processing System
@@ -141,8 +141,8 @@
 ### Recipe Ideas Folder
 - **Location**: `~/Dropbox/LLMContext/cooking/recipeideas/`
 - **Purpose**: Staging area for recipes the family hasn't tried yet
-- **Workflow**: Save idea → family tries it from source → if they liked it → THEN create PDF + add to recipes/ + add metadata
-- **Do NOT** create PDFs or metadata entries for recipeideas files preemptively — only after user confirms they liked it
+- **Workflow**: Save idea → family tries it from source → if they liked it → THEN create `.md` file + add to recipes/ + add metadata
+- **Do NOT** create recipe files or metadata entries for recipeideas files preemptively — only after user confirms they liked it
 
 ## Tools
 - **WeeklyShoppingList.app** -- populates "Grocery" Reminders list from the meal plan. Run: `open /Applications/WeeklyShoppingList.app`
@@ -162,29 +162,28 @@
 ## Meal Plan Generation Rules
 
 ### Shopping List
-- **Use JSON ingredients first**: If a recipe has an `ingredients` array in `recipe_metadata.json`, use that -- do NOT read the PDF.
-- **Fall back to PDF only** if a recipe has no `ingredients` in JSON yet. After reading the PDF, add the ingredients to the JSON for next time.
+- **Use JSON ingredients first**: If a recipe has an `ingredients` array in `recipe_metadata.json`, use that -- do NOT read the recipe file.
+- **Fall back to .md file only** if a recipe has no `ingredients` in JSON yet. After reading the file, add the ingredients to the JSON for next time.
 - **Write to CSV only** (`shopping_YYYY-MM-DD.csv`) -- do NOT append to the meal plan txt
 - Aggregate shared ingredients across recipes (e.g., total lemons, total chicken broth)
 - Flag when inventory items may not cover recipe quantities (e.g., short ribs recipe needs 5 lbs but only 2 ribs in stock)
 
 ### Recipe Links
 - **ALWAYS include full Dropbox HTTP URLs** in meal plans for each recipe
-- Format: `https://www.dropbox.com/scl/fo/lynuzkbdyhbze0purlgif/AESQnTvTVpo-hEUdszNhmug?rlkey=h4ah0na6roua836hhm3qh0gv0&preview=Filename.pdf`
+- Format: `https://www.dropbox.com/scl/fo/lynuzkbdyhbze0purlgif/AESQnTvTVpo-hEUdszNhmug?rlkey=h4ah0na6roua836hhm3qh0gv0&preview=Filename.md`
 - This is a shared folder link — works for anyone, no Dropbox login required
-- For Markdown recipes use the same base URL with `&preview=Filename.md`
 
 ### Recipe Processing
-- When converting recipes from recipeideas to recipes folder, **delete the source file from recipeideas** after the standardized PDF is created
-- Verify recipe times against actual PDF content -- metadata times are sometimes wrong
+- When converting recipes from recipeideas to recipes folder, **delete the source file from recipeideas** after the standardized `.md` file is created
+- Verify recipe times against actual recipe file content -- metadata times are sometimes wrong
 
 ### Time Accuracy
-- Always verify cook times from the actual recipe PDF, not from the metadata (some entries are inaccurate)
+- Always verify cook times from the actual recipe file, not from the metadata (some entries are inaccurate)
 - Note marinating time separately (e.g., "1 hour plus 1 hour marinating")
 - Recipes over 60 minutes should be classified as Weekend meal_type
 
 ## Menu Generation Workflow
-1. **Log last week's meals** -- read `mealplan_YYYY-MM-DD_feedback.json` for the previous week first. For each meal with feedback entries, auto-update `times_cooked`, `last_cooked_date`, and append entries to the `feedback` array in `recipe_metadata.json`. For meals with no feedback, prompt: "Any feedback on [recipe]? Did you make it?" If all adults disliked a recipe (adult_score = 0), flag for tombstone discussion -- do not auto-delete. If disliked and confirmed: delete PDF, set `status: "disliked"` in JSON.
+1. **Log last week's meals** -- read `mealplan_YYYY-MM-DD_feedback.json` for the previous week first. For each meal with feedback entries, auto-update `times_cooked`, `last_cooked_date`, and append entries to the `feedback` array in `recipe_metadata.json`. For meals with no feedback, prompt: "Any feedback on [recipe]? Did you make it?" If all adults disliked a recipe (adult_score = 0), flag for tombstone discussion -- do not auto-delete. If disliked and confirmed: delete `.md` file, set `status: "disliked"` in JSON.
 2. **Check schedule** -- ask about any one-off changes this week (standing constraints are in `family-schedule.md`)
 3. **Check recipeideas** -- if the folder is empty or hasn't had new files in 2+ weeks, suggest the user run recipe idea agents. Do NOT auto-spawn them.
 4. **Run candidate filter** -- `python3 ~/projects/personal/MenuBuilder/suggest_meals.py`. Pass the week's busy nights (e.g. `--quick mon,tue,thu`). The script filters by `last_cooked_date`, health balance, protein variety, cuisine variety, and seasonal method. Use its output as the candidate pool -- do not re-scan the JSON manually.
