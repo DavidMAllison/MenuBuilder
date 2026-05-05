@@ -157,7 +157,7 @@
 - **How it works**: FastAPI server + ngrok tunnel + Claude API. Reads the same cooking context files (meal plans, recipe_metadata.json, inventory.md) as this project. Read-only via SMS.
 - **To start**: `cd ~/projects/personal/sms-assistant && ./start.sh`
 - **Guardrails**: Phone number whitelist in `config/settings.yaml`. System prompt in `system_prompts/menu.txt`. Neither can be changed via SMS.
-- **Note**: The SMS assistant can accept and save recipe feedback (writes to `mealplan_YYYY-MM-DD_feedback.json`). All meal plan generation, recipe creation, and other data updates still happen through desktop Claude sessions in this project.
+- **Note**: The SMS assistant accepts recipe feedback and writes entries to `/Users/Shared/cooking/feedback_queue.json`. The queue is drained into the weekly feedback JSON files at the start of each menu workflow (step 0). All meal plan generation, recipe creation, and other data updates still happen through desktop Claude sessions in this project.
 
 ## Meal Plan Generation Rules
 
@@ -183,6 +183,10 @@
 - Recipes over 60 minutes should be classified as Weekend meal_type
 
 ## Menu Generation Workflow
+0. **Drain SMS feedback queue** -- `python3 ~/projects/personal/MenuBuilder/process_feedback_queue.py`. This reads `/Users/Shared/cooking/feedback_queue.json`, matches each entry to its meal plan week, writes feedback into the corresponding `mealplan_YYYY-MM-DD_feedback.json`, then empties the queue. Run this before step 1 so queue feedback is available during meal logging. If the queue is empty, move on.
+   - Entries with `sentiment: "disliked"` will appear in the feedback JSON and should be flagged during step 1 like any other disliked feedback.
+   - Entries with `sentiment: "mixed"` should be surfaced for review before including the recipe this week.
+   - Unmatched recipes are stored under `"_unplanned"` in the most-recent feedback JSON -- review them manually.
 1. **Log last week's meals** -- read `mealplan_YYYY-MM-DD_feedback.json` for the previous week first. For each meal with feedback entries, auto-update `times_cooked`, `last_cooked_date`, and append entries to the `feedback` array in `recipe_metadata.json`. For meals with no feedback, prompt: "Any feedback on [recipe]? Did you make it?" If all adults disliked a recipe (adult_score = 0), flag for tombstone discussion -- do not auto-delete. If disliked and confirmed: delete `.md` file, set `status: "disliked"` in JSON.
 2. **Check schedule** -- ask about any one-off changes this week (standing constraints are in `family-schedule.md`)
 3. **Check recipeideas** -- if the folder is empty or hasn't had new files in 2+ weeks, suggest the user run recipe idea agents. Do NOT auto-spawn them.
