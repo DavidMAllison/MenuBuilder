@@ -13,7 +13,7 @@ A personal meal planning system built around real family constraints — health 
 
 ## Design Decisions
 
-**JSON as single source of truth.** All recipe metadata lives in `recipe_metadata.json` — health classification, cuisine type, cook time, cooking method, times cooked, last cooked date, and a structured ingredients array. PDFs are recipe content only (no metadata). This lets the planning system work entirely from the JSON without re-parsing PDFs on every run.
+**JSON as single source of truth.** All recipe metadata lives in `recipe_metadata.json` — health classification, cuisine type, cook time, cooking method, times cooked, last cooked date, and a structured ingredients array. Recipe `.md` files contain only recipe content (title, ingredients, instructions, notes) — no metadata. This lets the planning system work entirely from the JSON without re-parsing recipe files on every run.
 
 **Scoring over hard rules.** `suggest_meals.py` produces a ranked candidate list rather than making the final selection. A scoring function penalizes recently-cooked meals, overused recipes, and indulgent options while rewarding heart-healthy choices, family favorites, and in-season grill meals. The human makes the final call from the ranked list.
 
@@ -26,11 +26,12 @@ A personal meal planning system built around real family constraints — health 
 ## Repository Structure
 
 ```
-suggest_meals.py        # Candidate meal filter — run before each weekly plan
-recipe_metadata.json    # (not committed) Single source of truth for all recipe data
-CLAUDE.md               # AI assistant context and workflow instructions
-backlog.md              # Planned features
-release-notes.md        # Shipped features log
+suggest_meals.py              # Candidate meal filter — run before each weekly plan
+process_feedback_queue.py     # Drain SMS feedback queue into feedback_current.json
+recipe_metadata.json          # (not committed) Single source of truth for all recipe data
+CLAUDE.md                     # AI assistant context and workflow instructions
+backlog.md                    # Planned features
+release-notes.md              # Shipped features log
 ```
 
 ## Usage
@@ -94,6 +95,6 @@ Both run via `open /Applications/<AppName>.app` at the end of each planning sess
 
 | Status | Meaning |
 |---|---|
-| `active` | In rotation, PDF exists |
+| `active` | In rotation, `.md` file exists |
 | `idea` | Staged for trial, not yet tried |
 | `disliked` | Tried, didn't work — kept as tombstone |

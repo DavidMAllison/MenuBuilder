@@ -140,9 +140,10 @@
 
 ### Recipe Ideas Folder
 - **Location**: `~/Dropbox/LLMContext/cooking/recipeideas/`
-- **Purpose**: Staging area for recipes the family hasn't tried yet
-- **Workflow**: Save idea → family tries it from source → if they liked it → THEN create `.md` file + add to recipes/ + add metadata
-- **Do NOT** create recipe files or metadata entries for recipeideas files preemptively — only after user confirms they liked it
+- **Purpose**: External app inbox only — SMS assistant and other outside apps write new ideas here
+- **MenuBuilder never reads this folder directly** — `recipe_metadata.json` is the single source of truth for all recipes at every stage (`idea`, `active`, `disliked`, `ignored`)
+- **Workflow**: External app writes file → weekly workflow (step 3) reviews with user → promoted to JSON as `status: "idea"` → file deleted
+- **Do NOT** create `.md` files or active metadata entries until user confirms they tried and liked the recipe
 
 ## Tools
 - **WeeklyShoppingList.app** -- populates "Grocery" Reminders list from the meal plan. Run: `open /Applications/WeeklyShoppingList.app`
@@ -183,15 +184,15 @@
 - Recipes over 60 minutes should be classified as Weekend meal_type
 
 ## Menu Generation Workflow
-0. **Drain SMS feedback queue** -- `python3 ~/projects/personal/MenuBuilder/process_feedback_queue.py`. This reads `/Users/Shared/cooking/feedback_queue.json`, matches each entry to its meal plan week, writes feedback into the corresponding `mealplan_YYYY-MM-DD_feedback.json`, then empties the queue. Run this before step 1 so queue feedback is available during meal logging. If the queue is empty, move on.
-   - Entries with `sentiment: "disliked"` will appear in the feedback JSON and should be flagged during step 1 like any other disliked feedback.
+0. **Drain SMS feedback queue** -- `python3 ~/projects/personal/MenuBuilder/process_feedback_queue.py`. This reads `/Users/Shared/cooking/feedback_queue.json` and appends entries to `feedback_current.json`, then empties the queue. Run this before step 1 so queue feedback is available during meal logging. If the queue is empty, move on.
+   - Entries with `sentiment: "disliked"` should be flagged during step 1.
    - Entries with `sentiment: "mixed"` should be surfaced for review before including the recipe this week.
-   - Unmatched recipes are stored under `"_unplanned"` in the most-recent feedback JSON -- review them manually.
-1. **Log last week's meals** -- read `mealplan_YYYY-MM-DD_feedback.json` for the previous week first. For each meal with feedback entries, auto-update `times_cooked`, `last_cooked_date`, and append entries to the `feedback` array in `recipe_metadata.json`. For meals with no feedback, prompt: "Any feedback on [recipe]? Did you make it?" If all adults disliked a recipe (adult_score = 0), flag for tombstone discussion -- do not auto-delete. If disliked and confirmed: delete `.md` file, set `status: "disliked"` in JSON.
+1. **Log last week's meals** -- read `feedback_current.json` and the previous week's `mealplan_YYYY-MM-DD.txt`. For each meal in the plan with a feedback entry, auto-update `times_cooked`, `last_cooked_date`, and append entries to the `feedback` array in `recipe_metadata.json`. For meals with no feedback entry, prompt: "Any feedback on [recipe]? Did you make it?" After processing all meals, clear `feedback_current.json` to `{"entries": []}`. If sentiment is `"disliked"`, flag for tombstone discussion -- do not auto-delete. If disliked and confirmed: delete `.md` file, set `status: "disliked"` in JSON.
 2. **Check schedule** -- ask about any one-off changes this week (standing constraints are in `family-schedule.md`)
-3. **Check recipeideas** -- if the folder is empty or hasn't had new files in 2+ weeks, suggest the user run recipe idea agents. Do NOT auto-spawn them.
+3. **Process recipeideas inbox** -- check the `recipeideas/` folder for any files not yet in `recipe_metadata.json`. If new files exist, show them to the user (title, source URL if present) and flag any that look like duplicates or are similar to existing active/idea entries. Wait for user to confirm before adding each one to the JSON as `status: "idea"` and deleting the file. Then review the full `status: "idea"` list — if there are fewer than 5 ideas or none have been added in 2+ weeks, suggest the user run recipe idea agents. Do NOT auto-spawn them.
 4. **Run candidate filter** -- `python3 ~/projects/personal/MenuBuilder/suggest_meals.py`. Pass the week's busy nights (e.g. `--quick mon,tue,thu`). The script filters by `last_cooked_date`, health balance, protein variety, cuisine variety, and seasonal method. Use its output as the candidate pool -- do not re-scan the JSON manually.
 5. **Propose recipe names only** -- let user approve/swap before generating
+5a. **Promote any ideas on the menu** -- after user approves, check if any selected meal has `status: "idea"` in `recipe_metadata.json`. For each one, share the source URL and prompt: "Please paste the recipe text for X so I can add it to the collection." Never attempt to fetch from the URL directly — recipe sites are unreliable. Once content is provided: create `.md` file in `recipes/`, populate `ingredients` in JSON, set `status: "active"`. Do this before generating the plan.
 6. **Generate meal plan** -- save `mealplan_YYYY-MM-DD.txt` (minimal format) + `shopping_YYYY-MM-DD.csv`
 7. **Run apps** -- `open /Applications/WeeklyShoppingList.app` then `open /Applications/WeeklyMealCalendar.app`
 
