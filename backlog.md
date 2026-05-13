@@ -74,6 +74,17 @@
 - **TODO**: implement SMS idea submission in the sms-assistant (currently not built).
 - **Future enhancement**: SMS assistant detects duplicates or similar recipes at submission time (before writing to recipeideas/), warns the sender if a close match already exists in the JSON.
 
+### Recipe Viewer Enhancements (show_recipe.py)
+- **In-page feedback**: thumbs up/down voting + freeform notes field rendered in the HTML page; on submit, writes to `feedback_current.json` so it flows into the Sunday logging workflow
+- **SMS recipe display**: text a recipe name to Keanu, get back a formatted recipe (ingredients + steps); would use the same JSON-first lookup as show_recipe.py
+- **Stale header cleanup**: batch-remove `Source:`, `Time:`, `Yield:` header blocks from older `.md` files that still have them baked in (those fields now live in JSON)
+
+### Display Recipe in Chat (Desktop)
+- When on desktop, user should be able to ask for a recipe and have it printed inline in the chat
+- Claude reads the `.md` file directly and renders it — no need to copy/paste Dropbox links
+- Workflow: look up recipe filename from `recipe_metadata.json`, read from `recipes/`, render in chat
+- This is now standard behavior; backlog item is to document it in CLAUDE.md as the default desktop pattern
+
 ### Meal Swap Handling
 - Support swapping a planned meal mid-week (e.g. grilling instead of the scheduled dinner)
 - Involves: updating the meal plan txt, updating the calendar event via WeeklyMealCalendar.app, and logging the uncooked meal so it's not counted at Sunday feedback
