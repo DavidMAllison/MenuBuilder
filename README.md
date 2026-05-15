@@ -10,10 +10,14 @@ A personal meal planning system built around real family constraints — health 
 - **Calendar integration**: Adds dinner events to iCloud Calendar with cook times and recipe links, built as a Mac app
 - **Feedback loop**: Tracks which meals the family liked, surfaces family-favorite signals in future candidate scoring
 - **SMS assistant**: Companion WhatsApp bot for querying recipes, meal plans, and inventory from a phone (separate project)
+- **Regional recipe agents**: Automated agents that source new recipe ideas from regional cuisine sites. Mexican agent is live (Pati Jinich, Rick Bayless, Cooking Con Claudia). Additional cuisines planned for future releases.
+- **Recipe web hosting**: Recipe collection published to [GitHub Pages](https://davidmallison.github.io/menubuilder-recipes/) as styled HTML — clean mobile URLs, no login required, replaces Dropbox preview links
 
 ## Design Decisions
 
-**JSON as single source of truth.** All recipe metadata lives in `recipe_metadata.json` — health classification, cuisine type, cook time, cooking method, times cooked, last cooked date, and a structured ingredients array. Recipe `.md` files contain only recipe content (title, ingredients, instructions, notes) — no metadata. This lets the planning system work entirely from the JSON without re-parsing recipe files on every run.
+**JSON as single source of truth.** All recipe metadata lives in `recipe_metadata.json` — health classification, cuisine type, cook time, cooking method, times cooked, last cooked date, and a structured ingredients array. Recipe `.md` files contain only recipe content (title, ingredients, instructions, notes) — no metadata. This lets the planning system work entirely from the JSON without re-parsing recipe files on every run, reducing token usage and improving planning speed.
+
+**Recipe `.md` files over PDFs.** Recipes are stored as plain Markdown files rather than PDFs. This means Claude can read recipe content directly without parsing, the SMS assistant can serve recipe text inline, and the files render cleanly on GitHub Pages for mobile access during cooking. All recipes are adapted and reformatted from their original sources — the original source link is included in each file for reference.
 
 **Scoring over hard rules.** `suggest_meals.py` produces a ranked candidate list rather than making the final selection. A scoring function penalizes recently-cooked meals, overused recipes, and indulgent options while rewarding heart-healthy choices, family favorites, and in-season grill meals. The human makes the final call from the ranked list.
 
