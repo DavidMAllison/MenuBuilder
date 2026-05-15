@@ -12,10 +12,11 @@
 - Can try new complex recipes
 
 ## Recipe Collection Location
-- All recipes stored as Markdown files (`.md`) in: `~/Dropbox/LLMContext/cooking/recipes/`
+- All recipes stored as Markdown files (`.md`) in: `~/Dropbox/LLMContext/cooking/recipes/` (local source of truth)
+- Recipes also published to GitHub Pages: `https://davidmallison.github.io/menubuilder-recipes/` (web access, mobile-friendly)
 - Recipes follow standardized format: Title, Time, Ingredients, Instructions, Notes
-- Cloud-based (Dropbox) for access on phone while cooking
-- **New recipes**: Always create as `.md` files. Do NOT create PDFs for new recipes.
+- **New recipes**: Always create as `.md` files in Dropbox AND push to the `menubuilder-recipes` GitHub repo. Do NOT create PDFs.
+- **Attribution**: Always include "Adapted from [Source]" with a link to the original. Recipes are reworded/reformatted — not verbatim copies.
 
 ### Recipe Metadata System
 - **Metadata file**: `~/Dropbox/LLMContext/cooking/recipe_metadata.json`
@@ -170,9 +171,10 @@
 - Flag when inventory items may not cover recipe quantities (e.g., short ribs recipe needs 5 lbs but only 2 ribs in stock)
 
 ### Recipe Links
-- **ALWAYS include full Dropbox HTTP URLs** in meal plans for each recipe
-- Format: `https://www.dropbox.com/scl/fo/lynuzkbdyhbze0purlgif/AESQnTvTVpo-hEUdszNhmug?rlkey=h4ah0na6roua836hhm3qh0gv0&preview=Filename.md`
-- This is a shared folder link — works for anyone, no Dropbox login required
+- **ALWAYS include GitHub Pages URLs** in meal plans for each recipe
+- Format: `{github_pages_base_url}/{Filename_without_extension}` — get the base URL from `config.json` (`github_pages_base_url`)
+- Example: `https://davidmallison.github.io/menubuilder-recipes/Korean_Chicken_Bulgogi`
+- For recipes not yet on GitHub Pages (PDF-only, unconverted): fall back to `{dropbox_recipe_base_url}&preview=Filename.pdf`
 
 ### Recipe Processing
 - When converting recipes from recipeideas to recipes folder, **delete the source file from recipeideas** after the standardized `.md` file is created

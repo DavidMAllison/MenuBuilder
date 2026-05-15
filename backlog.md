@@ -2,11 +2,58 @@
 
 ## Planned Features
 
-### Ashley Menu Feedback Loop via Keanu
-- MenuBuilder sends the weekly plan to Ashley via Keanu's outbox (new `send_menu_ashley.py` script, run at step 6)
-- Keanu checks for `/Users/Shared/sms-assistant/menu_feedback_pending.json`; if present, captures Ashley's reply to `/Users/Shared/cooking/menu_feedback_response.json` and texts David a notification
+### Local Recipe Browser (Web UI)
+- Simple local Flask server with a search box for browsing and viewing the existing recipe collection
+- Reads from `recipe_metadata.json` for search/filter; renders `.md` files as styled HTML (same as `show_recipe.py`)
+- Zero API cost — no LLM calls needed for browse/view
+- Replaces `show_recipe.py` for desktop use; search box replaces having to know the exact recipe name
+- Keep agent-based recipe finding (mexican, etc.) as a separate console action — not in the browse UI
+- Filter ideas: cuisine, meal type, health, cook time, last cooked
+
+### Recipe Agents for All MenuBuilder Sources
+- Build agents for every recipe source currently in the collection
+- **Cuisine agents** (source-specific): Mexican (done — Pati Jinich, Rick Bayless, Cooking con Claudia), Italian, Asian, Indian, etc.
+- **Chef agents** (cross-cuisine, auto-tags cuisine at fetch time): Kenji Lopez-Alt, ATK, Serious Eats, etc.
+- Chef agents classify dish cuisine from title/ingredients and tag accordingly in metadata
+- Goal: full recipe discovery pipeline — any source accessible via agent, no manual URL fetching
+
+### Cuisine Agents as MenuBuilder Data Source
+- MenuBuilder calls cuisine agents (mexican, italian, asian, etc.) instead of fetching recipe URLs directly
+- Each agent knows its sites, handles fetching and saving; MenuBuilder just asks by cuisine + constraints (e.g. "weeknight chicken dish")
+- Agents already exist for Mexican (patijinich.com); expand to other cuisines as sites are added
+- End state: step 3 of the weekly workflow becomes "run cuisine agents to replenish ideas" rather than manual URL fetching
+
+### Recipe Site MCP Servers ⬅ NEXT
+- Build MCP servers for frequently used recipe sites (ATK, Serious Eats, etc.) to avoid fetching raw HTML in context
+- MCP fetches page with auth cookies, parses and returns structured recipe data (title, ingredients, instructions only)
+- Saves tokens vs. Claude fetching directly; more reliable than WebFetch on paywalled sites
+- Consider local cache: pull once, store, Claude reads from cache thereafter
+- ATK requires session cookie auth (paid subscription)
+- Goal: use MCP instead of web fetch when looking up recipe ideas during meal planning
+
+### Sunday Prep Plan
+- After Ashley approves the menu, send two texts via Keanu: (1) final menu summary, (2) Sunday prep guide
+- **Metadata schema** — add to each recipe in `recipe_metadata.json`:
+  - `prep_components`: list of ingredients/components that can be prepped Sunday (e.g. `["garlic", "onion", "sauce"]`)
+  - `prep_notes`: optional string for recipe-specific storage behavior (e.g. "sauce freezes well", "lime marinade — prep day-of only")
+- **Design principle**: store only recipe-specific data; general food knowledge (shelf life of common ingredients, aggregation math) comes from Claude at plan-generation time
+- **Aggregation**: at plan time, Claude sums quantities across all recipes using the same prepped ingredient (e.g. garlic in 3 recipes = dice it all at once) using the `ingredients` array already in JSON
+- **Shelf life**: Claude applies general food knowledge defaults (diced garlic: 7 days, onion: 5 days, etc.); `prep_notes` overrides for recipe-specific exceptions
+- **Text format** (v1 — iterate from here):
+  ```
+  Sunday Prep:
+  Mole (Thu): sauce, garlic, onion — [dropbox link]
+  Lemongrass Chicken (Mon): marinade, garlic — [dropbox link]
+  Total garlic: 10 cloves
+  ```
+- **Metadata population**: add `prep_components` as recipes come up in weekly planning; no bulk backfill needed
+- Build after Partner Menu Feedback Loop is complete (prep text is step 2 of the post-approval flow)
+
+### Partner Menu Feedback Loop via Keanu
+- MenuBuilder sends the weekly plan to Partner via Keanu's outbox (new `send_menu_partner.py` script, run at step 6)
+- Keanu checks for `/Users/Shared/sms-assistant/menu_feedback_pending.json`; if present, captures Partner's reply to `/Users/Shared/cooking/menu_feedback_response.json` and texts User a notification
 - MenuBuilder polls for the response file, displays feedback, then applies it to the plan
-- Keanu sends Ashley a confirmation reply ("Thanks, passed it on!")
+- Keanu sends Partner a confirmation reply ("Thanks, passed it on!")
 - Once the menu is confirmed, MenuBuilder deletes the pending file — Keanu reverts to normal routing
 - **Design notes**: Pending file is the on/off switch (MenuBuilder owns its lifecycle). No timeout — killed explicitly on confirmation.
 
@@ -41,6 +88,18 @@
 ### Regenerate Blank PDFs
 - `tinga_verde_recipe.pdf` — blank content, source is Cooking Con Claudia. User to provide URL or paste recipe.
 - `pan_seared_broccolini.pdf` — blank content, source unknown. User to provide recipe.
+
+### GitHub Pages Recipe Styling
+- Current custom layout is functional but doesn't fully match the local `show_recipe.py` viewer
+- Goal: match the local style — warm cream background, card shadow, meta row (time, source link, health badge), Georgia serif body text
+- Reference: `show_recipe.py` HTML_TEMPLATE is the target design
+- Consider pulling health/time/source from a data file at build time so badges render on the web version too
+
+### Recipe Verbatim Scan
+- Scan all recipe `.md` files to verify steps are reworded/reformatted and not copied verbatim from source
+- Attribution policy: recipes must be adapted, not direct copies — original source link included for anyone wanting exact wording
+- 98 `.md` files to check; ATK and other paywalled sources are highest priority
+- Can be done in batches; flag any that read as verbatim for manual rewrite
 
 ### CLAUDE.md Cleanup
 - Fix remaining stale content in CLAUDE.md (deferred from Mar 2026 review)
