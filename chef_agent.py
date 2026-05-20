@@ -34,7 +34,7 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
                 os.environ["ANTHROPIC_API_KEY"] = line.split("=", 1)[1].strip()
                 break
 
-RESULTS_PATH = Path("/tmp/chef_agent_results.json")
+RESULTS_PATH = Path(f"/tmp/chef_agent_results_{os.getuid()}.json")
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 client = anthropic.Anthropic()
