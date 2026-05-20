@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Save recipes from /tmp/mexican_agent_results.json to recipeideas/ by index."""
+"""Save recipes from an agent results file to recipeideas/ by index.
+
+Usage:
+  python3 save_to_recipeideas.py 1 3 4
+  python3 save_to_recipeideas.py --results /tmp/chef_agent_results.json 1 2
+"""
 
 import json
 import re
@@ -51,7 +56,17 @@ def save(indices: list[int]) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python3 save_to_recipeideas.py 1 3 4")
+    args = sys.argv[1:]
+    if not args:
+        print("Usage: python3 save_to_recipeideas.py [--results /tmp/chef_agent_results.json] 1 3 4")
         sys.exit(1)
-    save([int(x) for x in sys.argv[1:]])
+
+    if args[0] == "--results":
+        RESULTS_PATH = Path(args[1])
+        args = args[2:]
+
+    if not args:
+        print("No indices provided.")
+        sys.exit(1)
+
+    save([int(x) for x in args])

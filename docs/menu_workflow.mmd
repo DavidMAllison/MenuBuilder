@@ -1,0 +1,42 @@
+flowchart TD
+    A([Start: Create Menu]) --> B[Drain SMS feedback queue]
+    B --> C[Present last week's meals<br/>+ any captured feedback]
+    C --> D{Any feedback<br/>to add?}
+    D -->|Yes, Add More| C
+    D -->|No / Done| E[Log meals: update times_cooked<br/>+ last_cooked_date]
+    E --> F[Read family schedule]
+    F --> G{Schedule changes<br/>this week?}
+    G -->|Yes| H[Capture changes<br/>busy nights, nights out]
+    G -->|No| I[Use standing schedule]
+    H --> I
+    I --> J[Load preferences, ideas backlog<br/>+ recipeideas inbox]
+    J --> K{What are you feeling<br/>this week?}
+    K -->|Italian, Mexican,<br/>Indian, Chinese...| L[Fetch new ideas<br/>from cuisine agent]
+    K -->|Stick with<br/>what we've got| M[Run candidate filter]
+    L --> M
+    M --> N[Present 7 selected meals]
+    N --> O{User wants<br/>swaps?}
+    O -->|Yes| P[Swap meals<br/>re-present]
+    P --> O
+    O -->|No / Done| Q[Send day + meal list<br/>to Ashley]
+    Q --> R{Ashley has<br/>changes?}
+    R -->|Yes| S[Apply changes<br/>+ re-send to Ashley]
+    S --> R
+    R -->|No / Done| T{Any ideas<br/>on the menu?}
+    T -->|Yes| U[Get recipe content<br/>Create .md + activate]
+    T -->|No| V[Generate plan]
+    U --> V
+    V --> W[Write mealplan.txt<br/>+ shopping.csv]
+    W --> X[Run apps<br/>Reminders + Calendar]
+    X --> Y[Send prep guide<br/>via Keanu]
+    Y --> Z([Done])
+
+    classDef startEnd fill:#f0fdf4,stroke:#4ade80
+    classDef process fill:#eef2ff,stroke:#818cf8
+    classDef decision fill:#fff7ed,stroke:#fb923c
+    classDef human fill:#fdf4ff,stroke:#c084fc,stroke-width:2px,stroke-dasharray:5 5
+
+    class A,Z startEnd
+    class B,E,F,H,I,J,L,M,N,P,Q,S,T,U,V,W,X,Y process
+    class R decision
+    class C,D,G,K,O human

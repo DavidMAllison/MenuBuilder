@@ -34,7 +34,7 @@
   - **Nutritional Info** (when available): Calories, fat, saturated fat, sodium, protein, fiber per serving
 - **Usage**: JSON is the single source of truth for all metadata and ingredients. Recipe files contain only recipe content (title, ingredients, instructions, notes) -- no metadata footer.
 - **Ingredients**: Each recipe entry has an `ingredients` array: `[{"name", "quantity", "unit", "category"}]`. Categories: Proteins, Produce, Dairy, Pantry/Asian, Dry Goods, Spices/Herbs. Populate when a recipe is first used in a meal plan.
-- **Status**: `"active"` (in collection, .md file exists) | `"idea"` (in recipeideas, not yet tried) | `"disliked"` (tried, didn't like — .md file deleted, entry kept as tombstone)
+- **Status**: `"active"` (in collection, .md file exists) | `"idea"` (in `recipe_metadata.json`, sourced but not yet tried) | `"disliked"` (tried, didn't like — .md file deleted, entry kept as tombstone) | `"ignored"` (decided to skip without trying)
 - **Updates**: Times cooked increments automatically when user reports cooking a meal
 
 ## Weekly Meal Plans
@@ -50,7 +50,7 @@
   ========================================
 
   Mon M/DD  Recipe Name [Health] | Cook Time
-            https://www.dropbox.com/...
+            https://davidmallison.github.io/menubuilder-recipes/Recipe_Name
 
   ...
 
@@ -153,13 +153,13 @@
 - See `backlog.md` for planned features
 
 ## SMS Assistant
-- **Location**: `~/projects/personal/sms-assistant/`
-- **Purpose**: Allows texting the assistant from a phone to query meal plans, recipes, and inventory
-- **Current transport**: Twilio WhatsApp sandbox (personal use only, awaiting toll-free SMS verification)
-- **How it works**: FastAPI server + ngrok tunnel + Claude API. Reads the same cooking context files (meal plans, recipe_metadata.json, inventory.md) as this project. Read-only via SMS.
-- **To start**: `cd ~/projects/personal/sms-assistant && ./start.sh`
+- **Location**: `/Users/Shared/sms-assistant/` (canonical — `~/projects/personal/sms-assistant/` is a stale stub, do not use)
+- **Purpose**: Allows texting the assistant (Keanu) from a phone to query meal plans, recipes, and inventory
+- **How it works**: Python polling script against `chat.db`; sends replies via AppleScript. No Twilio, ngrok, or FastAPI involved.
+- **To start**: `cd /Users/Shared/sms-assistant && ./start.sh`
 - **Guardrails**: Phone number whitelist in `config/settings.yaml`. System prompt in `system_prompts/menu.txt`. Neither can be changed via SMS.
-- **Note**: The SMS assistant accepts recipe feedback and writes entries to `/Users/Shared/cooking/feedback_queue.json`. The queue is drained into the weekly feedback JSON files at the start of each menu workflow (step 0). All meal plan generation, recipe creation, and other data updates still happen through desktop Claude sessions in this project.
+- **Feedback queue**: Keanu writes recipe feedback to `/Users/Shared/cooking/feedback_queue.json`. Drained at the start of each menu workflow (step 0) by `process_feedback_queue.py`.
+- **Menu approval**: After sending the weekly menu via `send_menu_partner.py`, Keanu captures Ashley's reply and writes it to `/Users/Shared/sms-assistant/menu_feedback_response.json`. MenuBuilder reads this file after approval.
 
 ## Meal Plan Generation Rules
 
@@ -190,13 +190,17 @@
    - Entries with `sentiment: "disliked"` should be flagged during step 1.
    - Entries with `sentiment: "mixed"` should be surfaced for review before including the recipe this week.
 1. **Log last week's meals** -- read `feedback_current.json` and the previous week's `mealplan_YYYY-MM-DD.txt`. For each meal in the plan with a feedback entry, auto-update `times_cooked`, `last_cooked_date`, and append entries to the `feedback` array in `recipe_metadata.json`. For meals with no feedback entry, prompt: "Any feedback on [recipe]? Did you make it?" After processing all meals, clear `feedback_current.json` to `{"entries": []}`. If sentiment is `"disliked"`, flag for tombstone discussion -- do not auto-delete. If disliked and confirmed: delete `.md` file, set `status: "disliked"` in JSON.
-2. **Check schedule** -- ask about any one-off changes this week (standing constraints are in `family-schedule.md`)
+2. **Check schedule** -- ask about any one-off changes this week (standing constraints are in `~/projects/personal/FamilySchedule/schedule.json`)
 3. **Process recipeideas inbox** -- check the `recipeideas/` folder for any files not yet in `recipe_metadata.json`. If new files exist, show them to the user (title, source URL if present) and flag any that look like duplicates or are similar to existing active/idea entries. Wait for user to confirm before adding each one to the JSON as `status: "idea"` and deleting the file. Then review the full `status: "idea"` list — if there are fewer than 5 ideas or none have been added in 2+ weeks, suggest the user run recipe idea agents. Do NOT auto-spawn them.
 4. **Run candidate filter** -- `python3 ~/projects/personal/MenuBuilder/suggest_meals.py`. Pass the week's busy nights (e.g. `--quick mon,tue,thu`). The script filters by `last_cooked_date`, health balance, protein variety, cuisine variety, and seasonal method. Use its output as the candidate pool -- do not re-scan the JSON manually.
 5. **Propose recipe names only** -- let user approve/swap before generating
-5a. **Promote any ideas on the menu** -- after user approves, check if any selected meal has `status: "idea"` in `recipe_metadata.json`. For each one, share the source URL and prompt: "Please paste the recipe text for X so I can add it to the collection." Never attempt to fetch from the URL directly — recipe sites are unreliable. Once content is provided: create `.md` file in `recipes/`, populate `ingredients` in JSON, set `status: "active"`. Do this before generating the plan.
-6. **Generate meal plan** -- save `mealplan_YYYY-MM-DD.txt` (minimal format) + `shopping_YYYY-MM-DD.csv`
-7. **Run apps** -- `open /Applications/WeeklyShoppingList.app` then `open /Applications/WeeklyMealCalendar.app`
+6. **Send to Ashley** -- `python3 ~/projects/personal/MenuBuilder/send_menu_partner.py` (day + meal name only). 
+7. **Ashley approves** -- wait for her reply in `/Users/Shared/sms-assistant/menu_feedback_response.json`. Apply any changes.
+7a. **Check for ideas** -- automated: scan the post-Ashley final meal list against `recipe_metadata.json` for any entries with `status: "idea"`. Use the post-Ashley list, not the original candidates — Ashley may have swapped in a meal that is itself an idea.
+7b. **If ideas found** -- fetch content from the source URL directly. If the fetch fails, ask the user to paste the content manually. Once content is obtained: create `.md` file in `recipes/`, populate `ingredients` in JSON, set `status: "active"`. Do this before generating the plan.
+8. **Generate meal plan** -- save `mealplan_YYYY-MM-DD.txt` (minimal format) + `shopping_YYYY-MM-DD.csv`
+9. **Run apps** -- `open /Applications/WeeklyShoppingList.app` then `open /Applications/WeeklyMealCalendar.app`
+10. **Send prep guide** -- via Keanu
 
 ## Learned Preferences
 - **No duplicate proteins in a week** -- e.g., don't put salmon on two nights

@@ -10,7 +10,11 @@ A personal meal planning system built around real family constraints — health 
 - **Calendar integration**: Adds dinner events to iCloud Calendar with cook times and recipe links, built as a Mac app
 - **Feedback loop**: Tracks which meals the family liked, surfaces family-favorite signals in future candidate scoring
 - **SMS assistant**: Companion WhatsApp bot for querying recipes, meal plans, and inventory from a phone (separate project)
-- **Regional recipe agents**: Automated agents that source new recipe ideas from regional cuisine sites. Mexican agent is live (Pati Jinich, Rick Bayless, Cooking Con Claudia). Additional cuisines planned for future releases.
+- **Recipe discovery agents**: Automated agents that source new recipe ideas from regional cuisine sites and named chefs. All agents are accessed through a single orchestrator (`recipe_agent.py` / `recipe` CLI).
+  - **Mexican** — Pati Jinich, Rick Bayless, Cooking Con Claudia
+  - **Chef** — Alton Brown, Smitten Kitchen (Deb Perelman), Chetna Makan
+  - **Sites** — Serious Eats (Playwright-based to bypass Cloudflare)
+- **Agent eval harness**: Three-tier automated evaluation for each agent — source routing check, parse completeness check, and human review template. Prompt suites in `eval/`.
 - **Recipe web hosting**: Recipe collection published to [GitHub Pages](https://davidmallison.github.io/menubuilder-recipes/) as styled HTML — clean mobile URLs, no login required, replaces Dropbox preview links
 
 ## Design Decisions
@@ -32,7 +36,17 @@ A personal meal planning system built around real family constraints — health 
 ```
 suggest_meals.py              # Candidate meal filter — run before each weekly plan
 process_feedback_queue.py     # Drain SMS feedback queue into feedback_current.json
+recipe_agent.py               # Recipe search orchestrator — single entry point for all agents
+mexican_agent.py              # Mexican recipe sources (Pati Jinich, Rick Bayless, Cooking con Claudia)
+chef_agent.py                 # Chef recipe sources (Alton Brown, Smitten Kitchen, Chetna Makan)
+sites_agent.py                # Cross-cuisine sites (Serious Eats) via Playwright
+save_to_recipeideas.py        # Save agent results to the recipeideas inbox
+eval_mexican_agent.py         # Eval harness for mexican_agent
+eval_chef_agent.py            # Eval harness for chef_agent
+eval/                         # Eval prompt suites (mexican_prompts.json, chef_prompts.json)
+send_menu_partner.py          # Send weekly menu to partner for approval via Keanu
 recipe_metadata.json          # (not committed) Single source of truth for all recipe data
+config.json                   # (not committed) Local paths and settings — see config.example.json
 CLAUDE.md                     # AI assistant context and workflow instructions
 backlog.md                    # Planned features
 release-notes.md              # Shipped features log

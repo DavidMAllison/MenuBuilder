@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""
+recipe_agent.py -- Recipe search orchestrator.
+
+Routes recipe requests to the appropriate subagents and aggregates results.
+This is the single entry point for all recipe searches.
+
+Sources (via subagents):
+  Chef   : Alton Brown, Smitten Kitchen (Deb Perelman), Chetna Makan
+  Mexican: Pati Jinich, Rick Bayless, Cooking con Claudia
+  Sites  : Serious Eats
+
+Routing:
+  Mexican dish/ingredient → mexican agent
+  Chef name mentioned     → chef agent (restricted to that chef)
+  "Serious Eats" / site   → sites agent
+  General query           → chef agent (default)
+
+Results capped at 5, written to /tmp/recipe_agent_results.json.
+
+Usage:
+  recipe "find a carnitas recipe"
+  recipe "weeknight chicken from Alton Brown"
+  recipe "braised short rib from Serious Eats"
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+from typing import List
+
+import anthropic
+
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    env_path = Path.home() / "projects/personal/sms-assistant/.env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if line.startswith("ANTHROPIC_API_KEY="):
+                os.environ["ANTHROPIC_API_KEY"] = line.split("=", 1)[1].strip()
+                break
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+RESULTS_PATH = Path("/tmp/recipe_agent_results.json")
+MAX_RESULTS = 5
+
+client = anthropic.Anthropic()
+
+TOOLS = [
+    {
+        "name": "search_mexican_agent",
+        "description": (
+            "Search Mexican recipe sources: Pati Jinich (patijinich.com), "
+            "Rick Bayless (rickbayless.com), Cooking con Claudia (YouTube). "
+            "Use for Mexican dishes or ingredients (carnitas, mole, tamales, "
+            "enchiladas, pozole, chiles rellenos, etc.)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Recipe search query"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_chef_agent",
+        "description": (
+            "Search chef recipe sources: Alton Brown (altonbrown.com), "
+            "Smitten Kitchen / Deb Perelman (smittenkitchen.com), "
+            "Chetna Makan (chetnamakan.co.uk). "
+            "Default for general queries. Include chef name in query if the user specifies one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Recipe search query; include chef name if specified"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_sites_agent",
+        "description": (
+            "Search cross-cuisine recipe sites: Serious Eats (seriouseats.com). "
+            "Use only when the user explicitly names a site or says 'other sites'. "
+            "Include site name in query if specified."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Recipe search query; include site name if specified"},
+            },
+            "required": ["query"],
+        },
+    },
+]
+
+SYSTEM = """You are a recipe search orchestrator. Route recipe requests to the right search tools.
+
+Routing rules:
+- Mexican dish or ingredient (carnitas, mole, tamales, enchiladas, pozole, etc.): call search_mexican_agent
+- General query with no cuisine or site cue: call search_chef_agent (default)
+- User names a specific chef (Alton Brown, Smitten Kitchen, Deb Perelman, Chetna Makan): call search_chef_agent with the chef name in the query
+- User says "Serious Eats", "other sites", or names a site: call search_sites_agent with the site name in the query
+- Multiple cues: call multiple tools
+
+Never call the same tool twice. After all tools return, print a short summary: title, source, and cook time for each result."""
+
+
+def _get_runner(tool_name: str):
+    if tool_name == "search_mexican_agent":
+        from mexican_agent import run_agent
+        return run_agent
+    if tool_name == "search_chef_agent":
+        from chef_agent import run_agent
+        return run_agent
+    if tool_name == "search_sites_agent":
+        from sites_agent import run_agent
+        return run_agent
+    return None
+
+
+def run_agent(user_request: str) -> List[dict]:
+    messages = [{"role": "user", "content": user_request}]
+    print(f"\nSearching: {user_request}\n")
+
+    all_results = []
+    seen_urls: set = set()
+
+    while True:
+        response = client.messages.create(
+            model="claude-opus-4-7",
+            max_tokens=4096,
+            system=SYSTEM,
+            tools=TOOLS,
+            messages=messages,
+        )
+
+        if response.stop_reason == "end_turn":
+            for block in response.content:
+                if hasattr(block, "text") and block.text:
+                    print(block.text)
+            break
+
+        if response.stop_reason != "tool_use":
+            print(f"Unexpected stop reason: {response.stop_reason}")
+            break
+
+        messages.append({"role": "assistant", "content": response.content})
+        tool_results = []
+
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+
+            runner = _get_runner(block.name)
+            if runner is None:
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps({"error": f"Unknown tool: {block.name}"}),
+                })
+                continue
+
+            label = block.name.replace("search_", "").replace("_agent", "").replace("_", " ").title()
+            print(f"\n--- {label} ---")
+            results = runner(block.input["query"])
+
+            for r in results:
+                url = r.get("url", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_results.append(r)
+
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": json.dumps(results),
+            })
+
+        messages.append({"role": "user", "content": tool_results})
+
+    capped = all_results[:MAX_RESULTS]
+    RESULTS_PATH.write_text(json.dumps(capped, indent=2), encoding="utf-8")
+    return capped
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+    results = run_agent(" ".join(sys.argv[1:]))
+    if results:
+        print(f"\nFound {len(results)} recipe(s):")
+        for i, r in enumerate(results, 1):
+            source = r.get("source", "").split(" - ")[0] or r.get("site", "")
+            time_str = r.get("time", "")
+            cuisine = r.get("cuisine", "")
+            if isinstance(cuisine, list):
+                cuisine = ", ".join(cuisine)
+            detail = " | ".join(filter(None, [source, cuisine, time_str]))
+            print(f"  {i}. {r.get('title', '?')} ({detail})")
+        print(f"\nResults saved to {RESULTS_PATH}")
+    else:
+        print("\nNo recipes found.")
