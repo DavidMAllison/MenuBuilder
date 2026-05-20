@@ -26,6 +26,7 @@ Usage:
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import List
@@ -217,7 +218,8 @@ def run_agent(user_request: str) -> List[dict]:
 
             label = block.name.replace("search_", "").replace("_agent", "").replace("_", " ").title()
             print(f"\n--- {label} ---")
-            results = runner(block.input["query"])
+            query = re.sub(r"\s+recipes?$", "", block.input["query"], flags=re.IGNORECASE).strip()
+            results = runner(query)
 
             for r in results:
                 url = r.get("url", "")
