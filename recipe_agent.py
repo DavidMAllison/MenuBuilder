@@ -43,7 +43,7 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-RESULTS_PATH = Path("/tmp/recipe_agent_results.json")
+RESULTS_PATH = Path(f"/tmp/recipe_agent_results_{os.getuid()}.json")
 MAX_RESULTS = 5
 
 client = anthropic.Anthropic()

@@ -33,7 +33,7 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
                 os.environ["ANTHROPIC_API_KEY"] = line.split("=", 1)[1].strip()
                 break
 
-RESULTS_PATH = Path("/tmp/mexican_agent_results.json")
+RESULTS_PATH = Path(f"/tmp/mexican_agent_results_{os.getuid()}.json")
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 client = anthropic.Anthropic()
@@ -517,7 +517,6 @@ def run_agent(user_request: str) -> list[dict]:
 
         messages.append({"role": "user", "content": tool_results})
 
-    # Write results to temp file for caller
     RESULTS_PATH.write_text(json.dumps(found_recipes, indent=2), encoding="utf-8")
     return found_recipes
 
