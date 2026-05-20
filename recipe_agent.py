@@ -102,8 +102,10 @@ TOOLS = [
         "description": (
             "Search Mexican recipe sources: Pati Jinich (patijinich.com), "
             "Rick Bayless (rickbayless.com), Cooking con Claudia (YouTube). "
-            "Use for Mexican dishes or ingredients (carnitas, mole, tamales, "
-            "enchiladas, pozole, chiles rellenos, etc.)."
+            "Use for any dish that is Mexican cuisine — apply culinary knowledge, "
+            "not keyword matching. Mole is always Mexican regardless of protein "
+            "(turkey mole, chicken mole, etc.). Same for carnitas, tamales, "
+            "enchiladas, pozole, chiles rellenos, birria, cochinita pibil, etc."
         ),
         "input_schema": {
             "type": "object",
@@ -149,7 +151,7 @@ TOOLS = [
 SYSTEM = """You are a recipe search orchestrator. Route recipe requests to the right search tools.
 
 Routing rules:
-- Mexican dish or ingredient (carnitas, mole, tamales, enchiladas, pozole, etc.): call search_mexican_agent
+- Any dish that is Mexican cuisine — use your culinary knowledge, not just keywords. Mole (including turkey mole, chicken mole, mole negro), carnitas, tamales, enchiladas, pozole, chiles rellenos, tacos, tostadas, agua chile, cochinita pibil, birria, and any other dish you know to be Mexican: call search_mexican_agent. The modifier (turkey, chicken, etc.) does not change the cuisine.
 - General query with no cuisine or site cue: call search_chef_agent (default)
 - User names a specific chef (Alton Brown, Smitten Kitchen, Deb Perelman, Chetna Makan): call search_chef_agent with the chef name in the query
 - User says "Serious Eats", "other sites", or names a site: call search_sites_agent with the site name in the query
