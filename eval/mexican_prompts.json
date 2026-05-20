@@ -1,0 +1,59 @@
+[
+  {
+    "id": "carnitas-all",
+    "description": "Specific dish query hits all three Mexican sources",
+    "query": "find a carnitas recipe",
+    "expected_sources": ["patijinich.com", "rickbayless.com", "youtube.com"]
+  },
+  {
+    "id": "chicken-taco-all",
+    "description": "Common dish query hits all three sources",
+    "query": "find a chicken taco recipe",
+    "expected_sources": ["patijinich.com", "rickbayless.com", "youtube.com"]
+  },
+  {
+    "id": "vegetarian-all",
+    "description": "Diet query hits all three sources",
+    "query": "find a vegetarian Mexican dish",
+    "expected_sources": ["patijinich.com", "rickbayless.com", "youtube.com"]
+  },
+  {
+    "id": "pati-only",
+    "description": "Named chef (Pati Jinich) restricts to her site",
+    "query": "find a mole recipe from Pati Jinich",
+    "expected_sources": ["patijinich.com"]
+  },
+  {
+    "id": "rick-only",
+    "description": "Named chef (Rick Bayless) restricts to his site",
+    "query": "find a salsa from Rick Bayless",
+    "expected_sources": ["rickbayless.com"]
+  },
+  {
+    "id": "claudia-only",
+    "description": "Named chef (Claudia) restricts to YouTube channel",
+    "query": "find a tamale recipe from Claudia",
+    "expected_sources": ["youtube.com"]
+  },
+  {
+    "id": "region-oaxaca",
+    "description": "Region query — agent must translate to dish names, not search 'Oaxaca'",
+    "query": "find recipes from Oaxaca",
+    "expected_sources": ["patijinich.com", "rickbayless.com", "youtube.com"],
+    "notes": "Human: watch terminal output — search terms should be dish names (mole negro, tlayuda, tasajo, memelas) not the word 'Oaxaca'."
+  },
+  {
+    "id": "region-yucatan",
+    "description": "Region query — agent must translate to Yucatecan dish names",
+    "query": "find recipes from Yucatan",
+    "expected_sources": ["patijinich.com", "rickbayless.com", "youtube.com"],
+    "notes": "Human: watch terminal output — search terms should be cochinita pibil, sopa de lima, papadzules, poc chuc, not 'Yucatan'."
+  },
+  {
+    "id": "region-puebla",
+    "description": "Region query — agent must translate to Pueblan dish names",
+    "query": "find recipes from Puebla",
+    "expected_sources": ["patijinich.com", "rickbayless.com", "youtube.com"],
+    "notes": "Human: watch terminal output — search terms should be mole poblano, chiles en nogada, tinga, cemita, not 'Puebla'."
+  }
+]

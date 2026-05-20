@@ -1,0 +1,82 @@
+[
+  {
+    "id": "ab-full-name",
+    "description": "Full chef name (Alton Brown) restricts to AB only",
+    "query": "find a chicken recipe from Alton Brown",
+    "expected_sources": ["altonbrown.com"]
+  },
+  {
+    "id": "sk-full-name",
+    "description": "Full chef name (Deb Perelman) restricts to SK only",
+    "query": "find a vegetable dish from Deb Perelman",
+    "expected_sources": ["smittenkitchen.com"]
+  },
+  {
+    "id": "chetna-full-name",
+    "description": "Full chef name (Chetna Makan) restricts to her site only",
+    "query": "find a curry from Chetna Makan",
+    "expected_sources": ["chetnamakan.co.uk"]
+  },
+  {
+    "id": "ab-first-name",
+    "description": "First name alias (Alton) routes to AB only",
+    "query": "find a pasta dish from Alton",
+    "expected_sources": ["altonbrown.com"]
+  },
+  {
+    "id": "sk-site-name",
+    "description": "Site name alias (Smitten Kitchen) routes to SK only",
+    "query": "find a chocolate dessert from Smitten Kitchen",
+    "expected_sources": ["smittenkitchen.com"]
+  },
+  {
+    "id": "chetna-first-name",
+    "description": "First name alias (Chetna) routes to her site only",
+    "query": "find a rice dish from Chetna",
+    "expected_sources": ["chetnamakan.co.uk"]
+  },
+  {
+    "id": "all-weeknight",
+    "description": "Generic query hits all three sources",
+    "query": "find a weeknight dinner",
+    "expected_sources": ["altonbrown.com", "smittenkitchen.com", "chetnamakan.co.uk"]
+  },
+  {
+    "id": "all-ingredient",
+    "description": "Ingredient query hits all three sources",
+    "query": "find something with salmon",
+    "expected_sources": ["altonbrown.com", "smittenkitchen.com", "chetnamakan.co.uk"]
+  },
+  {
+    "id": "all-vegetarian",
+    "description": "Diet query hits all three sources",
+    "query": "find a vegetarian meal",
+    "expected_sources": ["altonbrown.com", "smittenkitchen.com", "chetnamakan.co.uk"]
+  },
+  {
+    "id": "all-technique",
+    "description": "Technique query hits all three sources",
+    "query": "find something braised",
+    "expected_sources": ["altonbrown.com", "smittenkitchen.com", "chetnamakan.co.uk"]
+  },
+  {
+    "id": "all-dessert",
+    "description": "Category query hits all three sources",
+    "query": "find a dessert",
+    "expected_sources": ["altonbrown.com", "smittenkitchen.com", "chetnamakan.co.uk"]
+  },
+  {
+    "id": "ambiguous-indian",
+    "description": "Cuisine named but no chef — source routing is ambiguous, human reviews",
+    "query": "find an Indian chicken dish",
+    "expected_sources": [],
+    "notes": "No source assertion. Human: did it search dish names (tikka masala, biryani) rather than 'Indian chicken'? Did it route sensibly?"
+  },
+  {
+    "id": "edge-unusual-ingredient",
+    "description": "Unusual ingredient — verify graceful handling with few or no results",
+    "query": "find a recipe with tamarind",
+    "expected_sources": [],
+    "notes": "No source assertion. Human: did it handle low results cleanly without errors?"
+  }
+]
