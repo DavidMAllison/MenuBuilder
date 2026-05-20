@@ -68,6 +68,8 @@ def search_local_collection(query: str) -> List[dict]:
 
     results = []
     for name, data in recipes.items():
+        if not isinstance(data, dict):
+            continue
         if data.get("status") != "active":
             continue
         searchable = " ".join(filter(None, [
