@@ -47,6 +47,53 @@ MAX_RESULTS = 5
 
 client = anthropic.Anthropic()
 
+_CONFIG_PATH = Path(__file__).parent / "config.json"
+
+
+def search_local_collection(query: str) -> List[dict]:
+    """Search active recipes in recipe_metadata.json by name, cuisine, and source.
+
+    Returns a list of matching recipes with title, url, cuisine, source, time, and health.
+    Results are sorted by relevance (number of query terms matched).
+    Intended for SMS lookup intent — user asking for a recipe they already have.
+    """
+    config = json.loads(_CONFIG_PATH.read_text())
+    metadata_path = Path(config["metadata_path"].replace("~", str(Path.home())))
+    github_base = config.get("github_pages_base_url", "")
+
+    recipes = json.loads(metadata_path.read_text())
+    terms = [t for t in query.lower().split() if len(t) > 2]
+    if not terms:
+        return []
+
+    results = []
+    for name, data in recipes.items():
+        if data.get("status") != "active":
+            continue
+        searchable = " ".join(filter(None, [
+            name,
+            data.get("cuisine", ""),
+            data.get("source", ""),
+        ])).lower()
+        score = sum(1 for t in terms if t in searchable)
+        if score == 0:
+            continue
+        filename = name.replace(" ", "_")
+        results.append({
+            "title": name,
+            "url": f"{github_base}/{filename}" if github_base else "",
+            "cuisine": data.get("cuisine", ""),
+            "source": data.get("source", ""),
+            "time": data.get("time", ""),
+            "health": data.get("health", ""),
+            "_score": score,
+        })
+
+    results.sort(key=lambda r: r["_score"], reverse=True)
+    for r in results:
+        del r["_score"]
+    return results
+
 TOOLS = [
     {
         "name": "search_mexican_agent",
