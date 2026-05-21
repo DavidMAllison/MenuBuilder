@@ -28,6 +28,7 @@ import json
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List
 
@@ -201,32 +202,34 @@ def run_agent(user_request: str) -> List[dict]:
             break
 
         messages.append({"role": "assistant", "content": response.content})
+
+        tool_blocks = [b for b in response.content if b.type == "tool_use"]
         tool_results = []
 
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-
+        def _dispatch(block):
             runner = _get_runner(block.name)
             if runner is None:
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps({"error": f"Unknown tool: {block.name}"}),
-                })
-                continue
-
+                return block.id, {"error": f"Unknown tool: {block.name}"}
             label = block.name.replace("search_", "").replace("_agent", "").replace("_", " ").title()
             print(f"\n--- {label} ---")
             query = re.sub(r"\s+recipes?$", "", block.input["query"], flags=re.IGNORECASE).strip()
-            results = runner(query)
+            return block.id, runner(query)
 
-            for r in results:
-                url = r.get("url", "")
-                if url and url not in seen_urls:
-                    seen_urls.add(url)
-                    all_results.append(r)
+        with ThreadPoolExecutor(max_workers=len(tool_blocks)) as executor:
+            futures = {executor.submit(_dispatch, b): b for b in tool_blocks}
+            results_by_id = {}
+            for future in as_completed(futures):
+                tool_id, results = future.result()
+                results_by_id[tool_id] = results
 
+        for block in tool_blocks:
+            results = results_by_id[block.id]
+            if isinstance(results, list):
+                for r in results:
+                    url = r.get("url", "")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        all_results.append(r)
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
