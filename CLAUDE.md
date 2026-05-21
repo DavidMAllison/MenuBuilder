@@ -202,11 +202,6 @@
 9. **Run apps** -- `open /Applications/WeeklyShoppingList.app` then `open /Applications/WeeklyMealCalendar.app`
 10. **Send prep guide** -- via Keanu
 
-## Git Push Checklist
-Before every `git push`, always:
-1. **Update README.md** -- reflect any new files, agents, tools, or workflow changes
-2. **Check for PII** -- scan all staged files for phone numbers, email addresses, real names, API keys, passwords, or private URLs. Pattern: `grep -rn -E "\+1[0-9]{10}|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"`. Any PII must be moved to `config.json` (gitignored) before committing.
-
 ## Learned Preferences
 - **No duplicate proteins in a week** -- e.g., don't put salmon on two nights
 - **Hoisin-Glazed Pork Tenderloin** is overused; avoid unless specifically requested
