@@ -1,0 +1,44 @@
+flowchart TD
+    A([Start: Swap Request]) --> B[Identify day from meal plan]
+    B --> C[Confirm day + outgoing recipe with user]
+    C --> D{User confirms?}
+    D -->|No / Wrong day| C
+    D -->|Yes| E[Get replacement recipe]
+
+    E --> F{Recipe status?}
+
+    F -->|Active in collection| G[Look up ingredients\nfrom recipe_metadata.json]
+
+    F -->|Idea in metadata| H[Fetch content from source URL]
+    H --> H2{Fetch succeeded?}
+    H2 -->|Yes| H3[Create .md in recipes/\nPopulate ingredients in JSON\nSet status: active]
+    H2 -->|No - paywalled| H4[Ask user to paste content]
+    H4 --> H3
+    H3 --> G
+
+    F -->|Brand new - user provides URL| I[Fetch content from URL]
+    I --> I2{Fetch succeeded?}
+    I2 -->|Yes| I3[Create .md in recipes/\nAdd entry to recipe_metadata.json\nPopulate ingredients\nSet status: active]
+    I2 -->|No - paywalled| I4[Ask user to paste content]
+    I4 --> I3
+    I3 --> G
+
+    G --> J[Update shopping CSV:\nRemove outgoing recipe rows\nAdd incoming recipe rows\nUpdate shared items e.g. lemons]
+    J --> K[Update mealplan txt:\nSwap recipe name, URL, reminder for that day]
+    K --> L[Log outgoing recipe in feedback_current.json:\nsentiment: skipped]
+    L --> M[Re-run WeeklyShoppingList.app]
+    M --> N[Re-run WeeklyMealCalendar.app]
+    N --> O[Flag: old ingredients still open\nin Reminders need manual removal]
+    O --> P([Done])
+
+    classDef startEnd fill:#f0fdf4,stroke:#4ade80
+    classDef process fill:#eef2ff,stroke:#818cf8
+    classDef decision fill:#fff7ed,stroke:#fb923c
+    classDef warning fill:#fef9c3,stroke:#ca8a04
+    classDef human fill:#fdf4ff,stroke:#c084fc,stroke-width:2px,stroke-dasharray:5 5
+
+    class A,P startEnd
+    class B,G,H,H3,I,I3,J,K,L,M,N process
+    class D,F,H2,I2 decision
+    class O warning
+    class C,E,H4,I4 human
