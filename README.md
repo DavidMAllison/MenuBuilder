@@ -36,6 +36,8 @@ A personal meal planning system built around real family constraints — health 
 ```
 suggest_meals.py              # Candidate meal filter — run before each weekly plan
 process_feedback_queue.py     # Drain SMS feedback queue into feedback_current.json
+meal_swap.py                  # Mid-week meal swap — all swap logic lives here
+send_menu_partner.py          # Send weekly menu to partner for approval via Keanu
 recipe_agent.py               # Recipe search orchestrator — single entry point for all agents
 mexican_agent.py              # Mexican recipe sources (Pati Jinich, Rick Bayless, Cooking con Claudia)
 chef_agent.py                 # Chef recipe sources (Alton Brown, Smitten Kitchen, Chetna Makan)
@@ -44,13 +46,33 @@ save_to_recipeideas.py        # Save agent results to the recipeideas inbox
 eval_mexican_agent.py         # Eval harness for mexican_agent
 eval_chef_agent.py            # Eval harness for chef_agent
 eval/                         # Eval prompt suites (mexican_prompts.json, chef_prompts.json)
-send_menu_partner.py          # Send weekly menu to partner for approval via Keanu
+mcp/
+  menu_server.py              # MCP server — exposes 6 workflow tools over stdio
+  README.md                   # MCP setup and Claude Code wiring instructions
 recipe_metadata.json          # (not committed) Single source of truth for all recipe data
+menu_activity.json            # (not committed) Active workflow state (created by MCP server)
 config.json                   # (not committed) Local paths and settings — see config.example.json
 CLAUDE.md                     # AI assistant context and workflow instructions
 backlog.md                    # Planned features
 release-notes.md              # Shipped features log
 ```
+
+## MCP Server
+
+`mcp/menu_server.py` exposes the weekly menu workflow as 6 tools callable from Claude Code
+or any MCP-compatible client (e.g. Keanu via SMS):
+
+| Tool | What it does |
+|---|---|
+| `get_workflow_state` | Returns current workflow step and state data |
+| `start_menu_workflow` | Drains feedback queue, loads last week, initializes activity |
+| `log_meal_feedback` | Records last-week ratings; `"done"` finalizes and advances state |
+| `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week |
+| `swap_meal` | Replaces one day's meal (auto-picks or takes explicit name) |
+| `approve_menu` | Sends selected meals to Ashley via Keanu for signoff |
+
+Activity state lives in `menu_activity.json` (MenuBuilder's territory). See `mcp/README.md`
+for setup and Claude Code wiring instructions.
 
 ## Usage
 

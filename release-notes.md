@@ -1,5 +1,16 @@
 # MenuBuilder - Release Notes
 
+## May 2026
+
+### MCP Server (`mcp/menu_server.py`)
+- MenuBuilder now exposes its weekly menu workflow as 6 MCP tools over stdio
+- Activity state owned by MenuBuilder at `menu_activity.json` (gitignored)
+- Tools: `get_workflow_state`, `start_menu_workflow`, `log_meal_feedback`,
+  `get_meal_suggestions`, `swap_meal`, `approve_menu`
+- Wired into Claude Code via `~/.claude.json` mcpServers config
+- Requires Python 3.12 venv at `.venv/` — see `mcp/README.md`
+- SMS interface (Keanu) will call these tools rather than running its own workflow logic
+
 ## Mar 2026
 
 ### WeeklyShoppingList.app - Notes, Dates, and Categorization Fix
