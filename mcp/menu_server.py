@@ -1469,9 +1469,8 @@ def get_prep_guide() -> dict:
         else:
             without_prep.append(name)
 
-    # Build compact prep guide — one line per recipe, action phrases only
-    _CONNECTORS = {"with", "and", "the", "of", "in", "a", "an"}
-    sms_lines = ["This week's prep:"]
+    # Build flat Sunday prep task list — one bullet per action across all recipes
+    task_lines = []
     for day in DAYS_ORDER:
         if day not in selected:
             continue
@@ -1480,19 +1479,12 @@ def get_prep_guide() -> dict:
         if not key:
             continue
         prep = recipes[key].get("prep_components", [])
-        if not prep:
-            continue
-        # Short name: first 2 non-connector words
-        meaningful = [w for w in name.split() if w.lower() not in _CONNECTORS]
-        short_name = " ".join(meaningful[:2])
-        # Short components: lowercase, strip after em-dash or opening parenthetical
-        short = []
         for p in prep:
-            phrase = re.split(r'\s+[—–]\s+|\s+\(', p)[0].strip().rstrip(",;").lower()
-            short.append(phrase)
-        sms_lines.append(f"{day} — {short_name}: {', '.join(short)}")
+            # Strip after em-dash, semicolon, or opening parenthetical; lowercase
+            phrase = re.split(r'\s+[—–]\s+|;\s*|\s+\(', p)[0].strip().rstrip(",;").lower()
+            task_lines.append(f"- {phrase}")
 
-    prep_guide = "\n".join(sms_lines) if len(sms_lines) > 1 else "No advance prep needed this week."
+    prep_guide = "Sunday prep:\n" + "\n".join(task_lines) if task_lines else "No advance prep needed this week."
 
     return {
         "prep_guide": prep_guide,
