@@ -61,6 +61,7 @@ client — use the MCP tools exclusively.
 | `handle_ashley_reply` | `reply: str` | Processes approval or swap; triggers finalization on approval |
 | `activate_idea_recipe` | `name`, `content`, `source_url?` | Activates a pending idea from markdown content |
 | `finalize_plan` | — | Generates plan + shopping CSV, launches apps, sends prep guide |
+| `get_prep_guide` | — | Returns compact SMS-ready Sunday batch prep list from current plan |
 
 ## Full state machine
 
