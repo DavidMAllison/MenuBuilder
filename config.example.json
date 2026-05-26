@@ -2,5 +2,7 @@
   "metadata_path": "~/Dropbox/LLMContext/cooking/recipe_metadata.json",
   "adult_names": ["Parent1", "Parent2"],
   "github_pages_base_url": "https://yourusername.github.io/your-recipes-repo",
-  "partner_handle": "+15550000000"
+  "dropbox_recipe_base_url": "https://www.dropbox.com/...",
+  "partner_handle": "+15550000000",
+  "admin_handle": "+15550000001"
 }

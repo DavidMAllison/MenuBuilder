@@ -2,14 +2,19 @@
 
 ## May 2026
 
-### MCP Server (`mcp/menu_server.py`)
-- MenuBuilder now exposes its weekly menu workflow as 6 MCP tools over stdio
+### MCP Server (`mcp/menu_server.py`) — complete workflow
+- MenuBuilder exposes the entire weekly menu workflow as 9 MCP tools over stdio
 - Activity state owned by MenuBuilder at `menu_activity.json` (gitignored)
-- Tools: `get_workflow_state`, `start_menu_workflow`, `log_meal_feedback`,
+- Pre-signoff tools: `get_workflow_state`, `start_menu_workflow`, `log_meal_feedback`,
   `get_meal_suggestions`, `swap_meal`, `approve_menu`
+- Post-signoff tools: `handle_ashley_reply` (approval + swap parsing, auto-idea activation),
+  `activate_idea_recipe` (manual fallback for ideas that can't be auto-fetched),
+  `finalize_plan` (plan text + shopping CSV + app launch + prep guide via Keanu)
+- `finalize_plan` generates REMINDERS via Claude Sonnet; falls back to plain day list
+- Shopping CSV: Item / Notes(qty) / Date(cook date) — matches WeeklyShoppingList.app format
 - Wired into Claude Code via `~/.claude.json` mcpServers config
 - Requires Python 3.12 venv at `.venv/` — see `mcp/README.md`
-- SMS interface (Keanu) will call these tools rather than running its own workflow logic
+- `admin_handle` added to `config.example.json` for prep guide delivery to David
 
 ## Mar 2026
 
