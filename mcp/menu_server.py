@@ -1392,5 +1392,92 @@ def finalize_plan() -> dict:
     return _do_finalize(activity)
 
 
+@mcp.tool()
+def get_prep_guide() -> dict:
+    """
+    Return the prep guide for the current week's meal plan.
+
+    Reads the most recent mealplan_*.txt, looks up prep_components and
+    prep_notes for each recipe in metadata, and returns a formatted guide.
+
+    Works at any time — does not require an active workflow. Reflects the
+    actual current plan including any mid-week swaps.
+
+    Returns:
+        {
+          "prep_guide": "PREP GUIDE:\\n\\nRecipe Name:\\n  - component\\n  ...",
+          "week_start": "YYYY-MM-DD",
+          "recipes_with_prep": ["Recipe A", "Recipe B"],
+          "recipes_without_prep": ["Recipe C", ...]
+        }
+
+    prep_guide is an empty string if no recipes have prep_components populated.
+    """
+    # Find the current week's meal plan file
+    if not WEEKLYPLAN_DIR.exists():
+        return {"error": "No meal plans found.", "prep_guide": ""}
+
+    today = date.today()
+    dated = []
+    for f in WEEKLYPLAN_DIR.glob("mealplan_*.txt"):
+        try:
+            d = date.fromisoformat(f.stem.replace("mealplan_", ""))
+            dated.append((d, f))
+        except ValueError:
+            continue
+
+    dated.sort(key=lambda x: x[0], reverse=True)
+    plan_file = next((f for d, f in dated if d <= today), None)
+    if not plan_file:
+        return {"error": "No current meal plan found.", "prep_guide": ""}
+
+    week_start_str = plan_file.stem.replace("mealplan_", "")
+
+    # Parse recipe names from the plan
+    selected = {}
+    for line in plan_file.read_text().splitlines():
+        m = _PLAN_LINE_RE.match(line.strip())
+        if m:
+            selected[m.group(1)] = m.group(2).strip()
+
+    if not selected:
+        return {"error": "Could not parse any meals from plan.", "prep_guide": "", "week_start": week_start_str}
+
+    # Build prep guide
+    recipes = _load_metadata()
+    with_prep = []
+    without_prep = []
+    lines = ["PREP GUIDE:"]
+
+    for day in DAYS_ORDER:
+        if day not in selected:
+            continue
+        name = selected[day]
+        key = _find_recipe_key(name, recipes)
+        if not key:
+            without_prep.append(name)
+            continue
+        prep = recipes[key].get("prep_components", [])
+        notes = recipes[key].get("prep_notes", "")
+        if prep:
+            with_prep.append(name)
+            lines.append(f"\n{name}:")
+            for p in prep:
+                lines.append(f"  - {p}")
+            if notes:
+                lines.append(f"  Note: {notes}")
+        else:
+            without_prep.append(name)
+
+    prep_guide = "\n".join(lines) if len(lines) > 1 else ""
+
+    return {
+        "prep_guide": prep_guide,
+        "week_start": week_start_str,
+        "recipes_with_prep": with_prep,
+        "recipes_without_prep": without_prep,
+    }
+
+
 if __name__ == "__main__":
     mcp.run()
