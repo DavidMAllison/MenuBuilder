@@ -207,6 +207,12 @@ def _parse_ingredient(s: str) -> dict:
     """Parse "1½ lbs chicken thighs, trimmed" → {name, quantity, unit, category}."""
     for frac, val in _FRACTIONS.items():
         s = s.replace(frac, f" {val} ")
+    # Handle ASCII mixed numbers "1 1/2" → "1.5" before plain fractions
+    s = re.sub(r"(\d+)\s+(\d+)/(\d+)",
+               lambda m: str(round(int(m.group(1)) + int(m.group(2)) / int(m.group(3)), 4)), s)
+    # Handle plain ASCII fractions "1/2" → "0.5"
+    s = re.sub(r"(\d+)/(\d+)",
+               lambda m: str(round(int(m.group(1)) / int(m.group(2)), 4)), s)
     s = re.sub(r"\s+", " ", s).strip()
 
     quantity = ""
@@ -295,6 +301,51 @@ def _log_swap_to_feedback(outgoing: str, incoming: str, target_date: date) -> No
         "source": "swap",
     })
     feedback_path.write_text(json.dumps(data, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Plan file updaters
+# ---------------------------------------------------------------------------
+
+def _recompute_balance(plan_path: Path) -> None:
+    """Re-count health labels in DINNERS section and rewrite the BALANCE line."""
+    text = plan_path.read_text()
+    labels = re.findall(r"\[(Heart-Healthy|Moderate|Indulgent)\]", text)
+    counts: Dict[str, int] = {}
+    for label in labels:
+        counts[label] = counts.get(label, 0) + 1
+    parts = [f"{counts[l]} {l}" for l in ["Heart-Healthy", "Moderate", "Indulgent"] if l in counts]
+    new_balance = f"BALANCE: {', '.join(parts)}"
+    updated = re.sub(r"BALANCE:.*", new_balance, text)
+    plan_path.write_text(updated)
+
+
+def _suggest_start_time(time_str: str) -> str:
+    """Subtract cook time from 6:30 PM dinner target to get a suggested start time."""
+    total_min = 0
+    h = re.search(r"(\d+)\s*h", time_str, re.IGNORECASE)
+    m = re.search(r"(\d+)\s*m", time_str, re.IGNORECASE)
+    if h:
+        total_min += int(h.group(1)) * 60
+    if m:
+        total_min += int(m.group(1))
+    if not total_min:
+        return "6:00 PM"
+    start_min = 18 * 60 + 30 - total_min  # 6:30 PM in minutes from midnight
+    hour, minute = divmod(max(start_min, 0), 60)
+    period = "AM" if hour < 12 else "PM"
+    return f"{hour % 12 or 12}:{minute:02d} {period}"
+
+
+def _update_reminder_line(plan_path: Path, day_str: str, incoming: str, time_str: str) -> None:
+    """Replace the REMINDERS entry for the swapped day with updated timing."""
+    day_abbrev = day_str.split()[0].upper()  # "Wed 5/27" → "WED"
+    start_time = _suggest_start_time(time_str)
+    time_display = time_str if time_str else "?"
+    new_line = f"- {day_abbrev}: {time_display} — {incoming}, start by {start_time}."
+    text = plan_path.read_text()
+    updated = re.sub(rf"- {day_abbrev}:.*", new_line, text)
+    plan_path.write_text(updated)
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +489,8 @@ def execute_swap(
     # --- Update files ---
     _update_shopping_csv(csv_path, outgoing_recipe, canonical_name, parsed_ingredients, target)
     _update_meal_plan_txt(plan_path, day, outgoing_recipe, canonical_name, time_str, health, recipe_url)
+    _recompute_balance(plan_path)
+    _update_reminder_line(plan_path, day, canonical_name, time_str)
     _log_swap_to_feedback(outgoing_recipe, canonical_name, target)
 
     # --- Re-run apps ---
