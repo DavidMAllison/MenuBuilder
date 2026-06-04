@@ -13,7 +13,10 @@ A personal meal planning system built around real family constraints — health 
 - **Recipe discovery agents**: Automated agents that source new recipe ideas from regional cuisine sites and named chefs. All agents are accessed through a single orchestrator (`recipe_agent.py` / `recipe` CLI).
   - **Mexican** — Pati Jinich, Rick Bayless, Cooking Con Claudia
   - **Chef** — Alton Brown, Smitten Kitchen (Deb Perelman), Chetna Makan
+  - **Asian** — Just One Cookbook (Japanese), Maangchi (Korean), Hot Thai Kitchen (Thai), Viet World Kitchen (Vietnamese), Woks of Life (Chinese)
   - **Sites** — Serious Eats (Playwright-based to bypass Cloudflare)
+- **Sunday auto-generation**: launchd cron fires at 9 AM every Sunday, kicks off a guided SMS workflow — collects last-week feedback, schedule changes, and cuisine preferences before proposing candidates
+- **Variety enforcement**: `suggest_meals.py` scores candidates with protein variety limits (max 2 chicken/week), cuisine family caps (max 2 per family), and new-recipe pressure (at least 1 recipe not cooked in 6+ weeks)
 - **Agent eval harness**: Three-tier automated evaluation for each agent — source routing check, parse completeness check, and human review template. Prompt suites in `eval/`.
 - **Recipe web hosting**: Recipe collection published to [GitHub Pages](https://davidmallison.github.io/menubuilder-recipes/) as styled HTML — clean mobile URLs, no login required, replaces Dropbox preview links
 
@@ -38,16 +41,19 @@ suggest_meals.py              # Candidate meal filter — run before each weekly
 process_feedback_queue.py     # Drain SMS feedback queue into feedback_current.json
 meal_swap.py                  # Mid-week meal swap — all swap logic lives here
 send_menu_partner.py          # Send weekly menu to partner for approval via Keanu
+show_inventory.py             # Opens browser with full inventory grouped by category
 recipe_agent.py               # Recipe search orchestrator — single entry point for all agents
 mexican_agent.py              # Mexican recipe sources (Pati Jinich, Rick Bayless, Cooking con Claudia)
+asian_agent.py                # Asian recipe sources (JOC, Maangchi, Hot Thai Kitchen, Viet World Kitchen, Woks of Life)
 chef_agent.py                 # Chef recipe sources (Alton Brown, Smitten Kitchen, Chetna Makan)
 sites_agent.py                # Cross-cuisine sites (Serious Eats) via Playwright
 save_to_recipeideas.py        # Save agent results to the recipeideas inbox
+generate_github_pages_data.py # Generate _data/recipes.json for GitHub Pages — run after metadata changes
 eval_mexican_agent.py         # Eval harness for mexican_agent
 eval_chef_agent.py            # Eval harness for chef_agent
 eval/                         # Eval prompt suites (mexican_prompts.json, chef_prompts.json)
 mcp/
-  menu_server.py              # MCP server — exposes 6 workflow tools over stdio
+  menu_server.py              # MCP server — exposes 7 workflow tools over stdio
   README.md                   # MCP setup and Claude Code wiring instructions
 recipe_metadata.json          # (not committed) Single source of truth for all recipe data
 menu_activity.json            # (not committed) Active workflow state (created by MCP server)
@@ -68,6 +74,7 @@ or any MCP-compatible client (e.g. Keanu via SMS):
 | `start_menu_workflow` | Drains feedback queue, loads last week, initializes activity |
 | `log_meal_feedback` | Records last-week ratings; `"done"` finalizes and advances state |
 | `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week |
+| `advance_to_meal_approval` | Writes selected meals into menu_activity.json; bridges local SMS phase to MCP bridge phase |
 | `swap_meal` | Replaces one day's meal (auto-picks or takes explicit name) |
 | `approve_menu` | Sends selected meals to Ashley via Keanu for signoff |
 

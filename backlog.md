@@ -160,8 +160,8 @@ Option A is cleaner -- self-contained in the reminder itself, no extra file need
 - **launchd plist created**: `~/Library/LaunchAgents/com.menubuilder.sundaymenu.plist` — 9 AM Sunday
 - **CLAUDE.md updated**: checks `get_workflow_state` before starting; resumes from active session
 - **Handoff doc**: `handoff_sunday_sms_workflow.md` — all sms-assistant changes specified
-- **Pending**: sms-assistant session to implement handoff doc changes + install Keanu plist
-- **Test**: first Sunday after deployment — permission dialogs may appear
+- **sms-assistant changes complete** (Jun 4 2026) — trigger_menu.py, handle_start, _handle_meal_logging, dispatch rewrite, advance_to_meal_approval seam all done
+- **Test**: Sunday Jun 8 — first live run. Permission dialogs may appear on first launchd fire.
 
 ### WeeklyShoppingList.app - Grouped Reminders by Category
 - **Goal**: Group shopping list items by category in the Grocery list

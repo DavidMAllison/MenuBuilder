@@ -202,7 +202,7 @@
 3. **Process recipeideas inbox** -- check the `recipeideas/` folder for any files not yet in `recipe_metadata.json`. If new files exist, show them to the user (title, source URL if present) and flag any that look like duplicates or are similar to existing active/idea entries. Wait for user to confirm before adding each one to the JSON as `status: "idea"` and deleting the file. Then review the full `status: "idea"` list — if there are fewer than 5 ideas or none have been added in 2+ weeks, suggest the user run recipe idea agents. Do NOT auto-spawn them.
 4. **Run candidate filter** -- `python3 ~/projects/personal/MenuBuilder/suggest_meals.py`. Based on the schedule review in step 2, pass `--quick` for any evenings with late-running events (e.g. `--quick tue,thu`). The script filters by `last_cooked_date`, health balance, protein variety, cuisine variety, and seasonal method. Use its output as the candidate pool -- do not re-scan the JSON manually.
    - **Budget context**: Before proposing meals, read `~/Dropbox/LLMContext/Personal/grocery_budget_status.json` if it exists. If `suggested_weekly_spend` is low (tight week), prioritize inventory-heavy meals and avoid recipes that require many fresh or specialty ingredients. Mention the budget posture to the user before proposing candidates.
-5. **Propose recipe names only** -- let user approve/swap before generating
+5. **Propose recipe names only** -- before presenting, verify the 7-meal list against the Variety Rules above (protein limits, max 2 per cuisine family, at least 1 newer recipe). Adjust candidates if needed, then present. Let user approve/swap before generating.
 6. **Send to Ashley** -- `python3 ~/projects/personal/MenuBuilder/send_menu_partner.py` (day + meal name only). **DO NOT fetch recipe URLs, create `.md` files, or populate ingredients for any `idea` meals yet -- wait for Ashley's approval first. If she swaps a meal out, that work is wasted.**
 7. **Ashley approves** -- wait for her reply in `/Users/Shared/sms-assistant/menu_feedback_response.json`. Apply any changes.
 7a. **Check for ideas** -- automated: scan the post-Ashley final meal list against `recipe_metadata.json` for any entries with `status: "idea"`. Use the post-Ashley list, not the original candidates — Ashley may have swapped in a meal that is itself an idea.
@@ -212,6 +212,14 @@
 10. **Send prep guide** -- via Keanu
 
 ## Learned Preferences
+
+### Variety Rules (enforce at step 5 before proposing)
+- **Protein variety** -- max 2 chicken meals per week; max 1 of every other protein (salmon, pork, beef, shrimp, vegetarian). If the candidate list is heavy on one protein, swap before proposing.
+- **Cuisine variety** -- max 2 meals from the same cuisine family (Asian, Mexican, Italian, etc.) per week. "Asian" counts as one family — Japanese + Korean + Chinese = 3 Asian meals is too many.
+- **New recipe pressure** -- at least 1 meal per week should be a recipe not cooked in the last 6 weeks, ideally from the `idea` list or sourced fresh via the recipe agents (mexican_agent, asian_agent, sites_agent, chef_agent). Don't default to the same rotation every week.
+- **Cross-check before proposing** -- before presenting the 7-meal list, verify: no protein appears more than the limits above, no cuisine family appears more than twice, at least 1 is relatively new to the rotation.
+
+### Other Preferences
 - **No duplicate proteins in a week** -- e.g., don't put salmon on two nights
 - **Hoisin-Glazed Pork Tenderloin** is overused; avoid unless specifically requested
 - **Incorporate new recipes regularly** -- check recipeideas folder and recently added recipes for variety
