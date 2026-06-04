@@ -10,6 +10,7 @@ Tools:
   start_menu_workflow      — initialize workflow, drain feedback, load last week
   log_meal_feedback        — record last-week ratings; "done" advances state
   get_meal_suggestions     — run candidate filter, auto-select 7 meals
+  advance_to_meal_approval — hand off from local SMS phase to bridge phase with pre-selected meals
   swap_meal                — replace one day's meal (pre-signoff)
   approve_menu             — send selected meals to Ashley via Keanu
   handle_ashley_reply      — process Ashley's approval or swap request
@@ -1040,6 +1041,57 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
         "selected_meals": selected,
         "quick_days": quick_days,
         "week_start": activity["week_start"],
+    }
+
+
+@mcp.tool()
+def advance_to_meal_approval(
+    selected_meals: dict,
+    quick_days: list = [],
+    schedule_notes: list = [],
+    cuisine_direction: str = "",
+) -> dict:
+    """
+    Advance the workflow to awaiting_meal_approval using meals selected locally
+    by the SMS workflow (bypassing the bridge's get_meal_suggestions step).
+
+    Called by the sms-assistant after _handle_cuisine() selects meals locally.
+    Writes selected_meals and supporting fields into menu_activity.json so the
+    bridge phase (approve_menu, swap_meal, etc.) can operate normally.
+
+    Args:
+        selected_meals:    Dict mapping day abbreviations to recipe names,
+                           e.g. {"Sun": "Roast Chicken", "Mon": "Bulgogi", ...}
+        quick_days:        Day abbreviations flagged as quick-cook nights.
+        schedule_notes:    Schedule notes collected during the local phase.
+        cuisine_direction: Cuisine preference the user expressed.
+
+    Returns:
+        {
+          "state": "awaiting_meal_approval",
+          "selected_meals": {"Sun": "...", ...},
+          "week_start": "YYYY-MM-DD"
+        }
+
+    State after call: awaiting_meal_approval
+    """
+    activity = _load_activity()
+    if activity.get("state") == "idle":
+        return {"error": "No active workflow. Call start_menu_workflow first."}
+
+    activity["selected_meals"] = selected_meals
+    activity["quick_days"] = quick_days or []
+    if schedule_notes:
+        activity["schedule_notes"] = schedule_notes
+    if cuisine_direction:
+        activity["cuisine_direction"] = cuisine_direction
+    activity["state"] = "awaiting_meal_approval"
+    _save_activity(activity)
+
+    return {
+        "state": "awaiting_meal_approval",
+        "selected_meals": selected_meals,
+        "week_start": activity.get("week_start", ""),
     }
 
 

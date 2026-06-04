@@ -77,8 +77,8 @@
   - Monitor fried food frequency (max once every 2 weeks)
 
 ## Food Inventory
-- Current inventory tracked in: `~/Dropbox/LLMContext/cooking/inventory.md`
-- **Update process**: User shares receipt photos from Kroger/Costco, inventory gets updated
+- Current inventory tracked in: `/Users/Shared/cooking/inventory.json` (path also in `config.json` as `inventory_path`)
+- **Update process**: Ashley texts receipt photos to Keanu → GroceryAgent parses and appends/updates items in `inventory.json`
 - **Meal planning approach**:
   - Ideally recommend meals using existing inventory
   - Okay to suggest new things that require shopping, especially on weekends
@@ -186,15 +186,24 @@
 - Recipes over 60 minutes should be classified as Weekend meal_type
 
 ## Menu Generation Workflow
+
+**Before starting: check for active SMS session** -- call `get_workflow_state` (MCP tool). If state is not `idle` or `complete`, a Sunday SMS workflow is already in progress. Resume from the current state rather than starting fresh:
+- `awaiting_meal_logging` → pick up at step 1
+- `awaiting_schedule` → pick up at step 2
+- `awaiting_cuisine` → pick up at step 4 (candidates)
+- `awaiting_meal_approval` → pick up at step 5
+- `awaiting_ashley_signoff` → pick up at step 7
+
 0. **Drain SMS feedback queue** -- `python3 ~/projects/personal/MenuBuilder/process_feedback_queue.py`. This reads `/Users/Shared/cooking/feedback_queue.json` and appends entries to `feedback_current.json`, then empties the queue. Run this before step 1 so queue feedback is available during meal logging. If the queue is empty, move on.
    - Entries with `sentiment: "disliked"` should be flagged during step 1.
    - Entries with `sentiment: "mixed"` should be surfaced for review before including the recipe this week.
 1. **Log last week's meals** -- read `feedback_current.json` and the previous week's `mealplan_YYYY-MM-DD.txt`. For each meal in the plan with a feedback entry, auto-update `times_cooked`, `last_cooked_date`, and append entries to the `feedback` array in `recipe_metadata.json`. For meals with no feedback entry, prompt: "Any feedback on [recipe]? Did you make it?" After processing all meals, clear `feedback_current.json` to `{"entries": []}`. If sentiment is `"disliked"`, flag for tombstone discussion -- do not auto-delete. If disliked and confirmed: delete `.md` file, set `status: "disliked"` in JSON.
-2. **Check schedule** -- ask about any one-off changes this week (standing constraints are in `~/projects/personal/FamilySchedule/schedule.json`)
+2. **Check schedule** -- read `~/projects/personal/FamilySchedule/schedule.json` and review `weekly_overrides` for the upcoming week. Identify any evening events that run into dinner time — those nights need quick-cook meals (slow cooker, ≤35 min, or leftovers). Ask the user about any one-off changes not yet in the file.
 3. **Process recipeideas inbox** -- check the `recipeideas/` folder for any files not yet in `recipe_metadata.json`. If new files exist, show them to the user (title, source URL if present) and flag any that look like duplicates or are similar to existing active/idea entries. Wait for user to confirm before adding each one to the JSON as `status: "idea"` and deleting the file. Then review the full `status: "idea"` list — if there are fewer than 5 ideas or none have been added in 2+ weeks, suggest the user run recipe idea agents. Do NOT auto-spawn them.
-4. **Run candidate filter** -- `python3 ~/projects/personal/MenuBuilder/suggest_meals.py`. Pass the week's busy nights (e.g. `--quick mon,tue,thu`). The script filters by `last_cooked_date`, health balance, protein variety, cuisine variety, and seasonal method. Use its output as the candidate pool -- do not re-scan the JSON manually.
+4. **Run candidate filter** -- `python3 ~/projects/personal/MenuBuilder/suggest_meals.py`. Based on the schedule review in step 2, pass `--quick` for any evenings with late-running events (e.g. `--quick tue,thu`). The script filters by `last_cooked_date`, health balance, protein variety, cuisine variety, and seasonal method. Use its output as the candidate pool -- do not re-scan the JSON manually.
+   - **Budget context**: Before proposing meals, read `~/Dropbox/LLMContext/Personal/grocery_budget_status.json` if it exists. If `suggested_weekly_spend` is low (tight week), prioritize inventory-heavy meals and avoid recipes that require many fresh or specialty ingredients. Mention the budget posture to the user before proposing candidates.
 5. **Propose recipe names only** -- let user approve/swap before generating
-6. **Send to Ashley** -- `python3 ~/projects/personal/MenuBuilder/send_menu_partner.py` (day + meal name only). 
+6. **Send to Ashley** -- `python3 ~/projects/personal/MenuBuilder/send_menu_partner.py` (day + meal name only). **DO NOT fetch recipe URLs, create `.md` files, or populate ingredients for any `idea` meals yet -- wait for Ashley's approval first. If she swaps a meal out, that work is wasted.**
 7. **Ashley approves** -- wait for her reply in `/Users/Shared/sms-assistant/menu_feedback_response.json`. Apply any changes.
 7a. **Check for ideas** -- automated: scan the post-Ashley final meal list against `recipe_metadata.json` for any entries with `status: "idea"`. Use the post-Ashley list, not the original candidates — Ashley may have swapped in a meal that is itself an idea.
 7b. **If ideas found** -- fetch content from the source URL directly. If the fetch fails, ask the user to paste the content manually. Once content is obtained: create `.md` file in `recipes/`, populate `ingredients` in JSON, set `status: "active"`. Do this before generating the plan.

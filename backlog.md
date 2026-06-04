@@ -2,6 +2,111 @@
 
 ## Planned Features
 
+### Grocery Budget Tracking + Meal Costing
+**Status**: COMPLETE (May 30, 2026). Full receipt → budget → MenuBuilder pipeline live.
+
+**Owner**: `~/projects/personal/GroceryAgent/` — MenuBuilder is a consumer, not the owner.
+
+- **Receipt logging**: text photo to Keanu → `groceryagent_bridge.py` → `receipt_parser.py` → updates budget + price history ✓
+- **Monthly grocery budget** tracked in `~/Dropbox/LLMContext/Personal/grocery_budget_status.json` — $800/month ✓
+- **Price history** tracked in `~/Dropbox/LLMContext/Personal/price_history.json` ✓
+- **Budget mode** (default): step 4 of weekly workflow reads `grocery_budget_status.json`; if tight, prioritize pantry-heavy meals ✓
+- **Yolo mode**: explicit override ("yolo this week") — no budget constraints ✓
+- **price_per_unit in price_history** (May 31, 2026): `update_price_history()` now calls `_parse_quantity()` and stores `quantity_value`, `quantity_unit`, `price_per_unit` on every new entry ✓ (GroceryAgent)
+- **Meal costing** (long-term): once price history accumulates, cost recipes using `ingredients` array + price-per-unit averages. MenuBuilder will skip entries missing `price_per_unit` gracefully.
+
+**Receipt OCR output schema** — must include `price` per item from day one:
+```json
+{
+  "store": "Kroger",
+  "total": 127.43,
+  "items": [
+    {"name": "boneless chicken breast", "quantity": "3 lbs", "price": 8.97, "category": "Proteins"}
+  ]
+}
+```
+
+**Budget file fields**: `grocery_budget_monthly`, `grocery_spent_to_date`, `grocery_remaining`, `week_number`, `weeks_in_month`, `suggested_weekly_spend`, `as_of`
+- New-month detection: if `as_of.month != today.month`, reset `grocery_spent_to_date` to new receipt amount (fresh start)
+- Week number: auto-derive from date — `math.ceil(today.day / 7)`
+
+**Inventory updates**: append parsed items to correct sections in `inventory.md` (Produce, Dairy, Pantry Staples)
+
+**Expected OCR iteration areas**: Kroger item name abbreviations, produce PLU codes, multi-buy pricing, Costco receipt format differences
+
+### Expanded Inventory Tracking
+**Status**: COMPLETE (May 31, 2026).
+
+- `suggest_meals.py` now matches Pantry, Dry Goods, and Dairy inventory items against recipe ingredients
+- Shows `[PANTRY: item1, item2]` tags in candidate output
+- Scores `-4` for pantry matches (stacks with protein bonuses)
+- Header now shows "IN STOCK (pantry/dairy)" summary line
+- `show_inventory.py` added — `python3 show_inventory.py` opens browser with full inventory grouped by category
+
+### SMS Inventory Query (check_inventory tool)
+**Status**: COMPLETE (May 31, 2026).
+
+- `check_inventory` tool added to Keanu — "do we have X?" works over iMessage for all family members
+- Fixed `INVENTORY_FILE` path in `tools.py` (was pointing to archived `inventory.md`, now `inventory.json`)
+- Fixed `_tool_update_inventory()` rewritten for JSON format (markdown version was broken)
+
+### Workflow Fix: Promote Idea Recipes After Ashley Approves (Not Before)
+**Status**: FIXED May 31, 2026
+
+Currently CLAUDE.md step 7b correctly gates recipe creation on Ashley's approval, but in practice the workflow can drift toward fetching/creating `.md` files before sending to her. This wastes work if she swaps out a meal.
+
+**Fix**: Add an explicit reminder/gate in the workflow instructions:
+- Step 6 (send to Ashley): send meal names only — do NOT fetch recipe content yet for any `idea` meals
+- Step 7b (after Ashley replies): only then fetch URLs, create `.md` files, populate ingredients for ideas in the *final approved list*
+- If Ashley swaps out an idea meal, skip its file creation entirely
+
+Update CLAUDE.md to make this gate unmistakable — either a warning in step 6 or a reordering note.
+
+---
+
+### WeeklyShoppingList.app: Date Overflow When Current Day > Days in Target Month
+**Status**: FIXED May 31, 2026
+
+When today is the 31st and a shopping item is dated for a month with fewer days (e.g. June has 30 days), AppleScript overflows the date. Setting `month = 6` on a date still holding `day = 31` rolls over to July 1, then `day = 4` lands on July 4 instead of June 4.
+
+**Fix**: In the date-setting block, reset the day to 1 before setting the month, then set the real day last:
+```applescript
+set day of dueDate to 1
+set month of dueDate to (monthStr as integer)
+set day of dueDate to (dayStr as integer)
+```
+Affects any month-end run where items are dated into the following month.
+
+---
+
+### WeeklyMealCalendar + WeeklyShoppingList: Launch Target App Before Scripting
+**Status**: FIXED May 31, 2026
+
+Both apps assume Reminders and Calendar are already running. If they're not, WeeklyMealCalendar fails with "Application isn't running" (-600) and WeeklyShoppingList gets connection errors.
+
+**Fix for WeeklyMealCalendar.app**: Add `tell application "Calendar" to activate` + a short delay at the top of the script before any event operations.
+
+**Fix for WeeklyShoppingList.app**: Add `tell application "Reminders" to activate` + a short delay at the top before accessing lists.
+
+Both fixes are small one-line additions at the top of each script.
+
+---
+
+### WeeklyShoppingList.app: Preserve Manually-Added Reminders
+**Status**: FIXED May 31, 2026
+
+Current behavior: the script deletes ALL incomplete reminders from the Grocery list before recreating from CSV. This wipes any items Ashley or David manually added (e.g. non-meal items like snacks, household goods).
+
+**Fix**: Track which reminders were CSV-generated vs manually added, and only replace the CSV-generated ones.
+
+**Implementation options:**
+- **Option A (preferred)**: Stamp each generated reminder with a note prefix or tag (e.g. body starts with `[menu]`) so the script can identify and selectively delete only those. Manually-added items have no tag and are left alone.
+- **Option B**: Store the previous week's item names in a sidecar file; on next run, delete only names that appear in that file, then write the new names to it.
+
+Option A is cleaner -- self-contained in the reminder itself, no extra file needed. Requires updating both the create and delete steps in the AppleScript.
+
+---
+
 ### RAG for Recipe Collection (Learning/Experiment)
 - Build a local RAG pipeline over the recipe `.md` files for semantic search and experimentation
 - **Stack**: `sentence-transformers` (local embeddings, no API key needed) + ChromaDB (local vector store, Python-native)
@@ -49,25 +154,33 @@
 - Sends iMessage asking about schedule changes for the week ("Any schedule changes? Nights out?")
 - User replies via text; script feeds reply + context files (meal plans, inventory, metadata) into Claude API
 - Claude proposes menu; user approves/swaps via text; final plan saved + shopping list populated
-- **Transport**: iMessage via dedicated iCloud account (not Twilio)
-- **Blocked on**: iCloud account setup -- attempting via old physical iPhone (browser setup had issues)
-- **Next**: Once iCloud account is ready on device, build the AppleScript/Python iMessage sender + launchd job
+- **Transport**: iMessage via dedicated iCloud account
+- **iCloud blocker resolved** (Jun 2026) — account setup complete
+- **Dual-mode**: primary interaction via SMS; user may also pick up workflow on laptop (Claude Code). Session state at `/Users/Shared/cooking/menu_session.json` is the bridge.
+- **launchd plist created**: `~/Library/LaunchAgents/com.menubuilder.sundaymenu.plist` — 9 AM Sunday
+- **CLAUDE.md updated**: checks `get_workflow_state` before starting; resumes from active session
+- **Handoff doc**: `handoff_sunday_sms_workflow.md` — all sms-assistant changes specified
+- **Pending**: sms-assistant session to implement handoff doc changes + install Keanu plist
+- **Test**: first Sunday after deployment — permission dialogs may appear
 
 ### WeeklyShoppingList.app - Grouped Reminders by Category
 - **Goal**: Group shopping list items by category in the Grocery list
 - **What we learned**: iOS Reminders auto-groups items in a Grocery-type list, but only when added via iOS UI — not via AppleScript. Groups also only appear on iPhone, not macOS desktop. AppleScript can't create groups or trigger auto-categorization.
 - **Current workaround**: On iPhone, toggle list type Standard → save → Groceries → save. This triggers auto-grouping of all existing items.
 - **Mar 2026 progress**: Implemented clean item names in reminder title (ingredient only), qty + meal name in Notes, due date set per item. iOS should now be able to auto-categorize correctly since reminder titles are plain ingredient names. Toggle workaround still needed to trigger grouping. Testing in progress.
+- **macOS 16 (Tahoe) investigation Jun 2026**: Reminders SDEF confirmed — `list` class exposes only `id`, `name`, `container`, `color`, `emblem`. No list type property added. Categorization is triggered client-side by the app's NLP on UI input only; API path bypasses it entirely. No change from earlier macOS versions. Revisit on future major releases.
 
 ### Create Missing Recipe Files
 - **Tinga Verde** — blank PDF, source is Cooking Con Claudia. User to provide URL or paste recipe; create as `.md` file.
 - **Pan-Seared Broccolini** — blank PDF, source unknown. User to provide recipe; create as `.md` file.
 
 ### GitHub Pages Recipe Styling
-- Current custom layout is functional but doesn't fully match the local `show_recipe.py` viewer
-- Goal: match the local style — warm cream background, card shadow, meta row (time, source link, health badge), Georgia serif body text
-- Reference: `show_recipe.py` HTML_TEMPLATE is the target design
-- Consider pulling health/time/source from a data file at build time so badges render on the web version too
+**Status**: COMPLETE Jun 2026
+
+- `_data/recipes.json` generated from `recipe_metadata.json` (127 recipes) — run `generate_github_pages_data.py` whenever metadata changes
+- `_layouts/default.html` updated: meta row from data file, health badges (color-coded), source links, cuisine, time — matches `show_recipe.py` local viewer
+- Handles dual metadata schema (`health`/`health_classification`, `cuisine`/`cuisine_type`)
+- Re-run `generate_github_pages_data.py` and push when new recipes are added
 
 ### Recipe Verbatim Scan
 - Scan all recipe `.md` files to verify steps are reworded/reformatted and not copied verbatim from source
@@ -79,14 +192,15 @@
 - Handle edge cases: recipes with no cook time, multi-component meals
 
 ### PDF-to-Markdown Migration
-- Script (`convert_recipes_to_md.py`) exists and has been used — 98 `.md` files done as of May 2026
-- **28 PDFs remain** — run script in batches when time allows; user must be present to approve file deletions
-- After each batch: verify `.md` content, update `recipe_metadata.json` filename fields, delete PDFs
+**Status**: NEARLY COMPLETE — only 2 PDFs remain (down from 28).
+
+- `pan_seared_broccolini.pdf` and `tinga_verde_recipe.pdf` are image-based scans, not text PDFs — `convert_recipes_to_md.py` can't extract them
+- **Blocker**: need source URLs or recipe content to create the `.md` files manually
+- Once content is provided: create `.md`, push to GitHub repo, update metadata filename field, delete PDFs
 
 ### Recipe Viewer Enhancements (show_recipe.py)
-- **In-page feedback**: thumbs up/down voting + freeform notes field rendered in the HTML page; on submit, writes to `feedback_current.json` so it flows into the Sunday logging workflow
 - **SMS recipe display**: text a recipe name to Keanu, get back a formatted recipe (ingredients + steps); would use the same JSON-first lookup as show_recipe.py
-- **Stale header cleanup**: batch-remove `Source:`, `Time:`, `Yield:` header blocks from older `.md` files that still have them baked in (those fields now live in JSON)
+- **Stale header cleanup**: COMPLETE Jun 2026 — only 1 file had a genuine stale header (Thai Chicken Stir-Fry, pipe-separated Source/Time/Servings block). All other files with `**Time:**` and `**Servings:**` are current standard format. Fixed + attribution added.
 
 ### Meal Swap Handling
 - Support swapping a planned meal mid-week (e.g. grilling instead of the scheduled dinner)
