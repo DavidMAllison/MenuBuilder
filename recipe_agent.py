@@ -8,10 +8,14 @@ This is the single entry point for all recipe searches.
 Sources (via subagents):
   Chef   : Alton Brown, Smitten Kitchen (Deb Perelman), Chetna Makan
   Mexican: Pati Jinich, Rick Bayless, Cooking con Claudia
+  Asian  : Just One Cookbook (Japanese), Maangchi (Korean),
+           Hot Thai Kitchen (Thai), Viet World Kitchen (Vietnamese),
+           Woks of Life (Chinese/Pan-Asian)
   Sites  : Serious Eats
 
 Routing:
   Mexican dish/ingredient → mexican agent
+  Asian dish/ingredient   → asian agent (Japanese, Korean, Thai, Vietnamese)
   Chef name mentioned     → chef agent (restricted to that chef)
   "Serious Eats" / site   → sites agent
   General query           → chef agent (default)
@@ -53,7 +57,7 @@ _CONFIG_PATH = Path(__file__).parent / "config.json"
 
 
 def search_local_collection(query: str) -> List[dict]:
-    """Search active recipes in recipe_metadata.json by name, cuisine, and source.
+    """Search recipes in recipe_metadata.json by name, cuisine, and source.
 
     Returns a list of matching recipes with title, url, cuisine, source, time, and health.
     Results are sorted by relevance (number of query terms matched).
@@ -72,7 +76,7 @@ def search_local_collection(query: str) -> List[dict]:
     for name, data in recipes.items():
         if not isinstance(data, dict):
             continue
-        if data.get("status") != "active":
+        if data.get("status") in ("disliked", "ignored"):
             continue
         searchable = " ".join(filter(None, [
             name,
@@ -134,6 +138,26 @@ TOOLS = [
         },
     },
     {
+        "name": "search_asian_agent",
+        "description": (
+            "Search Asian recipe sources covering Japanese, Korean, Thai, Vietnamese, and Chinese cuisines. "
+            "Sources: Just One Cookbook (Japanese), Maangchi (Korean), Hot Thai Kitchen (Thai), "
+            "Viet World Kitchen (Vietnamese), Woks of Life (Chinese/Pan-Asian). "
+            "Use for any dish you know to be Japanese, Korean, Thai, Vietnamese, or Chinese. "
+            "Examples: ramen, miso soup, teriyaki, gyoza, bibimbap, bulgogi, tteokbokki, japchae, "
+            "pad thai, green curry, tom kha, pho, banh mi, kung pao chicken, mapo tofu, char siu, "
+            "beef and broccoli, dan dan noodles, fried rice, dumplings, red braised pork belly. "
+            "Also use for general 'Asian' or 'stir-fry' queries with no specific cuisine cue."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Recipe search query"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "search_sites_agent",
         "description": (
             "Search cross-cuisine recipe sites: Serious Eats (seriouseats.com). "
@@ -153,7 +177,8 @@ TOOLS = [
 SYSTEM = """You are a recipe search orchestrator. Route recipe requests to the right search tools.
 
 Routing rules:
-- Any dish that is Mexican cuisine — use your culinary knowledge, not just keywords. Mole (including turkey mole, chicken mole, mole negro), carnitas, tamales, enchiladas, pozole, chiles rellenos, tacos, tostadas, agua chile, cochinita pibil, birria, and any other dish you know to be Mexican: call search_mexican_agent. The modifier (turkey, chicken, etc.) does not change the cuisine.
+- Any dish that is Mexican cuisine: call search_mexican_agent. Use culinary knowledge — mole (turkey mole, chicken mole, mole negro), carnitas, tamales, enchiladas, pozole, tacos, tostadas, cochinita pibil, birria, aguachile, etc. The protein modifier does not change the cuisine.
+- Any dish that is Japanese, Korean, Thai, Vietnamese, or Chinese: call search_asian_agent. Use culinary knowledge — ramen, miso soup, teriyaki, gyoza, bulgogi, bibimbap, tteokbokki, galbi, japchae, pad thai, green curry, tom kha, larb, pho, banh mi, goi cuon, kung pao chicken, mapo tofu, char siu, beef and broccoli, fried rice, dumplings, etc. Also use for general "Asian" or "stir-fry" queries with no specific cuisine cue.
 - General query with no cuisine or site cue: call search_chef_agent (default)
 - User names a specific chef (Alton Brown, Smitten Kitchen, Deb Perelman, Chetna Makan): call search_chef_agent with the chef name in the query
 - User says "Serious Eats", "other sites", or names a site: call search_sites_agent with the site name in the query
@@ -165,6 +190,9 @@ Never call the same tool twice. After all tools return, print a short summary: t
 def _get_runner(tool_name: str):
     if tool_name == "search_mexican_agent":
         from mexican_agent import run_agent
+        return run_agent
+    if tool_name == "search_asian_agent":
+        from asian_agent import run_agent
         return run_agent
     if tool_name == "search_chef_agent":
         from chef_agent import run_agent
