@@ -21,6 +21,7 @@ with open(_CONFIG_PATH) as _f:
     _CONFIG = json.load(_f)
 
 METADATA_PATH = os.path.expanduser(_CONFIG['metadata_path'])
+INVENTORY_PATH = os.path.expanduser(_CONFIG.get('inventory_path', ''))
 ADULT_NAMES = set(name.lower() for name in _CONFIG['adult_names'])
 RECENCY_WEEKS = 3          # avoid meals cooked within this many weeks
 QUICK_THRESHOLD = 35       # minutes -- "quick" meals for practice nights
@@ -50,6 +51,95 @@ PROTEIN_KEYWORDS = [
 ]
 
 HIATUS = ['salmon']  # proteins currently on hiatus
+
+# Words to strip when extracting food keywords from inventory item names
+_INVENTORY_STOPWORDS = {
+    'costco', 'package', 'packages', 'individual', 'pieces', 'piece',
+    'frozen', 'fresh', 'thawed', 'homemade', 'batch', 'bags', 'bag',
+    'lbs', 'lb', 'oz', 'kg', 'g', 'and', 'the', 'a', 'an', 'in',
+    'bone', 'boneless', 'skinless', 'country', 'style',
+    # brand names -- strip so they don't pollute keyword matching
+    'kroger', 'private', 'selection', 'prego', 'cecco',
+    'martins', 'rosarita', 'driscolls', 'fage', 'kind',
+    'thomas', 'stacys', 'lgm', 'saint', 'humboldt', 'pirate',
+    'angel', 'food', 'chiquita', 'stouffers', 'mila',
+}
+
+PANTRY_CATEGORIES = {'Pantry', 'Dry Goods', 'Dairy'}
+
+
+def load_inventory():
+    """Load inventory.json and return a list of (item_name, keywords, category) tuples."""
+    if not INVENTORY_PATH:
+        return []
+    try:
+        with open(INVENTORY_PATH) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    items = []
+    for item in data.get('items', []):
+        name = item.get('name', '').lower()
+        qty = item.get('quantity', 0)
+        if not name or qty == 0:
+            continue
+        # Extract meaningful food keywords from the item name
+        words = [w for w in name.split() if w not in _INVENTORY_STOPWORDS and len(w) > 2]
+        items.append({
+            'name': name,
+            'keywords': words,
+            'category': item.get('category', ''),
+            'quantity': qty,
+            'unit': item.get('unit', ''),
+        })
+    return items
+
+
+def inventory_match(recipe_name, ingredients, inventory_items):
+    """
+    Check if a recipe matches any inventory items.
+    Returns (broad_match: bool, protein_specific: list[str], pantry_specific: list[str])
+      - broad_match: recipe protein category matches a stocked protein type
+      - protein_specific: protein inventory items that specifically match (e.g. 'pork tenderloin')
+      - pantry_specific: pantry/dry goods/dairy items that match (e.g. 'rigatoni', 'heavy cream')
+    """
+    if not inventory_items:
+        return False, [], []
+
+    name_lower = recipe_name.lower()
+    ing_text = ' '.join(
+        i.get('name', '') if isinstance(i, dict) else str(i)
+        for i in ingredients
+    ).lower()
+    searchable = f"{name_lower} {ing_text}"
+
+    protein_specific = []
+    pantry_specific = []
+    broad = False
+
+    for item in inventory_items:
+        keywords = item['keywords']
+        if not keywords:
+            continue
+
+        if item['category'] == 'Proteins':
+            # Specific match: all meaningful keywords present in recipe name or ingredients
+            if all(kw in searchable for kw in keywords):
+                protein_specific.append(item['name'])
+            # Broad protein match: any single protein keyword matches
+            elif any(kw in searchable for kw in keywords):
+                broad = True
+
+        elif item['category'] in PANTRY_CATEGORIES:
+            # Require 2+ keywords for a match (avoids noisy single-word hits like 'butter', 'eggs')
+            # Exception: single keyword allowed if specific enough (5+ chars, e.g. 'rigatoni')
+            if len(keywords) >= 2 and all(kw in searchable for kw in keywords):
+                pantry_specific.append(item['name'])
+            elif len(keywords) == 1 and len(keywords[0]) >= 5 and keywords[0] in searchable:
+                pantry_specific.append(item['name'])
+
+    return broad, protein_specific, pantry_specific
 
 
 def parse_minutes(time_str):
@@ -122,6 +212,7 @@ def load_candidates(quick_nights=False):
     today = date.today()
     month = today.month
     is_grill_season = SPRING_SUMMER[0] <= month <= SPRING_SUMMER[1]
+    inventory_items = load_inventory()
 
     candidates = []
     for name, r in recipes.items():
@@ -144,6 +235,8 @@ def load_candidates(quick_nights=False):
         times_cooked = r.get('times_cooked', 0)
         meal_type = r.get('meal_type', 'Weeknight')
         feedback = r.get('feedback', [])
+        ingredients = r.get('ingredients', [])
+        broad_match, specific_matches, pantry_matches = inventory_match(name, ingredients, inventory_items)
 
         candidates.append({
             'name': name,
@@ -161,6 +254,9 @@ def load_candidates(quick_nights=False):
             'method': r.get('cooking_method', ''),
             'adult_score': compute_adult_score(feedback),
             'kid_friendly': compute_kid_friendly(feedback),
+            'inv_broad': broad_match,
+            'inv_specific': specific_matches,
+            'inv_pantry': pantry_matches,
         })
 
     return candidates, is_grill_season
@@ -190,6 +286,13 @@ def score(c):
             s -= 6    # family hit -- bring back sooner
     if c.get('kid_friendly'):
         s -= 3
+    # Inventory: lean toward recipes using what's on hand
+    if c.get('inv_specific'):
+        s -= 12   # specific ingredient match (e.g. pork tenderloin in stock)
+    elif c.get('inv_broad'):
+        s -= 5    # broad protein match (e.g. any chicken recipe when chicken is stocked)
+    if c.get('inv_pantry'):
+        s -= 4    # pantry/dry goods match (e.g. rigatoni or heavy cream in stock)
     return s
 
 
@@ -207,7 +310,17 @@ def print_group(title, items, limit=6):
         kid_tag = ' [KID-FRIENDLY]' if c.get('kid_friendly') else ''
         adult_score = c.get('adult_score')
         score_tag = f' [ADULT:{adult_score:.0%}]' if adult_score is not None else ''
-        print(f"    - {c['name']}{grill_tag}{new_tag}{kid_tag}{score_tag} | {c['cuisine']} | {c['health']} | {time_str} | {last_str}")
+        if c.get('inv_specific'):
+            stock_tag = f" [IN STOCK: {c['inv_specific'][0]}]"
+        elif c.get('inv_broad'):
+            stock_tag = ' [IN STOCK]'
+        else:
+            stock_tag = ''
+        if c.get('inv_pantry'):
+            pantry_tag = f" [PANTRY: {', '.join(c['inv_pantry'][:2])}]"
+        else:
+            pantry_tag = ''
+        print(f"    - {c['name']}{grill_tag}{new_tag}{kid_tag}{score_tag}{stock_tag}{pantry_tag} | {c['cuisine']} | {c['health']} | {time_str} | {last_str}")
 
 
 def main():
@@ -221,9 +334,25 @@ def main():
     quick_days = [d.strip().lower() for d in args.quick.split(',') if d.strip()]
 
     candidates, is_grill_season = load_candidates()
+    inventory_items = load_inventory()
 
     total = len(candidates)
     print(f"MEAL CANDIDATES  |  {date.today().strftime('%b %d, %Y')}")
+    if inventory_items:
+        protein_stock = [i for i in inventory_items if i['category'] == 'Proteins']
+        if protein_stock:
+            stock_summary = ', '.join(
+                f"{i['name']} x{int(i['quantity'])}" if i['quantity'] == int(i['quantity'])
+                else f"{i['name']} x{i['quantity']}"
+                for i in protein_stock
+            )
+            print(f"IN STOCK (proteins): {stock_summary}")
+        pantry_stock = [i for i in inventory_items if i['category'] in PANTRY_CATEGORIES]
+        if pantry_stock:
+            pantry_summary = ', '.join(i['name'] for i in pantry_stock[:8])
+            if len(pantry_stock) > 8:
+                pantry_summary += f' (+{len(pantry_stock) - 8} more)'
+            print(f"IN STOCK (pantry/dairy): {pantry_summary}")
     print(f"{total} active recipes eligible (not cooked in last {RECENCY_WEEKS} weeks)")
     if is_grill_season:
         print("** GRILL SEASON -- grill options highlighted **")
