@@ -38,9 +38,10 @@
 - Remaining: 12 ATK recipes still in PDF format (can't scan until converted); non-ATK sources not yet checked
 
 ### Recipe Agents for All MenuBuilder Sources
-- **Cuisine agents** (source-specific): Mexican (done), Asian (done), Indian (done — Jun 2026), Italian, etc.
+- **Cuisine agents** (source-specific): Mexican (done), Asian/East+Southeast (done — Japanese, Korean, Thai, Vietnamese, Chinese), Indian (done — Jun 2026, its own agent separate from Asian), Italian, etc.
 - **Indian agent** (`indian_agent.py`) — BUILT Jun 2026. Sources: Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan (two HTML patterns handled), Kannamma Cooks (South Indian). Symlinked as `~/.local/bin/indian`. Results to `/tmp/indian_agent_results_{uid}.json`.
-  - Blocked sites: ranveerbrar.com (ld+json schema broken — ingredients are category headers only), archanaskitchen.com (all URLs 404)
+- **ranveerbrar.com** — debug needed: WP REST search works, but `recipeIngredient` in ld+json only contains section header labels (e.g. `["Cereal & Pulses"]`), not actual ingredients. Need to find alternate extraction — either WPRM HTML div or scraping the ingredient list from the page body.
+- **archanaskitchen.com** — debug needed: all tested recipe URLs return 404. May have changed URL structure or be behind Cloudflare. Try searching site directly and following links to find current URL pattern.
 - **Chef agent** (`chef_agent.py`) — done: Alton Brown, Deb Perelman (Smitten Kitchen), Chetna Makan. Symlinked as `~/.local/bin/chef`. Results to `/tmp/chef_agent_results.json`.
 - **Sites agent** (`sites_agent.py`) — BUILT. Serious Eats live via Playwright (bypasses 403). Symlinked as `~/.local/bin/sites`. Registry-based: add a new site = one dict entry in SITES.
 - **Kenji Lopez-Alt** — blocked: seriouseats.com returns 403. Need alternate source (his Substack, YouTube, or wait for Serious Eats solution).
