@@ -49,10 +49,13 @@
 - **Chetna Makan YouTube** (nice to have): attach YouTube video link to recipes fetched from chetnamakan.co.uk. Channel: `UC1VkNUPA6ieOuwXmk4SSJZw`.
 - Goal: full recipe discovery pipeline — any source accessible via agent, no manual URL fetching
 
-### Cuisine Agents as MenuBuilder Data Source
-- MenuBuilder calls cuisine agents (mexican, italian, asian, etc.) instead of fetching recipe URLs directly
-- Each agent knows its sites, handles fetching and saving; MenuBuilder just asks by cuisine + constraints
-- End state: step 3 of the weekly workflow becomes "run cuisine agents to replenish ideas" rather than manual URL fetching
+### Cuisine Agents — Idea Pool Replenishment (between cycles)
+
+**Decision**: agents run **outside** the weekly workflow — not inline. Reason: token cost, latency (2-4 min per agent), and raw results lack the metadata (health, cook time, ingredients) needed to score them against weekly criteria. `suggest_meals.py` operates on `recipe_metadata.json`; agents feed the JSON, they don't replace it.
+
+**Pattern**: run agents on-demand between cycles when the idea pool is thin or variety needs refreshing. Results go into `recipe_metadata.json` as `status: "idea"`. Sunday workflow picks idea entries up naturally via `suggest_meals.py`.
+
+**One enhancement to build**: at step 3, after `suggest_meals.py` runs, if the candidate pool is thin (< 5 options) or light on a cuisine, surface a prompt: "idea pool is light on [cuisine] — want me to run an agent before proposing?" Keeps agents available without running them by default.
 
 ### SMS Recipe Display (show_recipe via Keanu)
 - Text a recipe name to Keanu, get back formatted ingredients + steps
