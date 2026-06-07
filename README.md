@@ -49,6 +49,7 @@ asian_agent.py                # Asian recipe sources (JOC, Maangchi, Hot Thai Ki
 indian_agent.py               # Indian recipe sources (Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan, Kannamma Cooks)
 chef_agent.py                 # Chef recipe sources (Alton Brown, Smitten Kitchen, Chetna Makan)
 sites_agent.py                # Cross-cuisine sites (Serious Eats) via Playwright
+replenish_ideas.py            # Run all agents in parallel and add new results to recipe_metadata.json as status="idea"
 save_to_recipeideas.py        # Save agent results to the recipeideas inbox
 generate_github_pages_data.py # Generate _data/recipes.json for GitHub Pages — run after metadata changes
 eval_mexican_agent.py         # Eval harness for mexican_agent
