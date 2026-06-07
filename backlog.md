@@ -62,6 +62,8 @@
 - `python3 replenish_ideas.py --dry-run` — preview without writing
 - Deduplicates by URL and title; classifies health in one Haiku batch call; infers meal_type and cooking_method from recipe data
 
+**Weekly cron** — `com.menubuilder.replenishideas.plist` loaded Jun 2026. Fires Saturday 10 AM (ideas ready before Sunday planning). Log: `replenish_ideas.log` in project root. Review/unload after ~40 weeks (around Apr 2027) once idea pool is stable.
+
 **One enhancement to build**: at step 3, after `suggest_meals.py` runs, if the candidate pool is thin (< 5 options) or light on a cuisine, surface a prompt: "idea pool is light on [cuisine] — want me to run an agent before proposing?" Keeps agents available without running them by default.
 
 ### SMS Recipe Display (show_recipe via Keanu)
