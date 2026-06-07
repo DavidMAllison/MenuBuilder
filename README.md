@@ -14,6 +14,7 @@ A personal meal planning system built around real family constraints — health 
   - **Mexican** — Pati Jinich, Rick Bayless, Cooking Con Claudia
   - **Chef** — Alton Brown, Smitten Kitchen (Deb Perelman), Chetna Makan
   - **Asian** — Just One Cookbook (Japanese), Maangchi (Korean), Hot Thai Kitchen (Thai), Viet World Kitchen (Vietnamese), Woks of Life (Chinese)
+  - **Indian** — Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan, Kannamma Cooks (South Indian/Tamil)
   - **Sites** — Serious Eats (Playwright-based to bypass Cloudflare)
 - **Sunday auto-generation**: launchd cron fires at 9 AM every Sunday, kicks off a guided SMS workflow — collects last-week feedback, schedule changes, and cuisine preferences before proposing candidates
 - **Variety enforcement**: `suggest_meals.py` scores candidates with protein variety limits (max 2 chicken/week), cuisine family caps (max 2 per family), and new-recipe pressure (at least 1 recipe not cooked in 6+ weeks)
@@ -45,6 +46,7 @@ show_inventory.py             # Opens browser with full inventory grouped by cat
 recipe_agent.py               # Recipe search orchestrator — single entry point for all agents
 mexican_agent.py              # Mexican recipe sources (Pati Jinich, Rick Bayless, Cooking con Claudia)
 asian_agent.py                # Asian recipe sources (JOC, Maangchi, Hot Thai Kitchen, Viet World Kitchen, Woks of Life)
+indian_agent.py               # Indian recipe sources (Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan, Kannamma Cooks)
 chef_agent.py                 # Chef recipe sources (Alton Brown, Smitten Kitchen, Chetna Makan)
 sites_agent.py                # Cross-cuisine sites (Serious Eats) via Playwright
 save_to_recipeideas.py        # Save agent results to the recipeideas inbox
