@@ -50,6 +50,7 @@
 - Goal: full recipe discovery pipeline — any source accessible via agent, no manual URL fetching
 
 ### Cuisine Agents — Idea Pool Replenishment (between cycles)
+- **Rename**: `replenish_ideas.py` → `fill_menu_ideas.py`; skill `/replenish` → `/fillmenuideas`. Update plist, README, backlog references.
 
 **Decision**: agents run **outside** the weekly workflow — not inline. Reason: token cost, latency (2-4 min per agent), and raw results lack the metadata (health, cook time, ingredients) needed to score them against weekly criteria. `suggest_meals.py` operates on `recipe_metadata.json`; agents feed the JSON, they don't replace it.
 
