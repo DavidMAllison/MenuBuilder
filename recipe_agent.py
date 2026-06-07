@@ -11,11 +11,14 @@ Sources (via subagents):
   Asian  : Just One Cookbook (Japanese), Maangchi (Korean),
            Hot Thai Kitchen (Thai), Viet World Kitchen (Vietnamese),
            Woks of Life (Chinese/Pan-Asian)
+  Indian : Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan,
+           Kannamma Cooks (South Indian/Tamil)
   Sites  : Serious Eats
 
 Routing:
   Mexican dish/ingredient → mexican agent
-  Asian dish/ingredient   → asian agent (Japanese, Korean, Thai, Vietnamese)
+  Asian dish (Japanese, Korean, Thai, Vietnamese, Chinese) → asian agent
+  Indian dish/ingredient  → indian agent
   Chef name mentioned     → chef agent (restricted to that chef)
   "Serious Eats" / site   → sites agent
   General query           → chef agent (default)
@@ -158,6 +161,25 @@ TOOLS = [
         },
     },
     {
+        "name": "search_indian_agent",
+        "description": (
+            "Search Indian recipe sources covering North Indian, South Indian, British-Indian, and Tamil cuisines. "
+            "Sources: Indian Healthy Recipes (mainstream Indian), Hebbars Kitchen (street food, snacks, sweets), "
+            "Chetna Makan (British-Indian, lighter family cooking), Kannamma Cooks (South Indian/Tamil/Chettinad). "
+            "Use for any dish you know to be Indian. "
+            "Examples: butter chicken, dal makhani, palak paneer, biryani, chole, rajma, aloo gobi, korma, "
+            "chicken tikka masala, rogan josh, rasam, sambar, dosa, idli, chettinad chicken, pav bhaji, "
+            "pakora, samosa, gulab jamun, halwa, naan, tandoori chicken, saag, khichdi, etc."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Recipe search query"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "search_sites_agent",
         "description": (
             "Search cross-cuisine recipe sites: Serious Eats (seriouseats.com). "
@@ -178,7 +200,8 @@ SYSTEM = """You are a recipe search orchestrator. Route recipe requests to the r
 
 Routing rules:
 - Any dish that is Mexican cuisine: call search_mexican_agent. Use culinary knowledge — mole (turkey mole, chicken mole, mole negro), carnitas, tamales, enchiladas, pozole, tacos, tostadas, cochinita pibil, birria, aguachile, etc. The protein modifier does not change the cuisine.
-- Any dish that is Japanese, Korean, Thai, Vietnamese, or Chinese: call search_asian_agent. Use culinary knowledge — ramen, miso soup, teriyaki, gyoza, bulgogi, bibimbap, tteokbokki, galbi, japchae, pad thai, green curry, tom kha, larb, pho, banh mi, goi cuon, kung pao chicken, mapo tofu, char siu, beef and broccoli, fried rice, dumplings, etc. Also use for general "Asian" or "stir-fry" queries with no specific cuisine cue.
+- Any dish that is Japanese, Korean, Thai, Vietnamese, or Chinese: call search_asian_agent. Use culinary knowledge — ramen, miso soup, teriyaki, gyoza, bulgogi, bibimbap, tteokbokki, galbi, japchae, pad thai, green curry, tom kha, larb, pho, banh mi, goi cuon, kung pao chicken, mapo tofu, char siu, beef and broccoli, fried rice, dumplings, etc. Also use for "stir-fry" with no other cue.
+- Any dish that is Indian cuisine: call search_indian_agent. Use culinary knowledge — butter chicken, dal makhani, palak paneer, biryani, chole, rajma, aloo gobi, korma, tikka masala, rogan josh, nihari, rasam, sambar, idli, dosa, uttapam, chettinad chicken, pav bhaji, pakora, samosa, khichdi, saag, naan, etc. Indian cuisine is distinct from Asian — do not route Indian dishes to search_asian_agent.
 - General query with no cuisine or site cue: call search_chef_agent (default)
 - User names a specific chef (Alton Brown, Smitten Kitchen, Deb Perelman, Chetna Makan): call search_chef_agent with the chef name in the query
 - User says "Serious Eats", "other sites", or names a site: call search_sites_agent with the site name in the query
@@ -193,6 +216,9 @@ def _get_runner(tool_name: str):
         return run_agent
     if tool_name == "search_asian_agent":
         from asian_agent import run_agent
+        return run_agent
+    if tool_name == "search_indian_agent":
+        from indian_agent import run_agent
         return run_agent
     if tool_name == "search_chef_agent":
         from chef_agent import run_agent
