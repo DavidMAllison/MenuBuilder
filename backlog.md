@@ -53,7 +53,14 @@
 
 **Decision**: agents run **outside** the weekly workflow — not inline. Reason: token cost, latency (2-4 min per agent), and raw results lack the metadata (health, cook time, ingredients) needed to score them against weekly criteria. `suggest_meals.py` operates on `recipe_metadata.json`; agents feed the JSON, they don't replace it.
 
-**Pattern**: run agents on-demand between cycles when the idea pool is thin or variety needs refreshing. Results go into `recipe_metadata.json` as `status: "idea"`. Sunday workflow picks idea entries up naturally via `suggest_meals.py`.
+**Pattern**: run `replenish_ideas.py` on-demand between cycles when the idea pool needs refreshing. It runs all agents in parallel, deduplicates against existing entries, classifies health via Claude Haiku, and writes new entries as `status: "idea"`.
+
+**`replenish_ideas.py`** — BUILT Jun 2026.
+- `python3 replenish_ideas.py` — all agents, default topics
+- `python3 replenish_ideas.py --agents indian,mexican` — specific agents
+- `python3 replenish_ideas.py --topic "fish dinner"` — override query for all agents
+- `python3 replenish_ideas.py --dry-run` — preview without writing
+- Deduplicates by URL and title; classifies health in one Haiku batch call; infers meal_type and cooking_method from recipe data
 
 **One enhancement to build**: at step 3, after `suggest_meals.py` runs, if the candidate pool is thin (< 5 options) or light on a cuisine, surface a prompt: "idea pool is light on [cuisine] — want me to run an agent before proposing?" Keeps agents available without running them by default.
 
