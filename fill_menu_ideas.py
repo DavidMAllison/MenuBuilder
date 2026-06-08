@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-replenish_ideas.py -- Pull new recipe ideas from all agents and add to recipe_metadata.json.
+fill_menu_ideas.py -- Pull new recipe ideas from all agents and add to recipe_metadata.json.
 
 Runs all cuisine agents in parallel, deduplicates against existing entries,
 classifies health with Claude, and writes new entries as status="idea".
@@ -9,10 +9,10 @@ Agents run OUTSIDE the weekly workflow. Call this between cycles when the
 idea pool needs refreshing — not during Sunday planning.
 
 Usage:
-  python3 replenish_ideas.py                          # all agents, default topic
-  python3 replenish_ideas.py --topic "fish dinner"    # specific topic for all agents
-  python3 replenish_ideas.py --agents mexican,indian  # specific agents only
-  python3 replenish_ideas.py --dry-run                # show what would be added, no write
+  python3 fill_menu_ideas.py                          # all agents, default topic
+  python3 fill_menu_ideas.py --topic "fish dinner"    # specific topic for all agents
+  python3 fill_menu_ideas.py --agents mexican,indian  # specific agents only
+  python3 fill_menu_ideas.py --dry-run                # show what would be added, no write
 """
 
 import argparse
@@ -133,6 +133,43 @@ def classify_health(recipes: list[dict]) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Words whose presence as the final noun indicate a standalone condiment, not a meal
+_CONDIMENT_TERMINAL = {
+    "sauce", "salsa", "dressing", "marinade", "rub", "glaze", "vinaigrette",
+    "relish", "chutney", "gravy", "dip", "spread", "jam", "compote", "paste",
+    "aioli", "mayo", "mayonnaise", "pesto", "tapenade", "hummus", "tzatziki",
+    "brine", "pickle", "pickles", "oil",
+}
+
+# If any of these appear in the title it's a full dish, not a condiment
+_DISH_ANCHORS = {
+    "chicken", "beef", "pork", "lamb", "fish", "salmon", "tuna", "cod",
+    "halibut", "tilapia", "shrimp", "prawn", "scallop", "clam", "mussel",
+    "tofu", "paneer", "lentil", "lentils", "dal", "bean", "beans",
+    "chickpea", "chickpeas", "egg", "eggs", "pasta", "noodle", "noodles",
+    "rice", "quinoa", "farro", "barley", "stew", "soup", "salad", "taco",
+    "tacos", "bowl", "burger", "sandwich", "pizza", "casserole", "bake",
+    "roast", "chili", "curry", "wrap", "dumpling", "meatball", "meatloaf",
+    "sausage", "turkey", "duck", "tenderloin", "thigh", "breast", "chop",
+    "rib", "ribs", "fillet", "steak", "cutlet", "schnitzel",
+}
+
+
+def _is_condiment(title: str) -> bool:
+    """Return True if the title describes a standalone condiment, not a dinner recipe.
+
+    Logic: the last meaningful word is a condiment type AND no main dish anchor
+    (protein, grain, stew, etc.) appears anywhere in the title.
+    """
+    words = re.sub(r"[^\w\s]", "", title.lower()).split()
+    if not words:
+        return False
+    if words[-1] not in _CONDIMENT_TERMINAL:
+        return False
+    title_lower = title.lower()
+    return not any(anchor in title_lower for anchor in _DISH_ANCHORS)
+
 
 def _title_to_filename(title: str) -> str:
     """Convert a recipe title to a filename slug."""
@@ -272,6 +309,9 @@ def main():
         if not r.get("ingredients") or not r.get("instructions"):
             skipped.append(r.get("title", "?") + " (no ingredients/instructions)")
             continue
+        if _is_condiment(r.get("title", "")):
+            skipped.append(r.get("title", "?") + " (condiment, not a meal)")
+            continue
 
         new_recipes.append(r)
         # Track to avoid adding duplicates within the batch itself
@@ -330,6 +370,7 @@ def main():
             "filename": _title_to_filename(title),
             "source": source_name,
             "source_url": source_url,
+            "url": source_url,              # alias — activation code uses "url"
             "cuisine": cuisine,
             "meal_type": meal_type,
             "health": health,
@@ -339,6 +380,11 @@ def main():
             "status": "idea",
             "cooking_method": cooking_method,
             "last_cooked_date": None,
+            # Full recipe content captured at intake — prevents re-fetch at activation
+            # and enables shopping list generation without a .md file
+            "ingredients_raw": r.get("ingredients", []),  # raw strings e.g. "¾ cup toor dal"
+            "instructions":    r.get("instructions", []), # raw step strings
+            # structured "ingredients" populated when recipe is activated (status → active)
         }
         # Use title as key (same pattern as existing entries)
         entries_to_add[title] = entry

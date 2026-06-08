@@ -141,10 +141,19 @@
 
 ### Recipe Ideas Folder
 - **Location**: `~/Dropbox/LLMContext/cooking/recipeideas/`
-- **Purpose**: External app inbox only — SMS assistant and other outside apps write new ideas here (URLs, images, recipe names)
+- **Purpose**: Inbox for human-sourced items only — user texts a URL or image from phone, SMS assistant writes it here. Nothing else touches this folder.
+- **NEVER recommend items from this folder** — contents have not been reviewed and have no metadata. They are not candidates for weekly meal planning.
 - **Processing**: On-demand only — user asks "any recipe ideas?" and we process them together. Not part of the weekly menu workflow.
-- **Workflow**: External app writes file → user asks to review → show each file (title, source URL), check for duplicates → user confirms → add to `recipe_metadata.json` as `status: "idea"` → delete the file
-- **Do NOT** create `.md` files or active metadata entries until user confirms they tried and liked the recipe
+- **Workflow**: User/SMS writes file → user asks to review → show each file (title, source URL), check for duplicates against `recipe_metadata.json` → user confirms → **fetch URL and extract ingredients + instructions** → add complete entry to `recipe_metadata.json` as `status: "idea"` → delete the file
+- **If fetch fails**: do NOT add a partial entry. Leave the file in the inbox and ask the user to paste the recipe content.
+- **Do NOT** create `.md` files until user confirms they tried and liked the recipe (activation step)
+
+### Two paths into recipe_metadata.json
+- **Agent pipeline** (`fill_menu_ideas.py`): automated. Runs cuisine agents → fetches full recipe data → writes directly to `recipe_metadata.json` as `status: "idea"` with `ingredients_raw`, `instructions`, `url`. Skips any recipe the agent couldn't fully fetch. No manual step.
+- **Human inbox** (`recipeideas/` folder): always manual. User reviews → confirms → fetch URL → write complete entry to JSON → delete inbox file.
+
+### JSON invariant — no naked entries
+**Every entry in `recipe_metadata.json` must have `ingredients_raw` and `instructions` populated.** No title-only or URL-only stubs. If an entry can't be written with full data, it doesn't get written at all — it stays in the inbox or is skipped by the agent. This rule applies at write time for all new entries going forward.
 
 ## Tools
 - **WeeklyShoppingList.app** -- populates "Grocery" Reminders list from the meal plan. Run: `open /Applications/WeeklyShoppingList.app`
@@ -165,7 +174,8 @@
 
 ### Shopping List
 - **Use JSON ingredients first**: If a recipe has an `ingredients` array in `recipe_metadata.json`, use that -- do NOT read the recipe file.
-- **Fall back to .md file only** if a recipe has no `ingredients` in JSON yet. After reading the file, add the ingredients to the JSON for next time.
+- **Fall back to `ingredients_raw`** if `ingredients` is absent or empty: idea recipes added via fill_menu_ideas.py have an `ingredients_raw` field (list of raw strings, e.g. `"¾ cup toor dal"`). Use these directly — format each as the full raw string in the Item column, with quantity already included. No need to parse.
+- **Fall back to .md file** only if neither `ingredients` nor `ingredients_raw` is present. After reading the file, add the ingredients to the JSON for next time.
 - **Write to CSV only** (`shopping_YYYY-MM-DD.csv`) -- do NOT append to the meal plan txt
 - Aggregate shared ingredients across recipes (e.g., total lemons, total chicken broth)
 - Flag when inventory items may not cover recipe quantities (e.g., short ribs recipe needs 5 lbs but only 2 ribs in stock)
@@ -197,7 +207,13 @@
 0. **Drain SMS feedback queue** -- `python3 ~/projects/personal/MenuBuilder/process_feedback_queue.py`. This reads `/Users/Shared/cooking/feedback_queue.json` and appends entries to `feedback_current.json`, then empties the queue. Run this before step 1 so queue feedback is available during meal logging. If the queue is empty, move on.
    - Entries with `sentiment: "disliked"` should be flagged during step 1.
    - Entries with `sentiment: "mixed"` should be surfaced for review before including the recipe this week.
-1. **Log last week's meals** -- read `feedback_current.json` and the previous week's `mealplan_YYYY-MM-DD.txt`. For each meal in the plan with a feedback entry, auto-update `times_cooked`, `last_cooked_date`, and append entries to the `feedback` array in `recipe_metadata.json`. For meals with no feedback entry, prompt: "Any feedback on [recipe]? Did you make it?" After processing all meals, clear `feedback_current.json` to `{"entries": []}`. If sentiment is `"disliked"`, flag for tombstone discussion -- do not auto-delete. If disliked and confirmed: delete `.md` file, set `status: "disliked"` in JSON.
+1. **Log last week's meals** -- read `feedback_current.json` and the previous week's `mealplan_YYYY-MM-DD.txt`. Process each meal using these rules:
+   - **`not_cooked` in feedback_current.json** → skip; do not increment times_cooked or last_cooked_date
+   - **`disliked` in feedback_current.json** → flag for tombstone discussion (do not auto-delete); confirm with user, then delete `.md` file and set `status: "disliked"` in JSON
+   - **First-cook recipe (`times_cooked == 0`) with no feedback entry** → ask: "You tried [recipe] for the first time — what did you think? Keep it in rotation?" Yes → log as cooked. No → tombstone after confirmation.
+   - **All other meals** (established recipes, no feedback entry) → auto-log as cooked: increment `times_cooked`, set `last_cooked_date`. No prompting.
+   After processing all meals, clear `feedback_current.json` to `{"entries": []}`.
+   - **Do not ask for feedback on established recipes** — if they have something to share they'll bring it up.
 2. **Check schedule** -- read `~/projects/personal/FamilySchedule/schedule.json` and review `weekly_overrides` for the upcoming week. Identify any evening events that run into dinner time — those nights need quick-cook meals (slow cooker, ≤35 min, or leftovers). Ask the user about any one-off changes not yet in the file.
 3. **Run candidate filter** -- `python3 ~/projects/personal/MenuBuilder/suggest_meals.py`. Based on the schedule review in step 2, pass `--quick` for any evenings with late-running events (e.g. `--quick tue,thu`). The script filters by `last_cooked_date`, health balance, protein variety, cuisine variety, and seasonal method. Use its output as the candidate pool -- do not re-scan the JSON manually.
    - **Budget context**: Before proposing meals, read `~/Dropbox/LLMContext/Personal/grocery_budget_status.json` if it exists. If `suggested_weekly_spend` is low (tight week), prioritize inventory-heavy meals and avoid recipes that require many fresh or specialty ingredients. Mention the budget posture to the user before proposing candidates.

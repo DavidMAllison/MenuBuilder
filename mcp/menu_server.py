@@ -15,7 +15,9 @@ Tools:
   approve_menu             — send selected meals to Ashley via Keanu
   handle_ashley_reply      — process Ashley's approval or swap request
   activate_idea_recipe     — activate a pending idea from provided markdown content
+  generate_shopping_list   — write shopping CSV from finalized meals (authoritative — sms-assistant calls this)
   finalize_plan            — generate plan + shopping CSV, launch apps, send prep guide
+  get_prep_guide           — return prep guide for current week
 """
 
 import csv
@@ -123,6 +125,12 @@ _PLAN_LINE_RE = re.compile(
     r"^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s+\d+/\d+\s+(.+?)\s*(?:\[|$)"
 )
 
+# Meal names containing these terms are not real recipes — skip feedback prompts
+_SKIP_FEEDBACK_KEYWORDS = frozenset([
+    "takeout", "eating out", "restaurant", "leftovers", "leftover",
+    "friends", "no cooking", "out to dinner", "pizza delivery",
+])
+
 
 def _parse_last_plan() -> list:
     if not WEEKLYPLAN_DIR.exists():
@@ -143,7 +151,11 @@ def _parse_last_plan() -> list:
     for line in plan_file.read_text().splitlines():
         m = _PLAN_LINE_RE.match(line.strip())
         if m:
-            meals.append({"name": m.group(2).strip(), "day": m.group(1), "sms_feedback": None})
+            name = m.group(2).strip()
+            name_lower = name.lower()
+            if any(kw in name_lower for kw in _SKIP_FEEDBACK_KEYWORDS):
+                continue
+            meals.append({"name": name, "day": m.group(1), "sms_feedback": None})
     return meals
 
 
@@ -194,6 +206,138 @@ def _day_date_map(week_start: date) -> dict:
 RECENCY_WEEKS = 3
 QUICK_THRESHOLD = 35
 HIATUS_PROTEINS = ["salmon"]
+KNOWN_CUISINES = {
+    "american", "italian", "mexican", "mediterranean", "chinese",
+    "japanese", "indian", "thai", "greek", "french", "asian",
+    "korean", "vietnamese", "moroccan", "caribbean", "spanish",
+}
+
+# Keywords in reason string that map to protein labels (matches _PROTEIN_KEYWORDS labels)
+_REASON_PROTEIN_MAP = [
+    ("grilled fish", "Fish"), ("fish", "Fish"), ("salmon", "Fish"), ("cod", "Fish"),
+    ("tilapia", "Fish"), ("seafood", "Fish"), ("shrimp", "Shrimp"),
+    ("chicken", "Chicken"), ("beef", "Beef"), ("pork", "Pork"), ("lamb", "Lamb"),
+    ("vegetarian", "Vegetarian"), ("veggie", "Vegetarian"), ("meatless", "Vegetarian"),
+    ("pasta", "Pasta"), ("noodle", "Pasta"),
+]
+
+# Category keywords for plan-wide tally (e.g. pasta-heavy detection)
+_CATEGORY_KEYWORDS = {
+    "pasta": ["pasta", "spaghetti", "linguine", "penne", "rigatoni", "noodle", "fettuccine", "tagliatelle", "orzo"],
+    "salad": ["salad"],
+    "tacos": ["taco", "tinga"],
+    "soup": ["soup", "stew", "chili"],
+}
+
+_INVENTORY_STOPWORDS = {
+    "oz", "lb", "lbs", "pkg", "bag", "box", "can", "jar", "bottle", "fresh", "frozen", "dried",
+    "costco", "package", "packages", "individual", "pieces", "piece", "thawed", "homemade",
+    "batch", "bags", "kg", "g", "and", "the", "a", "an", "in", "bone", "boneless", "skinless",
+    "country", "style",
+    # brand names
+    "kroger", "private", "selection", "prego", "cecco", "martins", "rosarita",
+    "driscolls", "fage", "kind", "thomas", "stacys", "lgm", "saint", "humboldt",
+    "pirate", "angel", "food", "chiquita", "stouffers", "mila",
+}
+
+_PANTRY_CATEGORIES = {"Pantry", "Dry Goods", "Dairy"}
+
+
+def _load_inventory_keywords() -> list:
+    """Return list of {name, keywords, category} from inventory.json."""
+    try:
+        inv_path = _CONFIG.get("inventory_path", "")
+        if not inv_path:
+            return []
+        data = json.loads(Path(inv_path).read_text())
+        items = []
+        for item in data.get("items", []):
+            name = item.get("name", "").lower()
+            qty = item.get("quantity", 0)
+            if not name or qty == 0:
+                continue
+            words = [w for w in name.split() if w not in _INVENTORY_STOPWORDS and len(w) > 2]
+            items.append({"name": name, "keywords": words, "category": item.get("category", "")})
+        return items
+    except Exception:
+        return []
+
+
+def _inventory_match(recipe_name: str, ingredients: list, inventory: list) -> tuple:
+    """
+    Return (broad_match, protein_specific, pantry_specific) for a recipe.
+      broad_match:      bool — any protein keyword in recipe matches a stocked protein
+      protein_specific: list — protein inventory items with all keywords in recipe
+      pantry_specific:  list — pantry/dry-goods/dairy items with specific match
+    Mirrors inventory_match() in suggest_meals.py exactly.
+    """
+    if not inventory:
+        return False, [], []
+
+    name_lower = recipe_name.lower()
+    ing_text = " ".join(
+        i.get("name", "") if isinstance(i, dict) else str(i) for i in ingredients
+    ).lower()
+    searchable = f"{name_lower} {ing_text}"
+
+    protein_specific = []
+    pantry_specific = []
+    broad = False
+
+    for item in inventory:
+        kws = item["keywords"]
+        if not kws:
+            continue
+        if item["category"] == "Proteins":
+            if all(kw in searchable for kw in kws):
+                protein_specific.append(item["name"])
+            elif any(kw in searchable for kw in kws):
+                broad = True
+        elif item["category"] in _PANTRY_CATEGORIES:
+            if len(kws) >= 2 and all(kw in searchable for kw in kws):
+                pantry_specific.append(item["name"])
+            elif len(kws) == 1 and len(kws[0]) >= 5 and kws[0] in searchable:
+                pantry_specific.append(item["name"])
+
+    return broad, protein_specific, pantry_specific
+
+
+def _inventory_boost(recipe_name: str, ingredients: list, inventory: list) -> int:
+    """Return a score bonus (negative = better) if recipe uses inventory items."""
+    if not inventory:
+        return 0
+    name_lower = recipe_name.lower()
+    ing_text = " ".join(
+        i.get("name", "") if isinstance(i, dict) else str(i) for i in ingredients
+    ).lower()
+    searchable = f"{name_lower} {ing_text}"
+    bonus = 0
+    for item in inventory:
+        kws = item["keywords"]
+        if not kws:
+            continue
+        if item["category"] == "Proteins" and all(kw in searchable for kw in kws):
+            bonus -= 12
+        elif any(kw in searchable for kw in kws):
+            bonus -= 5
+    return bonus
+
+
+def _plan_tallies(selected: dict, recipes: dict) -> dict:
+    """Return cuisine counts and category counts for the current plan."""
+    cuisine_counts: dict = {}
+    category_counts: dict = {}
+    for name in selected.values():
+        key = _find_recipe_key(name, recipes)
+        r = recipes.get(key, {}) if key else {}
+        cuisine = r.get("cuisine_type", r.get("cuisine", "")).lower()
+        if cuisine:
+            cuisine_counts[cuisine] = cuisine_counts.get(cuisine, 0) + 1
+        name_lower = name.lower()
+        for cat, keywords in _CATEGORY_KEYWORDS.items():
+            if any(kw in name_lower for kw in keywords):
+                category_counts[cat] = category_counts.get(cat, 0) + 1
+    return {"cuisine": cuisine_counts, "category": category_counts}
 
 _PROTEIN_KEYWORDS = [
     ("salmon", "Fish"), ("fish", "Fish"), ("shrimp", "Shrimp"), ("cod", "Fish"),
@@ -256,6 +400,12 @@ def _candidate_score(c: dict) -> float:
             s -= 6
     if c.get("kid_friendly"):
         s -= 3
+    if c.get("inv_specific"):
+        s -= 12
+    elif c.get("inv_broad"):
+        s -= 5
+    if c.get("inv_pantry"):
+        s -= 4
     return s
 
 
@@ -263,6 +413,7 @@ def _load_candidates(quick_days: list) -> list:
     recipes = _load_metadata()
     today = date.today()
     is_grill_season = 4 <= today.month <= 9
+    inventory = _load_inventory_keywords()  # loaded once for the whole pass
 
     candidates = []
     for name, r in recipes.items():
@@ -294,9 +445,13 @@ def _load_candidates(quick_days: list) -> list:
             liked = sum(1 for f in kids if f.get("sentiment") == "liked")
             kid_friendly = liked > len(kids) / 2
 
+        inv_broad, inv_specific, inv_pantry = _inventory_match(
+            name, r.get("ingredients", []), inventory
+        )
+
         c = {
             "name": name,
-            "cuisine": r.get("cuisine", "Unknown"),
+            "cuisine": r.get("cuisine_type", r.get("cuisine", "Unknown")),
             "health": r.get("health", "Moderate"),
             "protein": protein,
             "minutes": minutes,
@@ -311,6 +466,9 @@ def _load_candidates(quick_days: list) -> list:
             "method": r.get("cooking_method", ""),
             "adult_score": adult_score,
             "kid_friendly": kid_friendly,
+            "inv_broad": inv_broad,
+            "inv_specific": inv_specific,
+            "inv_pantry": inv_pantry,
         }
         c["score"] = _candidate_score(c)
         candidates.append(c)
@@ -323,7 +481,7 @@ def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optiona
 
     if cuisine_direction and cuisine_direction.lower() not in ("what we've got", ""):
         c_lower = cuisine_direction.lower()
-        pool.sort(key=lambda c: (0 if c_lower in c.get("cuisine", "").lower() else 1, c["score"]))
+        pool.sort(key=lambda c: (0 if c.get("cuisine", "").lower() in c_lower else 1, c["score"]))
 
     # Include idea recipes matching cuisine direction
     recipes = _load_metadata()
@@ -332,12 +490,12 @@ def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optiona
         for name, meta in recipes.items():
             if (
                 meta.get("status") == "idea"
-                and c_lower in meta.get("cuisine", "").lower()
+                and meta.get("cuisine_type", meta.get("cuisine", "")).lower() in c_lower
                 and not any(c["name"] == name for c in pool)
             ):
                 pool.insert(0, {
                     "name": name,
-                    "cuisine": meta.get("cuisine", ""),
+                    "cuisine": meta.get("cuisine_type", meta.get("cuisine", "")),
                     "health": meta.get("health", "Moderate"),
                     "protein": _get_protein(name),
                     "minutes": 30,
@@ -350,8 +508,10 @@ def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optiona
     quick_set = {d.lower() for d in quick_days}
     selected: dict = {}
     used_proteins: set = set()
+    indulgent_count = 0
 
     def _pick(days_subset, require_quick=False, require_weekend=False):
+        nonlocal indulgent_count
         for day in days_subset:
             if day in selected:
                 continue
@@ -362,11 +522,16 @@ def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optiona
                     continue
                 if require_weekend and c.get("meal_type") != "Weekend":
                     continue
+                # Cap Indulgent at 1 per week
+                if c.get("health") == "Indulgent" and indulgent_count >= 1:
+                    continue
                 protein = c["protein"]
                 if protein in used_proteins and len(pool) > len(days_subset) * 2:
                     continue
                 selected[day] = c["name"]
                 used_proteins.add(protein)
+                if c.get("health") == "Indulgent":
+                    indulgent_count += 1
                 break
 
     _pick(["Sat", "Sun"], require_weekend=True)
@@ -423,20 +588,37 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
     already_selected = set(selected.values())
     direction_lower = (cuisine_direction or "").lower()
 
+    want_idea = any(kw in text.lower() for kw in ("idea", "new", "something different", "haven't tried", "never had"))
+
     recipes = _load_metadata()
-    candidates = [
+    active_candidates = [
         (name, meta)
         for name, meta in recipes.items()
         if meta.get("status") == "active" and name not in already_selected
+        and not any(h in name.lower() for h in HIATUS_PROTEINS)
+    ]
+    idea_candidates = [
+        (name, meta)
+        for name, meta in recipes.items()
+        if meta.get("status") == "idea" and name not in already_selected
+        and not any(h in name.lower() for h in HIATUS_PROTEINS)
     ]
 
     def _score(item):
         name, meta = item
         times = meta.get("times_cooked", 0)
-        cuisine_bonus = -1 if direction_lower and direction_lower in meta.get("cuisine", "").lower() else 0
+        cuisine_bonus = -1 if direction_lower and meta.get("cuisine_type", meta.get("cuisine", "")).lower() in direction_lower else 0
         return (times, cuisine_bonus)
 
-    candidates.sort(key=_score)
+    active_candidates.sort(key=_score)
+    idea_candidates.sort(key=_score)
+
+    # Prepend ideas when user signals wanting something new; otherwise append
+    if want_idea:
+        candidates = idea_candidates + active_candidates
+    else:
+        candidates = active_candidates + idea_candidates
+
     candidate_names = [name for name, _ in candidates[:60]]
 
     try:
@@ -584,7 +766,7 @@ def _activate_idea_in_metadata(name: str, filename: str, recipe_data: dict,
         "status": "active",
         "filename": filename,
         "time": recipe_data.get("time", recipes[key].get("time", "")),
-        "cuisine": recipe_data.get("cuisine", recipes[key].get("cuisine", "")),
+        "cuisine": recipe_data.get("cuisine_type", recipe_data.get("cuisine", recipes[key].get("cuisine_type", recipes[key].get("cuisine", "")))),
     })
     _save_metadata(recipes)
     return True
@@ -715,6 +897,11 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
     """
     Generate shopping CSV content.
     Format: Item, Notes (qty + unit), Date (cook date as YYYY-MM-DD)
+
+    Ingredient fallback order per CLAUDE.md:
+      1. structured `ingredients` array  → Item=name, Notes=qty unit
+      2. `ingredients_raw` strings       → Item=full raw string, Notes=''
+      3. no ingredients                  → skip recipe
     """
     recipes = _load_metadata()
     day_to_date = _day_date_map(week_start)
@@ -732,14 +919,21 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
             continue
         date_str = cook_date.isoformat()
 
-        for ing in recipes[key].get("ingredients", []):
-            qty = str(ing.get("quantity", "")).strip()
-            unit = str(ing.get("unit", "")).strip()
-            ing_name = str(ing.get("name", "")).strip()
-            if not ing_name:
-                continue
-            notes = f"{qty} {unit}".strip() if (qty or unit) else ""
-            rows.append({"Item": ing_name, "Notes": notes, "Date": date_str})
+        structured = recipes[key].get("ingredients", [])
+        if structured:
+            for ing in structured:
+                qty = str(ing.get("quantity", "")).strip()
+                unit = str(ing.get("unit", "")).strip()
+                ing_name = str(ing.get("name", "")).strip()
+                if not ing_name:
+                    continue
+                notes = f"{qty} {unit}".strip() if (qty or unit) else ""
+                rows.append({"Item": ing_name, "Notes": notes, "Date": date_str})
+        else:
+            for raw in recipes[key].get("ingredients_raw", []):
+                raw = str(raw).strip()
+                if raw:
+                    rows.append({"Item": raw, "Notes": "", "Date": date_str})
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=["Item", "Notes", "Date"])
@@ -889,6 +1083,29 @@ def start_menu_workflow() -> dict:
         pass
 
     meals = _merge_feedback(_parse_last_plan())
+
+    # Cross-reference recipe_metadata: skip feedback for meals already logged this cycle
+    try:
+        meta_path = Path("/Users/Shared/cooking/recipe_metadata.json")
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text())
+            recipes = meta.get("recipes", meta) if isinstance(meta, dict) else meta
+            cutoff = (date.today() - timedelta(days=10)).isoformat()
+            for meal in meals:
+                if meal.get("sms_feedback"):
+                    continue  # already has feedback from feedback_current.json
+                key = meal["name"].lower()
+                match = next(
+                    (r for name, r in recipes.items()
+                     if name.lower() == key
+                     and r.get("last_cooked_date", "") >= cutoff),
+                    None,
+                )
+                if match:
+                    meal["sms_feedback"] = "already logged"
+    except Exception:
+        pass
+
     week_start = _get_week_start()
 
     activity = {
@@ -915,9 +1132,17 @@ def log_meal_feedback(feedback: str) -> dict:
     finalize. Feedback text is matched to the closest meal by keyword.
 
     When feedback == "done":
-    - Updates recipe_metadata.json: increments times_cooked, sets last_cooked_date
+    - Processes each meal by rule:
+        - sms_feedback starts with "not_cooked" / contains "not cooked" / "did not make"
+          → skipped; not logged
+        - sms_feedback starts with "disliked"
+          → logged as cooked (it was made), added to disliked_meals for tombstone discussion
+        - times_cooked == 0 (first cook)
+          → logged as cooked, added to first_cook_meals for keep-it discussion
+        - all other meals → auto-logged silently
     - Clears feedback_current.json
     - Advances state to awaiting_suggestions
+    - Returns first_cook_meals, disliked_meals, not_cooked_meals for caller to action
 
     Args:
         feedback: Natural language feedback (e.g. "Monday was great, Thursday needed
@@ -934,11 +1159,37 @@ def log_meal_feedback(feedback: str) -> dict:
     if feedback.strip().lower() == "done":
         recipes = _load_metadata()
         today_str = date.today().isoformat()
+
+        first_cook_meals = []   # times_cooked == 0; caller should ask keep-it question
+        disliked_meals = []     # sentiment was disliked; caller should discuss tombstone
+        not_cooked_meals = []   # explicitly skipped; do not log
+        logged_count = 0
+
         for meal in meals:
             key = _find_recipe_key(meal["name"], recipes)
-            if key:
-                recipes[key]["times_cooked"] = recipes[key].get("times_cooked", 0) + 1
-                recipes[key]["last_cooked_date"] = today_str
+            if not key:
+                continue
+
+            fb = (meal.get("sms_feedback") or "").lower()
+            is_not_cooked = fb.startswith("not_cooked") or "not cooked" in fb or "did not make" in fb
+            is_disliked = fb.startswith("disliked")
+
+            if is_not_cooked:
+                not_cooked_meals.append(meal["name"])
+                continue  # don't log
+
+            if is_disliked:
+                disliked_meals.append(meal["name"])
+                # still log as cooked — it was made, just didn't land
+
+            was_first_cook = recipes[key].get("times_cooked", 0) == 0
+            recipes[key]["times_cooked"] = recipes[key].get("times_cooked", 0) + 1
+            recipes[key]["last_cooked_date"] = today_str
+            logged_count += 1
+
+            if was_first_cook:
+                first_cook_meals.append(meal["name"])
+
         _save_metadata(recipes)
 
         if FEEDBACK_CURRENT_FILE.exists():
@@ -949,8 +1200,17 @@ def log_meal_feedback(feedback: str) -> dict:
                 pass
 
         activity["state"] = "awaiting_suggestions"
+        activity["first_cook_meals"] = first_cook_meals
+        activity["disliked_meals"] = disliked_meals
+        activity["not_cooked_meals"] = not_cooked_meals
         _save_activity(activity)
-        return activity
+        return {
+            **activity,
+            "logged_count": logged_count,
+            "first_cook_meals": first_cook_meals,
+            "disliked_meals": disliked_meals,
+            "not_cooked_meals": not_cooked_meals,
+        }
 
     lowered = feedback.lower()
     matched = False
@@ -1096,7 +1356,7 @@ def advance_to_meal_approval(
 
 
 @mcp.tool()
-def swap_meal(day: str, reason: str, replacement: str = "") -> dict:
+def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: str = "") -> dict:
     """
     Replace the planned meal for a given day (pre-signoff).
 
@@ -1104,6 +1364,7 @@ def swap_meal(day: str, reason: str, replacement: str = "") -> dict:
         day: Day abbreviation (Mon, Tue, Wed, Thu, Fri, Sat, Sun).
         reason: Natural language reason (e.g. "we've had too much chicken").
         replacement: Optional explicit recipe name. If empty, auto-picks from candidates.
+        cuisine_direction: Optional cuisine preference to override activity state (e.g. "Asian", "Indian").
 
     Auto-pick logic: excludes already-selected recipes, prefers cuisine_direction
     match, prefers same meal_type (weekend/weeknight) as the displaced day.
@@ -1124,6 +1385,7 @@ def swap_meal(day: str, reason: str, replacement: str = "") -> dict:
 
     selected = dict(activity.get("selected_meals", {}))
     outgoing = selected.get(day)
+    filter_notes = []
 
     if not replacement:
         # Exclude every recipe already in the plan (including outgoing — we want something different)
@@ -1131,21 +1393,96 @@ def swap_meal(day: str, reason: str, replacement: str = "") -> dict:
         candidates = _load_candidates(activity.get("quick_days", []))
         eligible = [c for c in candidates if c["name"] not in currently_selected]
 
+        reason_lower = reason.lower()
+        all_recipes = _load_metadata()
+
+        # Inject idea recipes — prepend if reason signals "new" or "idea", else append
+        want_idea = any(kw in reason_lower for kw in ("idea", "new", "something different", "haven't tried"))
+        idea_candidates = [
+            {"name": name,
+             "cuisine": r.get("cuisine_type", r.get("cuisine", "Unknown")),
+             "health": r.get("health_classification", r.get("health", "Moderate")),
+             "protein": _get_protein(name),
+             "minutes": _parse_minutes(r.get("time", "")),
+             "time_str": r.get("time", ""),
+             "meal_type": r.get("meal_type", "Weeknight"),
+             "is_idea": True,
+             "ingredients": r.get("ingredients", [])}
+            for name, r in all_recipes.items()
+            if r.get("status") == "idea" and name not in currently_selected
+            and not any(h in name.lower() for h in HIATUS_PROTEINS)
+        ]
+        eligible = (idea_candidates + eligible) if want_idea else (eligible + idea_candidates)
+
         if not eligible:
             return {"error": f"No eligible replacement candidates found for {day}."}
 
-        cuisine_dir = activity.get("cuisine_direction", "")
-        if cuisine_dir and cuisine_dir.lower() not in ("what we've got", ""):
-            c_lower = cuisine_dir.lower()
-            cuisine_match = [c for c in eligible if c_lower in c.get("cuisine", "").lower()]
-            if cuisine_match:
-                eligible = cuisine_match + [c for c in eligible if c not in cuisine_match]
+        filter_notes = []  # collects messages about unmet filters for the caller
 
+        # 1. Protein/method filter from reason (highest priority — "grilled fish Monday")
+        reason_protein = next((label for kw, label in _REASON_PROTEIN_MAP if kw in reason_lower), None)
+        if reason_protein:
+            protein_filtered = [c for c in eligible if _get_protein(c["name"]) == reason_protein]
+            if protein_filtered:
+                eligible = protein_filtered
+            else:
+                filter_notes.append(f"No {reason_protein.lower()} recipes available in the pool right now")
+
+        # 2. Cuisine filter from reason (tight), else fall back to cuisine_direction
+        reason_cuisine = next((c for c in KNOWN_CUISINES if c in reason_lower), None)
+        if reason_cuisine:
+            cuisine_filtered = [c for c in eligible if reason_cuisine in c.get("cuisine", "").lower()]
+            if cuisine_filtered:
+                eligible = cuisine_filtered
+            else:
+                filter_notes.append(f"No {reason_cuisine.title()} recipes available — picked best alternative")
+        else:
+            cuisine_dir = cuisine_direction or activity.get("cuisine_direction", "")
+            if cuisine_dir and cuisine_dir.lower() not in ("what we've got", ""):
+                c_lower = cuisine_dir.lower()
+                cuisine_match = [c for c in eligible if c.get("cuisine", "").lower() in c_lower]
+                if cuisine_match:
+                    eligible = cuisine_match + [c for c in eligible if c not in cuisine_match]
+
+        # 3. Category diversity — deprioritise overrepresented categories (e.g. pasta ≥ 2)
+        tallies = _plan_tallies({k: v for k, v in selected.items() if k != day}, all_recipes)
+        cat_counts = tallies["category"]
+        overloaded_cats = {cat for cat, cnt in cat_counts.items() if cnt >= 2}
+        if overloaded_cats:
+            non_overloaded = [
+                c for c in eligible
+                if not any(
+                    any(kw in c["name"].lower() for kw in _CATEGORY_KEYWORDS[cat])
+                    for cat in overloaded_cats
+                )
+            ]
+            if non_overloaded:
+                eligible = non_overloaded
+
+        # 4. Cook-time filter — weeknight days default to quick meals
+        weeknight_days = {"Mon", "Tue", "Wed", "Thu", "Fri"}
+        if day in weeknight_days:
+            quick_eligible = [c for c in eligible if c.get("minutes", 999) <= QUICK_THRESHOLD
+                              or c.get("method", "") == "slow_cooker"]
+            if quick_eligible:
+                eligible = quick_eligible
+
+        # 5. Inventory boost — sort by inventory match, preserving existing order otherwise
+        inventory = _load_inventory_keywords()
+        if inventory:
+            def _swap_score(c):
+                ing = c.get("ingredients", [])
+                if not ing:
+                    key = _find_recipe_key(c["name"], all_recipes)
+                    ing = all_recipes[key].get("ingredients", []) if key else []
+                return _inventory_boost(c["name"], ing, inventory)
+            eligible.sort(key=_swap_score)
+
+        # 6. meal_type match (weekend vs weeknight) — soft filter, only if pool survives
         if outgoing:
-            recipes = _load_metadata()
-            key = _find_recipe_key(outgoing, recipes)
+            key = _find_recipe_key(outgoing, all_recipes)
             if key:
-                target_type = recipes[key].get("meal_type", "Weeknight")
+                target_type = all_recipes[key].get("meal_type", "Weeknight")
                 same_type = [c for c in eligible if c.get("meal_type") == target_type]
                 if same_type:
                     eligible = same_type
@@ -1156,12 +1493,15 @@ def swap_meal(day: str, reason: str, replacement: str = "") -> dict:
     activity["selected_meals"] = selected
     _save_activity(activity)
 
-    return {
+    result = {
         "selected_meals": selected,
         "swapped_day": day,
         "new_recipe": replacement,
         "outgoing_recipe": outgoing,
     }
+    if filter_notes:
+        result["note"] = " | ".join(filter_notes)
+    return result
 
 
 @mcp.tool()
@@ -1442,6 +1782,55 @@ def finalize_plan() -> dict:
         }
 
     return _do_finalize(activity)
+
+
+@mcp.tool()
+def generate_shopping_list(meals: dict, week_start: str) -> dict:
+    """
+    Generate shopping_YYYY-MM-DD.csv from a finalized meal plan.
+
+    This is the single authoritative source for shopping CSV generation.
+    sms-assistant should call this instead of generating its own CSV.
+
+    Args:
+        meals:      Dict mapping day abbreviations to recipe names,
+                    e.g. {"Sun": "Roast Chicken", "Mon": "Bulgogi", ...}
+        week_start: ISO date string for the Monday of the plan week ("YYYY-MM-DD").
+                    Used to derive per-day cook dates and the output filename.
+
+    Ingredient fallback order:
+      1. structured `ingredients` array  → Item=name, Notes=qty unit
+      2. `ingredients_raw` strings       → Item=full raw string, Notes=''
+      3. recipe not in metadata          → skipped
+
+    Returns:
+        {
+          "shopping_path": "/abs/path/to/shopping_YYYY-MM-DD.csv",
+          "row_count":     int,
+          "skipped_recipes": ["name", ...]   recipes with no ingredient data
+        }
+    """
+    try:
+        ws = date.fromisoformat(week_start)
+    except ValueError:
+        return {"error": f"Invalid week_start date: {week_start!r}"}
+
+    recipes = _load_metadata()
+    skipped = [name for name in meals.values() if not _find_recipe_key(name, recipes)]
+
+    csv_content = _build_shopping_csv(meals, ws)
+
+    shopping_path = WEEKLYPLAN_DIR / f"shopping_{week_start}.csv"
+    WEEKLYPLAN_DIR.mkdir(exist_ok=True)
+    shopping_path.write_text(csv_content)
+
+    row_count = max(0, csv_content.count("\n") - 1)  # subtract header
+
+    return {
+        "shopping_path": str(shopping_path),
+        "row_count": row_count,
+        "skipped_recipes": skipped,
+    }
 
 
 @mcp.tool()
