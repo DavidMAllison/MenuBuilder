@@ -13,6 +13,7 @@ Output: ranked candidate list per slot category, filtered by recency, health, va
 import json
 import argparse
 import os
+import re
 from datetime import date, datetime, timedelta
 from collections import defaultdict
 
@@ -26,6 +27,33 @@ ADULT_NAMES = set(name.lower() for name in _CONFIG['adult_names'])
 RECENCY_WEEKS = 3          # avoid meals cooked within this many weeks
 QUICK_THRESHOLD = 35       # minutes -- "quick" meals for practice nights
 SPRING_SUMMER = (4, 9)     # months April-September: prioritize grill
+
+_CONDIMENT_TERMINAL = {
+    "sauce", "salsa", "dressing", "marinade", "rub", "glaze", "vinaigrette",
+    "relish", "chutney", "gravy", "dip", "spread", "jam", "compote", "paste",
+    "aioli", "mayo", "mayonnaise", "pesto", "tapenade", "hummus", "tzatziki",
+    "brine", "pickle", "pickles", "oil",
+}
+_DISH_ANCHORS = {
+    "chicken", "beef", "pork", "lamb", "fish", "salmon", "tuna", "cod",
+    "halibut", "tilapia", "shrimp", "prawn", "scallop", "clam", "mussel",
+    "tofu", "paneer", "lentil", "lentils", "dal", "bean", "beans",
+    "chickpea", "chickpeas", "egg", "eggs", "pasta", "noodle", "noodles",
+    "rice", "quinoa", "farro", "barley", "stew", "soup", "salad", "taco",
+    "tacos", "bowl", "burger", "sandwich", "pizza", "casserole", "bake",
+    "roast", "chili", "curry", "wrap", "dumpling", "meatball", "meatloaf",
+    "sausage", "turkey", "duck", "tenderloin", "thigh", "breast", "chop",
+    "rib", "ribs", "fillet", "steak", "cutlet", "schnitzel",
+}
+
+
+def _is_condiment(title: str) -> bool:
+    """Return True if title describes a standalone condiment rather than a dinner recipe."""
+    words = re.sub(r"[^\w\s]", "", title.lower()).split()
+    if not words or words[-1] not in _CONDIMENT_TERMINAL:
+        return False
+    return not any(anchor in title.lower() for anchor in _DISH_ANCHORS)
+
 
 # Proteins to group meals by (keyword -> label)
 PROTEIN_KEYWORDS = [
@@ -404,7 +432,10 @@ def main():
     # --- IDEAS FROM RECIPEIDEAS (status=idea) ---
     with open(METADATA_PATH) as f:
         data = json.load(f)
-    ideas = [(k, v) for k, v in data['recipes'].items() if v.get('status') == 'idea']
+    ideas = [
+        (k, v) for k, v in data['recipes'].items()
+        if v.get('status') == 'idea' and not _is_condiment(k)
+    ]
     if ideas:
         print(f'\n=== FROM RECIPEIDEAS ({len(ideas)} untried) ===')
         for name, r in sorted(ideas, key=lambda x: x[0])[:10]:

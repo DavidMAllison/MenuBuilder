@@ -347,7 +347,7 @@ def fetch_recipe(url: str) -> dict:
 
             ingredients = item.get("recipeIngredient", [])
             # Skip if ingredients is just group-header labels (short strings, no numbers)
-            real_ingredients = [i for i in ingredients if any(c.isdigit() for c in i) or len(i) > 15]
+            real_ingredients = [i for i in ingredients if any(c.isnumeric() for c in i) or len(i) > 15]
             if not real_ingredients:
                 break  # ld+json unreliable for this page, fall through to HTML
 
