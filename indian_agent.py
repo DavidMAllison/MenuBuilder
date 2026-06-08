@@ -8,10 +8,8 @@ Sources:
                                 on Reddit have been flagged for sourcing issues)
   - chetnamakan.co.uk          (Chetna Makan -- British-Indian, GBBO Series 5)
   - kannammacooks.com          (Suguna Vinodh -- South Indian / Tamil)
-
-Not included:
-  - ranveerbrar.com       -- ld+json schema broken (ingredients = category headers only)
-  - archanaskitchen.com   -- all URLs return 404
+  - ranveerbrar.com            (Ranveer Brar -- North Indian / Mughlai / restaurant-style)
+  - archanaskitchen.com        (Archana Doshi -- broad Indian, 8000+ recipes)
 
 Usage:
   indian "butter chicken"
@@ -206,6 +204,117 @@ def search_kannammacooks(query: str, max_results: int = 12) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Ranveer Brar (ranveerbrar.com) -- sitemap search + HTML ingredient extraction
+# ---------------------------------------------------------------------------
+
+_RANVEERBRAR_RECIPES = None  # type: list[str] | None
+
+def _load_ranveerbrar_recipes() -> list[str]:
+    """Lazy-load and cache recipe URLs from ranveerbrar.com sitemaps."""
+    global _RANVEERBRAR_RECIPES
+    if _RANVEERBRAR_RECIPES is not None:
+        return _RANVEERBRAR_RECIPES
+    urls: list[str] = []
+    for sitemap in ["https://ranveerbrar.com/recipes-sitemap.xml",
+                    "https://ranveerbrar.com/recipes-sitemap2.xml"]:
+        try:
+            with httpx.Client(timeout=15, follow_redirects=True) as http:
+                resp = http.get(sitemap, headers=HEADERS)
+                resp.raise_for_status()
+            for m in re.finditer(r"<loc>(.*?)</loc>", resp.text):
+                u = m.group(1).strip()
+                # Skip the listing page /recipes/ itself
+                if u.rstrip("/") != "https://ranveerbrar.com/recipes":
+                    urls.append(u)
+        except Exception as e:
+            print(f"  [!] ranveerbrar sitemap load error: {e}")
+    _RANVEERBRAR_RECIPES = urls
+    return urls
+
+
+def search_ranveerbrar(query: str, max_results: int = 10) -> list[dict]:
+    """Search ranveerbrar.com recipes by keyword match on URL slugs."""
+    all_urls = _load_ranveerbrar_recipes()
+    words = query.lower().split()
+    matches = []
+    for url in all_urls:
+        slug = url.rstrip("/").rsplit("/", 1)[-1].lower()
+        if all(w in slug for w in words):
+            title = slug.replace("-", " ").title()
+            matches.append({"title": title, "url": url})
+            if len(matches) >= max_results:
+                break
+    return matches
+
+
+def _extract_ranveerbrar_ingredients(soup: BeautifulSoup) -> list[str]:
+    """
+    Extract ingredients from ranveerbrar recipe page HTML.
+    Ingredients are in <div class='ingredients_cont_wrap'> as <p> tags.
+    Section headers use <strong>; actual ingredients have a Hindi translation
+    appended after the last ', ' — strip it.
+    """
+    wrap = soup.find(class_="ingredients_cont_wrap")
+    if not wrap:
+        return []
+    ingredients = []
+    for p in wrap.find_all("p"):
+        if p.find("strong"):   # section header (e.g. "For Chicken Marination")
+            continue
+        text = p.get_text(strip=True)
+        if not text:
+            continue
+        # Strip Devanagari Hindi translation: "500 gms Chicken, चिकन" → "500 gms Chicken"
+        parts = text.rsplit(", ", 1)
+        if len(parts) == 2 and any(ord(c) > 127 for c in parts[1]):
+            text = parts[0].strip()
+        ingredients.append(html.unescape(text))
+    return ingredients
+
+
+# ---------------------------------------------------------------------------
+# Archana's Kitchen (archanaskitchen.com) -- sitemap search + ld+json
+# ---------------------------------------------------------------------------
+
+_ARCHANA_RECIPES = None  # type: list[str] | None
+
+def _load_archana_recipes() -> list[str]:
+    """Lazy-load and cache recipe URLs from archanaskitchen.com sitemap."""
+    global _ARCHANA_RECIPES
+    if _ARCHANA_RECIPES is not None:
+        return _ARCHANA_RECIPES
+    urls: list[str] = []
+    try:
+        with httpx.Client(timeout=15, follow_redirects=True) as http:
+            resp = http.get("https://www.archanaskitchen.com/sitemap.xml", headers=HEADERS)
+            resp.raise_for_status()
+        for m in re.finditer(r"<loc>(.*?)</loc>", resp.text):
+            u = m.group(1).strip()
+            if "/recipe/" in u and "-in-hindi" not in u and "-in-tamil" not in u:
+                urls.append(u)
+    except Exception as e:
+        print(f"  [!] archanaskitchen sitemap load error: {e}")
+    _ARCHANA_RECIPES = urls
+    return urls
+
+
+def search_archanaskitchen(query: str, max_results: int = 10) -> list[dict]:
+    """Search archanaskitchen.com recipes by keyword match on URL slugs."""
+    all_urls = _load_archana_recipes()
+    words = query.lower().split()
+    matches = []
+    for url in all_urls:
+        slug = url.rstrip("/").rsplit("/", 1)[-1].lower()
+        if all(w in slug for w in words):
+            # Clean up slug: strip trailing -recipe suffix, convert hyphens
+            title = re.sub(r"-recipe$", "", slug).replace("-", " ").title()
+            matches.append({"title": title, "url": url})
+            if len(matches) >= max_results:
+                break
+    return matches
+
+
+# ---------------------------------------------------------------------------
 # Shared fetch -- ld+json with Chetna Makan HTML fallback
 # ---------------------------------------------------------------------------
 
@@ -347,9 +456,11 @@ def fetch_recipe(url: str) -> dict:
                 continue
 
             ingredients = item.get("recipeIngredient", [])
-            # Skip if ingredients is just group-header labels (short strings, no numbers)
+            # Skip if ingredients is just group-header labels (short strings, no numbers).
+            # Exception: ranveerbrar always has category-label ingredients in ld+json —
+            # we extract the real ingredients from HTML below, so don't skip.
             real_ingredients = [i for i in ingredients if any(c.isnumeric() for c in i) or len(i) > 15]
-            if not real_ingredients:
+            if not real_ingredients and "ranveerbrar.com" not in url:
                 break  # ld+json unreliable for this page, fall through to HTML
 
             instructions = []
@@ -384,7 +495,7 @@ def fetch_recipe(url: str) -> dict:
             if isinstance(cuisine, list):
                 cuisine = ", ".join(cuisine)
 
-            return {
+            result = {
                 "url": url,
                 "title": item.get("name", "").strip(),
                 "description": item.get("description", "").strip(),
@@ -397,6 +508,20 @@ def fetch_recipe(url: str) -> dict:
                 "cuisine": cuisine or "Indian",
                 "category": item.get("recipeCategory", ""),
             }
+
+            # Ranveer Brar: replace ld+json category-label ingredients with
+            # the real ingredient list extracted from page HTML.
+            # Also strip Hindi from the title (format: "English हिंदी").
+            if "ranveerbrar.com" in url:
+                html_ingr = _extract_ranveerbrar_ingredients(soup)
+                if html_ingr:
+                    result["ingredients"] = html_ingr
+                # Strip Devanagari suffix from title
+                title_clean = re.sub(r"\s+[ऀ-ॿ].*$", "", result["title"]).strip()
+                if title_clean:
+                    result["title"] = title_clean
+
+            return result
 
     # Fallback: Chetna Makan HTML scraper
     if "chetnamakan.co.uk" in url:
@@ -449,6 +574,10 @@ def _source_label(url: str) -> str:
         return f"Chetna Makan - {url}"
     if "kannammacooks.com" in url:
         return f"Kannamma Cooks - {url}"
+    if "ranveerbrar.com" in url:
+        return f"Ranveer Brar - {url}"
+    if "archanaskitchen.com" in url:
+        return f"Archana's Kitchen - {url}"
     return url
 
 
@@ -534,11 +663,51 @@ TOOLS = [
         },
     },
     {
+        "name": "search_ranveerbrar",
+        "description": (
+            "Search ranveerbrar.com for recipes by Ranveer Brar (Michelin-starred Indian chef, "
+            "TV personality, cookbook author). Strong on North Indian, Mughlai, restaurant-style "
+            "dishes, and modern Indian fusion. "
+            "Use for: butter chicken, kebabs, biryanis, North Indian curries, Punjabi dishes, "
+            "royal/Mughlai recipes, street food elevated to restaurant-style, "
+            "and recipes from his cooking shows."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search term (dish name or ingredient)"},
+                "max_results": {"type": "integer", "description": "Max results (default 10)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_archanaskitchen",
+        "description": (
+            "Search archanaskitchen.com for recipes by Archana Doshi. "
+            "Very large collection (8000+ recipes) covering the full breadth of Indian cuisine. "
+            "Use for: broad Indian queries, regional specialties, everyday Indian cooking, "
+            "healthy Indian dishes, diet-specific recipes (diabetic-friendly, no-onion-garlic), "
+            "and recipes from all Indian states and traditions. "
+            "Also good for: Indian breakfast (idli, dosa, poha, upma), pickles, chutneys, "
+            "festival food, and recipes that are hard to find elsewhere."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search term (dish name or ingredient)"},
+                "max_results": {"type": "integer", "description": "Max results (default 10)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "fetch_recipe",
         "description": (
             "Fetch a recipe from a URL on any of the supported Indian recipe sites. "
-            "For indianhealthyrecipes.com, hebbarskitchen.com, and kannammacooks.com: "
-            "extracts structured data via ld+json schema. "
+            "For indianhealthyrecipes.com, hebbarskitchen.com, kannammacooks.com, "
+            "ranveerbrar.com, and archanaskitchen.com: extracts structured data via ld+json. "
+            "Ranveer Brar ingredients are supplemented from page HTML (ld+json has only labels). "
             "For chetnamakan.co.uk: uses HTML scraping (WordPress block content). "
             "Only fetch URLs returned by search tools — do not guess URLs."
         ),
@@ -552,22 +721,26 @@ TOOLS = [
     },
 ]
 
-SYSTEM = """You are an Indian recipe finder covering North Indian, South Indian, British-Indian, and Tamil cuisines. Your job is to search for recipes and return what you find — you do NOT save anything. The user decides what to keep.
+SYSTEM = """You are an Indian recipe finder covering North Indian, South Indian, British-Indian, Tamil, and Mughlai cuisines. Your job is to search for recipes and return what you find — you do NOT save anything. The user decides what to keep.
 
 Available sources:
 - indianhealthyrecipes.com (North/South Indian, mainstream restaurant dishes) — use search_indianhealthyrecipes
 - hebbarskitchen.com (general Indian, street food, sweets, snacks) — use search_hebbarskitchen
 - chetnamakan.co.uk (British-Indian, lighter family cooking, Chetna Makan) — use search_chetnamakan
 - kannammacooks.com (South Indian / Tamil / Chettinad) — use search_kannammacooks
+- ranveerbrar.com (North Indian / Mughlai / restaurant-style, Ranveer Brar) — use search_ranveerbrar
+- archanaskitchen.com (broad Indian, 8000+ recipes, all regions) — use search_archanaskitchen
 
 Routing rules:
 - Apply culinary knowledge to route — do not rely on keywords alone.
-- North Indian / Mughlai / restaurant-style (butter chicken, dal makhani, korma, biryani, naan, paneer tikka, kebabs) → search_indianhealthyrecipes, optionally also search_hebbarskitchen
-- South Indian / Tamil / Chettinad (rasam, sambar, dosa, idli, chettinad chicken, poriyal, kootu) → search_kannammacooks, optionally also search_indianhealthyrecipes
+- North Indian / restaurant-style (butter chicken, dal makhani, korma, paneer tikka) → search_indianhealthyrecipes + search_ranveerbrar
+- Mughlai / royal / kebabs (nihari, haleem, seekh kebab, biryani) → search_ranveerbrar + search_indianhealthyrecipes
+- South Indian / Tamil / Chettinad (rasam, sambar, dosa, idli, chettinad chicken, poriyal) → search_kannammacooks, optionally also search_indianhealthyrecipes
 - British-Indian / lighter / accessible (family curry, easy Indian weeknight) → search_chetnamakan
 - Street food / snacks / sweets (pav bhaji, vada, pakora, halwa, kheer, ladoo) → search_hebbarskitchen
 - Kerala / Goan / fish curry → search_indianhealthyrecipes + search_kannammacooks
-- "Indian" or general query → search 2-3 sources most likely to yield relevant results
+- Broad / general / regional queries → search_archanaskitchen (large collection covers everything)
+- "Indian" or general query → search 2-3 most relevant sources
 - Multi-style request → search all relevant sources
 
 Cuisine reference (use your knowledge to extend):
@@ -640,6 +813,16 @@ def run_agent(user_request: str) -> list[dict]:
             elif name == "search_kannammacooks":
                 print(f"  [Kannamma Cooks] Searching: {inp['query']!r}")
                 result = search_kannammacooks(inp["query"], inp.get("max_results", 12))
+                print(f"  Found {len(result)} result(s)")
+
+            elif name == "search_ranveerbrar":
+                print(f"  [Ranveer Brar] Searching: {inp['query']!r}")
+                result = search_ranveerbrar(inp["query"], inp.get("max_results", 10))
+                print(f"  Found {len(result)} result(s)")
+
+            elif name == "search_archanaskitchen":
+                print(f"  [Archana's Kitchen] Searching: {inp['query']!r}")
+                result = search_archanaskitchen(inp["query"], inp.get("max_results", 10))
                 print(f"  Found {len(result)} result(s)")
 
             elif name == "fetch_recipe":
