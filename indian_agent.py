@@ -21,6 +21,7 @@ Usage:
   indian "Kerala fish curry"
 """
 
+import html
 import json
 import os
 import re
@@ -354,11 +355,30 @@ def fetch_recipe(url: str) -> dict:
             instructions = []
             for step in item.get("recipeInstructions", []):
                 if isinstance(step, dict):
-                    text = step.get("text", "").strip()
-                    if text:
-                        instructions.append(text)
+                    if step.get("@type") == "HowToSection":
+                        # IHR and other WPRM sites group steps into named sections
+                        for substep in step.get("itemListElement", []):
+                            if isinstance(substep, dict):
+                                text = html.unescape(substep.get("text", "").strip())
+                                if text:
+                                    instructions.append(text)
+                    else:
+                        text = html.unescape(step.get("text", "").strip())
+                        if text:
+                            instructions.append(text)
                 elif isinstance(step, str) and step.strip():
-                    instructions.append(step.strip())
+                    instructions.append(html.unescape(step.strip()))
+
+            # WPRM HTML fallback: safety net for sites where ld+json instructions are
+            # still missing or truncated after the section-handling above
+            if len(instructions) <= 1:
+                wprm_steps = [
+                    el.get_text(separator=" ", strip=True)
+                    for el in soup.find_all(class_="wprm-recipe-instruction-text")
+                    if el.get_text(strip=True)
+                ]
+                if len(wprm_steps) > len(instructions):
+                    instructions = wprm_steps
 
             cuisine = item.get("recipeCuisine", "")
             if isinstance(cuisine, list):
