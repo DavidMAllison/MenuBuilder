@@ -50,13 +50,15 @@ indian_agent.py               # Indian recipe sources (Indian Healthy Recipes, H
 chef_agent.py                 # Chef recipe sources (Alton Brown, Smitten Kitchen, Chetna Makan)
 sites_agent.py                # Cross-cuisine sites (Serious Eats) via Playwright
 fill_menu_ideas.py            # Run all agents in parallel and add new results to recipe_metadata.json as status="idea"
+prep_utils.py                 # Shared prep classification — prompt, classify_prep(), parse_md_instructions(); used by fill_menu_ideas and menu_server
+backfill_prep.py              # One-time (re-runnable) backfill of prep_components/prep_notes for all active recipes
 save_to_recipeideas.py        # Save agent results to the recipeideas inbox
 generate_github_pages_data.py # Generate _data/recipes.json for GitHub Pages — run after metadata changes
 eval_mexican_agent.py         # Eval harness for mexican_agent
 eval_chef_agent.py            # Eval harness for chef_agent
 eval/                         # Eval prompt suites (mexican_prompts.json, chef_prompts.json)
 mcp/
-  menu_server.py              # MCP server — exposes 7 workflow tools over stdio
+  menu_server.py              # MCP server — exposes workflow tools over stdio; get_prep_guide is on-demand with mode=weekly|tonight|auto
   README.md                   # MCP setup and Claude Code wiring instructions
 recipe_metadata.json          # (not committed) Single source of truth for all recipe data
 menu_activity.json            # (not committed) Active workflow state (created by MCP server)
@@ -80,6 +82,11 @@ or any MCP-compatible client (e.g. Keanu via SMS):
 | `advance_to_meal_approval` | Writes selected meals into menu_activity.json; bridges local SMS phase to MCP bridge phase |
 | `swap_meal` | Replaces one day's meal (auto-picks or takes explicit name) |
 | `approve_menu` | Sends selected meals to Ashley via Keanu for signoff |
+| `handle_ashley_reply` | Processes Ashley's approval or swap request; auto-activates idea recipes |
+| `activate_idea_recipe` | Activates a pending idea from provided markdown content; populates prep data |
+| `finalize_plan` | Generates plan + shopping CSV, launches apps, notifies admin |
+| `get_prep_guide` | On-demand prep guide — `mode=weekly` (remaining meals this week) or `mode=tonight` (tonight's dinner); applies food-safety classification automatically |
+| `generate_shopping_list` | Writes shopping CSV from a finalized meal dict (authoritative — sms-assistant calls this) |
 
 Activity state lives in `menu_activity.json` (MenuBuilder's territory). See `mcp/README.md`
 for setup and Claude Code wiring instructions.

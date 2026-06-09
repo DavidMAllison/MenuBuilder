@@ -16,8 +16,8 @@ Tools:
   handle_ashley_reply      — process Ashley's approval or swap request
   activate_idea_recipe     — activate a pending idea from provided markdown content
   generate_shopping_list   — write shopping CSV from finalized meals (authoritative — sms-assistant calls this)
-  finalize_plan            — generate plan + shopping CSV, launch apps, send prep guide
-  get_prep_guide           — return prep guide for current week
+  finalize_plan            — generate plan + shopping CSV, launch apps
+  get_prep_guide           — on-demand prep guide (mode: weekly | tonight | auto)
 """
 
 import csv
@@ -60,6 +60,57 @@ DROPBOX_BASE_URL = _CONFIG.get("dropbox_recipe_base_url", "")
 
 DAYS_ORDER = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 ADULT_NAMES = set(n.lower() for n in _CONFIG.get("adult_names", []))
+
+# Day-of-week helpers (date.weekday(): Mon=0 … Sun=6)
+_WD_TO_ABBREV = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+_ABBREV_TO_DOW = {day: i for i, day in enumerate(DAYS_ORDER)}  # Sun=0 … Sat=6
+
+# Food-safety classification for prep timing
+_DAYOF_NOTE_PATTERNS = [
+    r"day.of\s+only",
+    r"don'?t\s+(?:start|marinate)\s+more\s+than\s+[1-4]\s+h",
+    r"max\s+[1-4]\s+hours?",
+    r"marinate\s+day.of",
+    r"within\s+[1-4]\s+hours?",
+    r"no\s+more\s+than\s+[1-4]\s+h",
+]
+_CITRUS_TERMS    = ["lime", "lemon juice", "lemon zest", "orange juice"]
+_MARINATE_KW     = ["marinate", "marinade", "toss in"]
+_DAYOF_COMP_KW   = ["batter", "dredge", "bread the", "coat in", "guacamole", "avocado"]
+
+
+def _recipe_is_dayof(prep_components: list, prep_notes: str, recipe_data: dict) -> bool:
+    """
+    Return True if this recipe's prep should be done day-of rather than prepped ahead.
+
+    Priority order:
+    1. Explicit timing constraint in prep_notes (e.g. "day-of only", "max 2 hours")
+    2. Citrus marinade heuristic: recipe has lime/lemon + a marination step
+    3. Component text: batter, dredge, avocado/guacamole (spoils/goes soggy)
+    """
+    notes_lower = prep_notes.lower()
+    if any(re.search(p, notes_lower) for p in _DAYOF_NOTE_PATTERNS):
+        return True
+
+    has_citrus = any(
+        any(c in (ing.get("name", "") + " " + ing.get("unit", "")).lower() for c in _CITRUS_TERMS)
+        for ing in recipe_data.get("ingredients", [])
+    ) or any(
+        any(c in raw.lower() for c in _CITRUS_TERMS)
+        for raw in recipe_data.get("ingredients_raw", [])
+    )
+    has_marinate = any(
+        any(kw in comp.lower() for kw in _MARINATE_KW)
+        for comp in prep_components
+    )
+    if has_citrus and has_marinate:
+        return True
+
+    for comp in prep_components:
+        if any(kw in comp.lower() for kw in _DAYOF_COMP_KW):
+            return True
+
+    return False
 
 DAY_NAME_MAP = {
     "monday": "Mon", "tuesday": "Tue", "wednesday": "Wed", "thursday": "Thu",
@@ -943,31 +994,6 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Prep guide
-# ---------------------------------------------------------------------------
-
-def _build_prep_guide(selected: dict) -> str:
-    recipes = _load_metadata()
-    lines = ["PREP GUIDE:"]
-    for day in DAYS_ORDER:
-        if day not in selected:
-            continue
-        name = selected[day]
-        key = _find_recipe_key(name, recipes)
-        if not key:
-            continue
-        prep = recipes[key].get("prep_components", [])
-        notes = recipes[key].get("prep_notes", "")
-        if prep:
-            lines.append(f"\n{name}:")
-            for p in prep:
-                lines.append(f"  - {p}")
-            if notes:
-                lines.append(f"  Note: {notes}")
-    return "\n".join(lines) if len(lines) > 1 else ""
-
-
-# ---------------------------------------------------------------------------
 # Keanu outbox
 # ---------------------------------------------------------------------------
 
@@ -985,7 +1011,8 @@ def _send_outbox(handle: str, text: str) -> None:
 
 def _do_finalize(activity: dict) -> dict:
     """
-    Generate plan text, shopping CSV, launch apps, send prep guide.
+    Generate plan text, shopping CSV, launch apps, notify admin.
+    Prep guide is no longer sent automatically — it is on-demand via get_prep_guide().
     Mutates and saves activity state to 'complete'.
     Returns the completed activity dict.
     """
@@ -1007,21 +1034,11 @@ def _do_finalize(activity: dict) -> dict:
     subprocess.Popen(["open", "/Applications/WeeklyShoppingList.app"])
     subprocess.Popen(["open", "/Applications/WeeklyMealCalendar.app"])
 
-    # Build and send prep guide
-    prep_guide = _build_prep_guide(selected)
-
-    # Summary for notification
+    # Summary notification to admin only
     summary_lines = plan_text.split("\n")[:15]
     summary = "\n".join(summary_lines)
-
     if ADMIN_HANDLE:
         _send_outbox(ADMIN_HANDLE, f"Plan ready!\n\n{summary}")
-        if prep_guide:
-            _send_outbox(ADMIN_HANDLE, prep_guide)
-
-    if PARTNER_HANDLE:
-        if prep_guide:
-            _send_outbox(PARTNER_HANDLE, prep_guide)
 
     # Clear the pending approval file
     if PENDING_FILE.exists():
@@ -1030,7 +1047,6 @@ def _do_finalize(activity: dict) -> dict:
     activity["state"] = "complete"
     activity["plan_path"] = str(plan_path)
     activity["shopping_path"] = str(shopping_path)
-    activity["prep_guide"] = prep_guide
     _save_activity(activity)
     return activity
 
@@ -1715,6 +1731,21 @@ def activate_idea_recipe(name: str, content: str, source_url: str = "") -> dict:
     # Update metadata
     recipes[key]["status"] = "active"
     recipes[key]["filename"] = filename
+
+    # Populate prep data if not already present from the idea intake stage
+    if not recipes[key].get("prep_components"):
+        try:
+            from prep_utils import classify_prep_single, parse_md_instructions
+            ingr = recipes[key].get("ingredients", [])
+            ingr_list = ([i.get("name", "") for i in ingr] if ingr
+                         else recipes[key].get("ingredients_raw", []))
+            instructions = parse_md_instructions(content)
+            prep = classify_prep_single(key, ingr_list, instructions)
+            recipes[key]["prep_components"] = prep.get("prep_components", [])
+            recipes[key]["prep_notes"]      = prep.get("prep_notes", "")
+        except Exception as _e:
+            pass  # prep classification is best-effort; don't block activation
+
     _save_metadata(recipes)
 
     # Update pending_ideas list in activity
@@ -1834,31 +1865,47 @@ def generate_shopping_list(meals: dict, week_start: str) -> dict:
 
 
 @mcp.tool()
-def get_prep_guide() -> dict:
+def get_prep_guide(mode: str = "auto") -> dict:
     """
-    Return the prep guide for the current week's meal plan.
+    On-demand prep guide for the current week's meal plan.
 
-    Reads the most recent mealplan_*.txt, looks up prep_components and
-    prep_notes for each recipe in metadata, and returns a formatted guide.
+    mode:
+      "auto"    — Sunday → "weekly"; any other day → "tonight"
+      "weekly"  — what can be prepped right now for all remaining meals this week,
+                  split into safe-to-prep-now vs. day-of-only (timing-sensitive)
+      "tonight" — prep tasks for tonight's dinner only
 
-    Works at any time — does not require an active workflow. Reflects the
-    actual current plan including any mid-week swaps.
+    Food-safety classification (applied automatically):
+    - day-of only if prep_notes says "day-of only" / "max X hours" / "don't marinate
+      more than X hours" (X ≤ 4)
+    - day-of only if recipe has citrus (lime/lemon) in ingredients AND a marination step
+      (acid breaks down proteins if left too long)
+    - day-of only if a prep component involves batter, dredge, or avocado/guacamole
+    - everything else: safe to prep ahead
+
+    Works at any time without an active workflow. Reflects the actual current plan
+    including any mid-week swaps.
 
     Returns:
         {
-          "prep_guide": "PREP GUIDE:\\n\\nRecipe Name:\\n  - component\\n  ...",
-          "week_start": "YYYY-MM-DD",
-          "recipes_with_prep": ["Recipe A", "Recipe B"],
-          "recipes_without_prep": ["Recipe C", ...]
+          "prep_guide":           str,   # formatted text ready to send
+          "week_start":           str,   # "YYYY-MM-DD"
+          "mode":                 str,   # resolved mode ("weekly" | "tonight")
+          "recipes_with_prep":    list,  # names with prep_components
+          "recipes_without_prep": list,  # names without prep_components
         }
-
-    prep_guide is an empty string if no recipes have prep_components populated.
     """
-    # Find the current week's meal plan file
-    if not WEEKLYPLAN_DIR.exists():
-        return {"error": "No meal plans found.", "prep_guide": ""}
-
     today = date.today()
+    today_abbrev = _WD_TO_ABBREV[today.weekday()]  # "Sun", "Mon", …
+    today_dow    = _ABBREV_TO_DOW[today_abbrev]    # Sun=0 … Sat=6
+
+    if mode == "auto":
+        mode = "weekly" if today.weekday() == 6 else "tonight"  # weekday 6 = Sunday
+
+    # ── Locate current meal plan ──────────────────────────────────────────────
+    if not WEEKLYPLAN_DIR.exists():
+        return {"error": "No meal plans found.", "prep_guide": "", "mode": mode}
+
     dated = []
     for f in WEEKLYPLAN_DIR.glob("mealplan_*.txt"):
         try:
@@ -1866,15 +1913,13 @@ def get_prep_guide() -> dict:
             dated.append((d, f))
         except ValueError:
             continue
-
     dated.sort(key=lambda x: x[0], reverse=True)
     plan_file = next((f for d, f in dated if d <= today), None)
     if not plan_file:
-        return {"error": "No current meal plan found.", "prep_guide": ""}
+        return {"error": "No current meal plan found.", "prep_guide": "", "mode": mode}
 
     week_start_str = plan_file.stem.replace("mealplan_", "")
 
-    # Parse recipe names from the plan
     selected = {}
     for line in plan_file.read_text().splitlines():
         m = _PLAN_LINE_RE.match(line.strip())
@@ -1882,56 +1927,121 @@ def get_prep_guide() -> dict:
             selected[m.group(1)] = m.group(2).strip()
 
     if not selected:
-        return {"error": "Could not parse any meals from plan.", "prep_guide": "", "week_start": week_start_str}
+        return {"error": "Could not parse meals from plan.", "prep_guide": "", "week_start": week_start_str, "mode": mode}
 
-    # Build prep guide
     recipes = _load_metadata()
-    with_prep = []
-    without_prep = []
-    lines = ["PREP GUIDE:"]
 
-    for day in DAYS_ORDER:
-        if day not in selected:
-            continue
-        name = selected[day]
-        key = _find_recipe_key(name, recipes)
+    # ── Tonight mode ──────────────────────────────────────────────────────────
+    if mode == "tonight":
+        tonight_meal = selected.get(today_abbrev)
+        if not tonight_meal:
+            return {
+                "prep_guide": f"No meal in the plan for today ({today_abbrev}).",
+                "week_start": week_start_str,
+                "mode": "tonight",
+                "recipes_with_prep": [],
+                "recipes_without_prep": [],
+            }
+        key = _find_recipe_key(tonight_meal, recipes)
         if not key:
-            without_prep.append(name)
-            continue
-        prep = recipes[key].get("prep_components", [])
+            return {
+                "prep_guide": f"No prep data found for {tonight_meal}.",
+                "week_start": week_start_str,
+                "mode": "tonight",
+                "recipes_with_prep": [],
+                "recipes_without_prep": [tonight_meal],
+            }
+        prep  = recipes[key].get("prep_components", [])
         notes = recipes[key].get("prep_notes", "")
-        if prep:
-            with_prep.append(name)
-            lines.append(f"\n{name}:")
-            for p in prep:
-                lines.append(f"  - {p}")
-            if notes:
-                lines.append(f"  Note: {notes}")
-        else:
-            without_prep.append(name)
+        if not prep:
+            guide = f"No advance prep needed for {tonight_meal} — cook as-is."
+            return {
+                "prep_guide": guide,
+                "week_start": week_start_str,
+                "mode": "tonight",
+                "recipes_with_prep": [],
+                "recipes_without_prep": [tonight_meal],
+            }
+        lines = [f"Prep for tonight — {tonight_meal}:"]
+        for p in prep:
+            lines.append(f"- {p}")
+        if notes:
+            lines.append(f"\nNote: {notes}")
+        return {
+            "prep_guide": "\n".join(lines),
+            "week_start": week_start_str,
+            "mode": "tonight",
+            "meal": tonight_meal,
+            "recipes_with_prep": [tonight_meal],
+            "recipes_without_prep": [],
+        }
 
-    # Build flat Sunday prep task list — one bullet per action across all recipes
-    task_lines = []
+    # ── Weekly mode ───────────────────────────────────────────────────────────
+    # Only consider meals from today onward (past days are already cooked).
+    prep_now  = []   # safe to prep today
+    prep_dayof = []  # timing-sensitive — must be done day-of
+    no_prep   = []   # no prep_components in metadata
+
     for day in DAYS_ORDER:
         if day not in selected:
             continue
-        name = selected[day]
-        key = _find_recipe_key(name, recipes)
-        if not key:
-            continue
-        prep = recipes[key].get("prep_components", [])
-        for p in prep:
-            # Strip after em-dash, semicolon, or opening parenthetical; lowercase
-            phrase = re.split(r'\s+[—–]\s+|;\s*|\s+\(', p)[0].strip().rstrip(",;").lower()
-            task_lines.append(f"- {phrase}")
+        meal_dow   = _ABBREV_TO_DOW[day]
+        days_until = meal_dow - today_dow   # negative = already past
+        if days_until < 0:
+            continue  # skip meals that have already passed
 
-    prep_guide = "Sunday prep:\n" + "\n".join(task_lines) if task_lines else "No advance prep needed this week."
+        name = selected[day]
+        key  = _find_recipe_key(name, recipes)
+        if not key:
+            no_prep.append(name)
+            continue
+
+        prep  = recipes[key].get("prep_components", [])
+        notes = recipes[key].get("prep_notes", "")
+
+        if not prep:
+            no_prep.append(name)
+            continue
+
+        entry = {"meal": name, "day": day, "prep": prep, "notes": notes}
+        if _recipe_is_dayof(prep, notes, recipes[key]):
+            prep_dayof.append(entry)
+        else:
+            prep_now.append(entry)
+
+    # ── Format output ─────────────────────────────────────────────────────────
+    header = "Sunday prep:" if today_abbrev == "Sun" else "What you can prep now:"
+    sections: list[str] = []
+
+    if prep_now:
+        sections.append(header)
+        for e in prep_now:
+            sections.append(f"\n{e['meal']} ({e['day']}):")
+            for p in e["prep"]:
+                sections.append(f"  - {p}")
+            if e["notes"]:
+                sections.append(f"  Note: {e['notes']}")
+
+    if prep_dayof:
+        sections.append("\nDay-of only (timing-sensitive):")
+        for e in prep_dayof:
+            sections.append(f"\n{e['meal']} ({e['day']}):")
+            for p in e["prep"]:
+                sections.append(f"  - {p}")
+            if e["notes"]:
+                sections.append(f"  Note: {e['notes']}")
+
+    if not prep_now and not prep_dayof:
+        guide = "No advance prep needed for the remaining meals this week."
+    else:
+        guide = "\n".join(sections)
 
     return {
-        "prep_guide": prep_guide,
-        "week_start": week_start_str,
-        "recipes_with_prep": with_prep,
-        "recipes_without_prep": without_prep,
+        "prep_guide":           guide,
+        "week_start":           week_start_str,
+        "mode":                 "weekly",
+        "recipes_with_prep":    [e["meal"] for e in prep_now + prep_dayof],
+        "recipes_without_prep": no_prep,
     }
 
 

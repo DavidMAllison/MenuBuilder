@@ -131,6 +131,13 @@ def classify_health(recipes: list[dict]) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Prep classification — delegated to prep_utils
+# ---------------------------------------------------------------------------
+
+from prep_utils import classify_prep  # noqa: E402  (after sys.path setup above)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -330,9 +337,12 @@ def main():
         print("\nNothing new to add.")
         return
 
-    # Classify health in one batch call
+    # Classify health and prep in batch calls
     print(f"\nClassifying health for {len(new_recipes)} recipes...")
     health_map = classify_health(new_recipes)
+
+    print(f"Extracting prep components for {len(new_recipes)} recipes...")
+    prep_map = classify_prep(new_recipes)
 
     # Build metadata entries
     today = date.today().isoformat()
@@ -365,6 +375,8 @@ def main():
         meal_type = _infer_meal_type(r)
         cooking_method = _infer_cooking_method(title, r.get("instructions", []))
 
+        prep_data = prep_map.get(title, {})
+
         entry = {
             "title": title,
             "filename": _title_to_filename(title),
@@ -385,6 +397,9 @@ def main():
             "ingredients_raw": r.get("ingredients", []),  # raw strings e.g. "¾ cup toor dal"
             "instructions":    r.get("instructions", []), # raw step strings
             # structured "ingredients" populated when recipe is activated (status → active)
+            # Prep guide data — populated at intake by Claude
+            "prep_components": prep_data.get("prep_components", []),
+            "prep_notes":      prep_data.get("prep_notes", ""),
         }
         # Use title as key (same pattern as existing entries)
         entries_to_add[title] = entry
