@@ -263,6 +263,69 @@ KNOWN_CUISINES = {
     "korean", "vietnamese", "moroccan", "caribbean", "spanish",
 }
 
+# Source-name → cuisine-type aliases for cuisine_direction normalization.
+# Keys are lowercase substrings to match against; values are canonical cuisine types.
+_SOURCE_CUISINE_ALIASES: list[tuple[str, str]] = [
+    ("serious eats",              "American"),
+    ("america's test kitchen",    "American"),
+    ("americastestkitchen",       "American"),
+    ("atk",                       "American"),
+    ("alton brown",               "American"),
+    ("good eats",                 "American"),
+    ("smitten kitchen",           "American"),
+    ("deb perelman",              "American"),
+    ("kenji",                     "American"),
+    ("maangchi",                  "Korean"),
+    ("hot thai kitchen",          "Thai"),
+    ("hot thai",                  "Thai"),
+    ("woks of life",              "Chinese"),
+    ("woksoflife",                "Chinese"),
+    ("just one cookbook",         "Japanese"),
+    ("joc",                       "Japanese"),
+    ("viet world kitchen",        "Vietnamese"),
+    ("indian healthy recipes",    "Indian"),
+    ("hebbars kitchen",           "Indian"),
+    ("hebbars",                   "Indian"),
+    ("ranveer brar",              "Indian"),
+    ("archana's kitchen",         "Indian"),
+    ("archanaskitchen",           "Indian"),
+    ("chetna makan",              "Indian"),
+    ("chetna",                    "Indian"),
+    ("kannamma cooks",            "Indian"),
+]
+
+
+def _normalize_cuisine_direction(direction: str) -> tuple[str, Optional[str]]:
+    """
+    Normalize a cuisine_direction string, mapping source names to cuisine types.
+
+    Returns (normalized_direction, note_for_caller).
+    - If direction is empty → ("", None)
+    - If direction matches a source alias → (cuisine_type, "Recognized 'X' as Y cuisine")
+    - If direction contains a known cuisine keyword → (direction, None)
+    - Otherwise → (direction, "Unrecognized cuisine direction 'X' — passing through")
+    """
+    if not direction or not direction.strip():
+        return ("", None)
+
+    d_lower = direction.strip().lower()
+
+    # Check source aliases first (more specific)
+    for alias, cuisine in _SOURCE_CUISINE_ALIASES:
+        if alias in d_lower:
+            note = f"Recognized '{direction}' as {cuisine} cuisine."
+            return (cuisine, note)
+
+    # Check if it already contains a known cuisine keyword
+    for kc in KNOWN_CUISINES:
+        if kc in d_lower:
+            return (direction.strip(), None)
+
+    # Unknown — pass through with a warning
+    note = f"Unrecognized cuisine direction '{direction}' — passing through as-is."
+    return (direction.strip(), note)
+
+
 # Keywords in reason string that map to protein labels (matches _PROTEIN_KEYWORDS labels)
 _REASON_PROTEIN_MAP = [
     ("grilled fish", "Fish"), ("fish", "Fish"), ("salmon", "Fish"), ("cod", "Fish"),
@@ -1281,7 +1344,9 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
     if activity.get("state") == "idle":
         return {"error": "No active workflow. Call start_menu_workflow first."}
 
+    cuisine_note = None
     if cuisine_direction:
+        cuisine_direction, cuisine_note = _normalize_cuisine_direction(cuisine_direction)
         activity["cuisine_direction"] = cuisine_direction
     if constraints:
         notes = activity.get("schedule_notes", [])
@@ -1318,12 +1383,15 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
         for c in candidates[:20]
     ]
 
-    return {
+    result = {
         "candidates": clean_candidates,
         "selected_meals": selected,
         "quick_days": quick_days,
         "week_start": activity["week_start"],
     }
+    if cuisine_note:
+        result["cuisine_direction_note"] = cuisine_note
+    return result
 
 
 @mcp.tool()
@@ -1365,16 +1433,21 @@ def advance_to_meal_approval(
     activity["quick_days"] = quick_days or []
     if schedule_notes:
         activity["schedule_notes"] = schedule_notes
+    cuisine_note = None
     if cuisine_direction:
+        cuisine_direction, cuisine_note = _normalize_cuisine_direction(cuisine_direction)
         activity["cuisine_direction"] = cuisine_direction
     activity["state"] = "awaiting_meal_approval"
     _save_activity(activity)
 
-    return {
+    result = {
         "state": "awaiting_meal_approval",
         "selected_meals": selected_meals,
         "week_start": activity.get("week_start", ""),
     }
+    if cuisine_note:
+        result["cuisine_direction_note"] = cuisine_note
+    return result
 
 
 @mcp.tool()

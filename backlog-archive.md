@@ -4,6 +4,17 @@ Items moved here when shipped. Kept for reference.
 
 ---
 
+### Cuisine Direction: Accept Source Labels
+**Completed**: Jun 9, 2026 (`mcp/menu_server.py`)
+
+- `_SOURCE_CUISINE_ALIASES` list maps source names (e.g. "Serious Eats", "ATK", "Maangchi", "Hot Thai Kitchen") to canonical cuisine types.
+- `_normalize_cuisine_direction(direction)` checks source aliases first, then known cuisine keywords, returns `(normalized_direction, note_for_caller)`.
+- Applied in `get_meal_suggestions` and `advance_to_meal_approval`; note surfaced in return value as `cuisine_direction_note`.
+- Unknown directions pass through with an "Unrecognized" note rather than failing.
+- 22 source aliases covering all current agents and popular sources.
+
+---
+
 ### fill_menu_ideas.py — Structured Ingredients at Intake
 **Completed**: Jun 9, 2026
 

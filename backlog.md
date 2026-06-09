@@ -17,12 +17,6 @@
 
 ## Planned Features
 
-### Cuisine Direction: Accept Source Labels
-- When user provides a cuisine direction hint via SMS (e.g. "Serious Eats"), map it to a `cuisine_type` tag before passing to candidate scoring
-- "Serious Eats" → `"American"`; build a small alias map in `menu_server.py`
-- Fallback: if no alias found, surface a prompt: "I don't recognize '[label]' as a cuisine — did you mean [closest match]?"
-- Unblocks using source names as shorthand for cuisine preferences
-
 ### Recipe Site MCP Servers ⬅ NEXT
 - Build MCP servers for frequently used recipe sites (ATK, Serious Eats, etc.) to avoid fetching raw HTML in context
 - MCP fetches page with auth cookies, parses and returns structured recipe data (title, ingredients, instructions only)
@@ -56,7 +50,7 @@
 
 **Decision**: agents run **outside** the weekly workflow — not inline. Reason: token cost, latency (2-4 min per agent), and raw results lack the metadata (health, cook time, ingredients) needed to score them against weekly criteria. `suggest_meals.py` operates on `recipe_metadata.json`; agents feed the JSON, they don't replace it.
 
-**Pattern**: run `fill_menu_ideas.py` on-demand between cycles when the idea pool needs refreshing. It runs all agents in parallel, deduplicates against existing entries, classifies health via Claude Haiku, and writes new entries as `status: "idea"`.
+**Pattern**: run `fill_menu_ideas.py` on-demand between cycles when the idea pool needs refreshing. It runs all agents in parallel, deduplicates against existing entries, classifies health via Claude Haiku, and writes new entries as `status: "active"` with a `.md` file at intake.
 
 **`fill_menu_ideas.py`** — BUILT Jun 2026.
 - `python3 fill_menu_ideas.py` — all agents, default topics
