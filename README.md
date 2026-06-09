@@ -16,6 +16,7 @@ A personal meal planning system built around real family constraints — health 
   - **Asian** — Just One Cookbook (Japanese), Maangchi (Korean), Hot Thai Kitchen (Thai), Viet World Kitchen (Vietnamese), Woks of Life (Chinese)
   - **Indian** — Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan, Kannamma Cooks (South Indian/Tamil)
   - **Sites** — Serious Eats (Playwright-based to bypass Cloudflare)
+  - **ATK** (`atk_agent.py`) — America's Test Kitchen via saved favorites collections. Playwright for paywall auth, httpx + cookies for fetches. Pulls "Try Out", "Sunday Dinner", "Dinners" collections; falls back to top-rated. Accessible as `sync_atk_recipes` MCP tool or `python3 atk_agent.py`.
 - **Sunday auto-generation**: launchd cron fires at 9 AM every Sunday, kicks off a guided SMS workflow — collects last-week feedback, schedule changes, and cuisine preferences before proposing candidates
 - **Variety enforcement**: `suggest_meals.py` scores candidates with protein variety limits (max 2 chicken/week), cuisine family caps (max 2 per family), and new-recipe pressure (at least 1 recipe not cooked in 6+ weeks)
 - **Agent eval harness**: Three-tier automated evaluation for each agent — source routing check, parse completeness check, and human review template. Prompt suites in `eval/`.
@@ -49,6 +50,7 @@ asian_agent.py                # Asian recipe sources (JOC, Maangchi, Hot Thai Ki
 indian_agent.py               # Indian recipe sources (Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan, Kannamma Cooks)
 chef_agent.py                 # Chef recipe sources (Alton Brown, Smitten Kitchen, Chetna Makan)
 sites_agent.py                # Cross-cuisine sites (Serious Eats) via Playwright
+atk_agent.py                  # America's Test Kitchen — syncs saved ATK collections into recipe_metadata.json (paywall auth via Playwright, httpx for fetches)
 fill_menu_ideas.py            # Run all agents in parallel and add new results to recipe_metadata.json as status="idea"
 prep_utils.py                 # Shared prep classification — prompt, classify_prep(), parse_md_instructions(); used by fill_menu_ideas and menu_server
 backfill_prep.py              # One-time (re-runnable) backfill of prep_components/prep_notes for all active recipes

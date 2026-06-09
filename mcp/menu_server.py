@@ -18,6 +18,7 @@ Tools:
   generate_shopping_list   — write shopping CSV from finalized meals (authoritative — sms-assistant calls this)
   finalize_plan            — generate plan + shopping CSV, launch apps
   get_prep_guide           — on-demand prep guide (mode: weekly | tonight | auto)
+  sync_atk_recipes         — import new recipes from ATK favorite collections
 """
 
 import csv
@@ -2142,6 +2143,48 @@ def get_prep_guide(mode: str = "auto") -> dict:
         "mode":                 "weekly",
         "recipes_with_prep":    [e["meal"] for e in prep_now + prep_dayof],
         "recipes_without_prep": no_prep,
+    }
+
+
+@mcp.tool()
+def sync_atk_recipes(target: int = 5, dry_run: bool = False, collection: str = "") -> dict:
+    """
+    Sync ATK favorite collections into recipe_metadata.json.
+
+    Pulls from your saved ATK collections in order:
+      - "Try Out", "Sunday Dinner", "Dinners" (configured in config.json)
+    Falls back to your top-rated ATK recipes if collections don't yield enough new entries.
+    Skips any recipe already in recipe_metadata.json (dedup by URL and title).
+
+    Each imported recipe gets:
+      - A .md file in ~/Dropbox/LLMContext/cooking/recipes/
+      - A full metadata entry (health, cuisine, ingredients, instructions, cook_time)
+      - needs_review: true if content looks thin (< 2 steps, < 3 ingredients)
+
+    After importing, run generate_github_pages_data.py and push to update the recipe site.
+
+    Args:
+        target:     Max number of new recipes to import (default 5).
+        dry_run:    If True, preview what would be imported without writing anything.
+        collection: Restrict to one collection name (e.g. "Try Out"). Empty = all collections.
+
+    Returns:
+        {
+          "added":   [str],   # recipe titles successfully added
+          "count":   int,     # number added
+          "dry_run": bool,
+        }
+    """
+    import atk_agent
+    added = atk_agent.sync_atk(
+        target=target,
+        dry_run=dry_run,
+        collection_filter=collection or None,
+    )
+    return {
+        "added":   added,
+        "count":   len(added),
+        "dry_run": dry_run,
     }
 
 
