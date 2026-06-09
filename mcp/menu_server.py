@@ -540,7 +540,8 @@ def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optiona
         c_lower = cuisine_direction.lower()
         for name, meta in recipes.items():
             if (
-                meta.get("status") == "idea"
+                meta.get("times_cooked", 0) == 0
+                and meta.get("status") not in ("disliked", "ignored")
                 and meta.get("cuisine_type", meta.get("cuisine", "")).lower() in c_lower
                 and not any(c["name"] == name for c in pool)
             ):
@@ -645,13 +646,18 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
     active_candidates = [
         (name, meta)
         for name, meta in recipes.items()
-        if meta.get("status") == "active" and name not in already_selected
+        if meta.get("status") not in ("disliked", "ignored")
+        and meta.get("times_cooked", 0) > 0
+        and name not in already_selected
         and not any(h in name.lower() for h in HIATUS_PROTEINS)
     ]
+    # "idea_candidates" = untried recipes (times_cooked == 0), regardless of status
     idea_candidates = [
         (name, meta)
         for name, meta in recipes.items()
-        if meta.get("status") == "idea" and name not in already_selected
+        if meta.get("status") not in ("disliked", "ignored")
+        and meta.get("times_cooked", 0) == 0
+        and name not in already_selected
         and not any(h in name.lower() for h in HIATUS_PROTEINS)
     ]
 
@@ -1425,7 +1431,9 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
              "is_idea": True,
              "ingredients": r.get("ingredients", [])}
             for name, r in all_recipes.items()
-            if r.get("status") == "idea" and name not in currently_selected
+            if r.get("status") not in ("disliked", "ignored")
+            and r.get("times_cooked", 0) == 0
+            and name not in currently_selected
             and not any(h in name.lower() for h in HIATUS_PROTEINS)
         ]
         eligible = (idea_candidates + eligible) if want_idea else (eligible + idea_candidates)
@@ -1587,13 +1595,10 @@ def handle_ashley_reply(reply: str) -> dict:
 
     Approval:
       - Detects standard approval phrases ("looks good", "ok", "perfect", etc.)
-      - Checks if any selected_meals have status "idea" in metadata
-      - Auto-activates ideas by fetching from their source_url
-      - If all ideas activate: generates plan files, launches apps, sends prep guide
-        → state: complete
-      - If any idea fetch fails: returns pending_ideas list for caller to resolve
-        → state: awaiting_idea_activation
-        Caller should: fetch URL content, call activate_idea_recipe(), then finalize_plan()
+      - All recipes are now status="active" at intake; no activation step needed.
+        The awaiting_idea_activation path is kept for backward compatibility but
+        will not be triggered under normal operation.
+      - Generates plan files, launches apps → state: complete
 
     Swap request:
       - Parses structured commands ("swap 3 to X", "change Tuesday to tacos")

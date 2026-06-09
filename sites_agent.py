@@ -63,6 +63,9 @@ SITES = [
         "access": "playwright",
         "result_filter": "-recipe",
         "search_wait": 3,
+        # NOTE: appending ?print= gives a clean printer-friendly layout good for
+        # manual copy-paste. Cloudflare still blocks both httpx and headless
+        # Playwright (as of Jun 2026) — even the print URL. Use for manual only.
     },
 ]
 

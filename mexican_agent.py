@@ -249,8 +249,68 @@ def search_patijinich(query: str, max_results: int = 20) -> list[dict]:
     return results
 
 
+def _fetch_patijinich_wprm(url: str) -> dict:
+    """Fetch a Pati Jinich recipe using the WPRM print URL (more reliable than ld+json).
+
+    Converts e.g. https://patijinich.com/lime-rubbed-chicken-tacos-with-corn-guacamole/
+    to           https://patijinich.com/wprm_print/lime-rubbed-chicken-tacos-with-corn-guacamole
+    """
+    slug = url.rstrip("/").split("/")[-1]
+    print_url = f"https://patijinich.com/wprm_print/{slug}"
+    try:
+        with httpx.Client(timeout=20, follow_redirects=True) as http:
+            resp = http.get(print_url, headers=HEADERS)
+            resp.raise_for_status()
+    except Exception as e:
+        return {"error": str(e), "url": url}
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    title_el = soup.find(class_="wprm-recipe-name")
+    title = title_el.get_text(strip=True) if title_el else ""
+
+    ingredients = [
+        el.get_text(separator=" ", strip=True)
+        for el in soup.find_all(class_="wprm-recipe-ingredient")
+        if el.get_text(strip=True)
+    ]
+
+    instructions = [
+        el.get_text(separator=" ", strip=True)
+        for el in soup.find_all(class_="wprm-recipe-instruction-text")
+        if el.get_text(strip=True)
+    ]
+
+    if not ingredients and not instructions:
+        return {"error": "No WPRM recipe content found on print page", "url": url}
+
+    return {
+        "url": url,
+        "title": title,
+        "description": "",
+        "prep_time": "",
+        "cook_time": "",
+        "total_time": "",
+        "yield": "",
+        "ingredients": ingredients,
+        "instructions": instructions,
+        "cuisine": "Mexican",
+        "category": "",
+    }
+
+
 def fetch_recipe(url: str) -> dict:
-    """Fetch a recipe page and extract structured data from ld+json."""
+    """Fetch a recipe page and extract structured data.
+
+    patijinich.com: uses the WPRM print URL (wprm_print/<slug>) for reliable extraction.
+    rickbayless.com: site-specific HTML parser.
+    YouTube: delegates to fetch_claudia.
+    All others: ld+json schema.
+    """
+    # Pati Jinich — WPRM print URL is more reliable than ld+json
+    if "patijinich.com" in url:
+        return _fetch_patijinich_wprm(url)
+
     try:
         with httpx.Client(timeout=20, follow_redirects=True) as http:
             resp = http.get(url, headers=HEADERS)

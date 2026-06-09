@@ -17,35 +17,6 @@
 
 ## Planned Features
 
-### Simplify Recipe Status Model — Eliminate idea/active Split
-**Decision (Jun 7 2026)**: `status: "idea"` and `status: "active"` are redundant once every JSON entry has `ingredients_raw`, `instructions`, and a `.md` file at intake. `times_cooked` already captures "new vs established." Status only needs to exist for out-of-rotation recipes.
-
-**Target model**:
-- No `status` field (or `status: "active"`) = in rotation
-- `status: "disliked"` = tried, didn't like
-- `status: "ignored"` = skipped without trying
-- `times_cooked: 0` = never tried (the "new recipe" signal for weekly planning)
-- `needs_review: true` = auto-created .md may have poor formatting; review before first cook
-
-**Changes required**:
-- `fill_menu_ideas.py`: create `.md` file at write time; add quality check → set `needs_review: true` if content is poor (< 3 steps, steps < 30 chars, < 4 ingredients, HTML artifacts). Add warning banner to flagged .md files.
-- `suggest_meals.py`: change filter from `status == "active"` to `status not in ["disliked", "ignored"]`
-- `menu_server.py` / menu workflow: remove step 6b (activation); remove `activate_idea_recipe` MCP tool
-- `recipe_metadata.json`: existing `status: "idea"` entries → migrate to no status or `"active"` after backfilling missing ingredients/instructions (see cleanup task below)
-- GitHub Pages: push new .md files after each replenish run
-
-**Cleanup task**: audit existing `status: "idea"` entries — backfill `ingredients_raw` + `instructions` from source URLs, then migrate. Entries that can't be fetched → remove or flag.
-
-### Shopping CSV — Move Generation to MenuBuilder
-**MenuBuilder side DONE Jun 8 2026**:
-- `generate_shopping_list` MCP tool added to `mcp/menu_server.py`
-- `_build_shopping_csv` updated with `ingredients_raw` fallback (was missing)
-- Tool writes `shopping_{week_start}.csv` and returns path + row count
-
-**sms-assistant handoff** — see below; not yet done.
-- sms-assistant should call `generate_shopping_list` instead of its own CSV logic
-- **Owner (remaining)**: sms-assistant
-
 ### fill_menu_ideas.py — Capture Full Recipe Metadata at Intake
 - **Partially fixed Jun 7 2026**:
   - `fill_menu_ideas.py` now stores `ingredients_raw` (list of raw strings), `instructions`, and `url` alias on every new idea entry
@@ -53,43 +24,6 @@
   - CLAUDE.md updated: shopping list now falls back to `ingredients_raw` for idea recipes before trying to read .md file
 - **Remaining**: structured `ingredients` array (name/quantity/unit/category) still not populated at intake — ideas have `ingredients_raw` (strings) only. Structured parsing happens at activation (step 6b). If this causes shopping list issues for activated-but-not-yet-structured recipes, add a Haiku parsing step to fill_menu_ideas.py.
 - Goal: ideas should be activation-ready — no manual URL lookup or copy-paste required
-
-### Meal Logging: First-Cook Feedback Only (sms-assistant handoff)
-- **Decision (Jun 8 2026)**: feedback prompting only applies to first-cook recipes (`times_cooked == 0`). Established recipes auto-log as cooked with no prompting.
-- **Rules**:
-  - `not_cooked` in feedback_current.json → skip logging
-  - `disliked` in feedback_current.json → tombstone flow
-  - First-cook + no feedback entry → ask "You tried [recipe] for the first time — keep it in rotation?"
-  - Established recipe + no feedback entry → auto-log silently
-- **Claude Code side**: CLAUDE.md step 1 updated Jun 8 2026
-- **sms-assistant side**: `_handle_meal_logging` in `menu_workflow.py` needs the same logic. Currently prompts for every meal without a feedback entry. Fix: check `times_cooked` from `recipe_metadata.json` before deciding whether to ask.
-- **Owner**: sms-assistant (`menu_workflow.py`)
-
-### Menu Balance Enforcement at Generation Time
-- SMS workflow allowed 3 Indulgent meals in one week (Jun 8 2026) — over the 1/week guideline
-- **Diagnosed Jun 8 2026** — two bugs in `menu_workflow.py`:
-
-**Bug A — Indulgent cap missing** (`_select_meals`, line ~349)
-- `heart_healthy_count` is tracked but there is no `indulgent_count`
-- Fix: in `_select_meals`, add `indulgent_count = 0` alongside `heart_healthy_count`
-- In `pick_for`, add `nonlocal indulgent_count`
-- Before selecting a candidate, add: `if c["health"] == "Indulgent" and indulgent_count >= 1: continue`
-- After selecting, add: `if c["health"] == "Indulgent": indulgent_count += 1`
-
-**Bug B — Week date display off by one** (`_build_plan_text`, line ~460)
-- Plan showed "June 07–13" when the week started June 8
-- `_build_plan_text` derives display Sunday as `week_start - 1 day` — correct if `week_start` is Monday
-- Root cause: the session stored `week_start = "2026-06-08"` (Sunday) instead of `"2026-06-09"` (Monday)
-- Look for any code path (e.g. `trigger_menu.py`, session init) that sets `week_start` to `date.today()` directly instead of calling `_get_week_start()`
-- `_get_week_start()` itself is correct; the bug is in how `week_start` gets written to the session
-
-- **Owner**: sms-assistant (`_select_meals` and session init in `menu_workflow.py` / `trigger_menu.py`)
-
-### Idea Activation: Handle Missing URL
-- When activating an idea recipe (status: "idea" → "active"), if `url` is empty in `recipe_metadata.json`, Keanu currently gets confused and the user has to copy-paste the recipe manually
-- Fix: during activation, check for empty URL first — if missing, ask "What's the source URL for [recipe]?" before attempting to fetch
-- Applies in both the SMS workflow (handle_ashley_reply idea activation path) and any direct activation call
-- **Owner**: sms-assistant (activation logic in menu_workflow.py) + MenuBuilder (activate_idea_recipe MCP tool)
 
 ### Cuisine Direction: Accept Source Labels
 - When user provides a cuisine direction hint via SMS (e.g. "Serious Eats"), map it to a `cuisine_type` tag before passing to candidate scoring

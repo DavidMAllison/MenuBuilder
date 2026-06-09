@@ -144,13 +144,12 @@
 - **Purpose**: Inbox for human-sourced items only — user texts a URL or image from phone, SMS assistant writes it here. Nothing else touches this folder.
 - **NEVER recommend items from this folder** — contents have not been reviewed and have no metadata. They are not candidates for weekly meal planning.
 - **Processing**: On-demand only — user asks "any recipe ideas?" and we process them together. Not part of the weekly menu workflow.
-- **Workflow**: User/SMS writes file → user asks to review → show each file (title, source URL), check for duplicates against `recipe_metadata.json` → user confirms → **fetch URL and extract ingredients + instructions** → add complete entry to `recipe_metadata.json` as `status: "idea"` → delete the file
+- **Workflow**: User/SMS writes file → user asks to review → show each file (title, source URL), check for duplicates against `recipe_metadata.json` → user confirms → **fetch URL and extract ingredients + instructions** → add complete entry to `recipe_metadata.json` as `status: "active"` with a `.md` file → delete the file
 - **If fetch fails**: do NOT add a partial entry. Leave the file in the inbox and ask the user to paste the recipe content.
-- **Do NOT** create `.md` files until user confirms they tried and liked the recipe (activation step)
 
 ### Two paths into recipe_metadata.json
-- **Agent pipeline** (`fill_menu_ideas.py`): automated. Runs cuisine agents → fetches full recipe data → writes directly to `recipe_metadata.json` as `status: "idea"` with `ingredients_raw`, `instructions`, `url`. Skips any recipe the agent couldn't fully fetch. No manual step.
-- **Human inbox** (`recipeideas/` folder): always manual. User reviews → confirms → fetch URL → write complete entry to JSON → delete inbox file.
+- **Agent pipeline** (`fill_menu_ideas.py`): automated. Runs cuisine agents → fetches full recipe data → writes directly to `recipe_metadata.json` as `status: "active"` with `ingredients_raw`, `instructions`, `url`, and a `.md` file. Low-quality auto-generated content gets `needs_review: true`. Skips any recipe the agent couldn't fully fetch. No manual step.
+- **Human inbox** (`recipeideas/` folder): always manual. User reviews → confirms → fetch URL → write complete entry to JSON + create `.md` → delete inbox file.
 
 ### JSON invariant — no naked entries
 **Every entry in `recipe_metadata.json` must have `ingredients_raw` and `instructions` populated.** No title-only or URL-only stubs. If an entry can't be written with full data, it doesn't get written at all — it stays in the inbox or is skipped by the agent. This rule applies at write time for all new entries going forward.
@@ -219,10 +218,8 @@
    - **Budget context**: Before proposing meals, read `~/Dropbox/LLMContext/Personal/grocery_budget_status.json` if it exists. If `suggested_weekly_spend` is low (tight week), prioritize inventory-heavy meals and avoid recipes that require many fresh or specialty ingredients. Mention the budget posture to the user before proposing candidates.
    - **Thin pool check**: If fewer than 5 candidates or the list is weak on variety, mention it and ask: "The idea pool is light on [cuisine] — want me to run an agent to add some options before we pick?" Do NOT run agents silently or by default. Agents are outside the workflow; they add latency and return unclassified recipes that need metadata before they can be scored.
 4. **Propose recipe names only** -- before presenting, verify the 7-meal list against the Variety Rules above (protein limits, max 2 per cuisine family, at least 1 newer recipe). Adjust candidates if needed, then present. Let user approve/swap before generating.
-5. **Send to Ashley** -- `python3 ~/projects/personal/MenuBuilder/send_menu_partner.py` (day + meal name only). **DO NOT fetch recipe URLs, create `.md` files, or populate ingredients for any `idea` meals yet -- wait for Ashley's approval first. If she swaps a meal out, that work is wasted.**
+5. **Send to Ashley** -- `python3 ~/projects/personal/MenuBuilder/send_menu_partner.py` (day + meal name only).
 6. **Ashley approves** -- wait for her reply in `/Users/Shared/sms-assistant/menu_feedback_response.json`. Apply any changes.
-6a. **Check for ideas** -- automated: scan the post-Ashley final meal list against `recipe_metadata.json` for any entries with `status: "idea"`. Use the post-Ashley list, not the original candidates — Ashley may have swapped in a meal that is itself an idea.
-6b. **If ideas found** -- fetch content from the source URL directly. If the fetch fails, ask the user to paste the content manually. Once content is obtained: create `.md` file in `recipes/`, populate `ingredients` in JSON, set `status: "active"`. Do this before generating the plan.
 7. **Generate meal plan** -- save `mealplan_YYYY-MM-DD.txt` (minimal format) + `shopping_YYYY-MM-DD.csv`
 8. **Run apps** -- `open /Applications/WeeklyShoppingList.app` then `open /Applications/WeeklyMealCalendar.app`
 9. **Send prep guide** -- via Keanu
@@ -238,7 +235,7 @@
 ### Other Preferences
 - **No duplicate proteins in a week** -- e.g., don't put salmon on two nights
 - **Hoisin-Glazed Pork Tenderloin** is overused; avoid unless specifically requested
-- **Incorporate new recipes regularly** -- pull from `status: "idea"` entries in recipe_metadata.json and recently added recipes for variety
+- **Incorporate new recipes regularly** -- pull from `times_cooked: 0` entries in recipe_metadata.json (all recipes are now `status: "active"` at intake) for variety
 - **Cuisine variety matters** -- aim for zero cuisine repeats across the week when possible
 - **Prefer direct, concise meal plans** -- no verbose notes in the plan file
 - **Coconut Chicken Curry** -- family hit, kids ate the chicken. Good rotation candidate.

@@ -3,7 +3,8 @@
 fill_menu_ideas.py -- Pull new recipe ideas from all agents and add to recipe_metadata.json.
 
 Runs all cuisine agents in parallel, deduplicates against existing entries,
-classifies health with Claude, and writes new entries as status="idea".
+classifies health with Claude, and writes new entries directly as status="active"
+with a .md file created at intake. Low-quality content gets needs_review=true.
 
 Agents run OUTSIDE the weekly workflow. Call this between cycles when the
 idea pool needs refreshing — not during Sunday planning.
@@ -31,7 +32,61 @@ import anthropic
 # ---------------------------------------------------------------------------
 
 METADATA_PATH = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
-MENUBUILDER = Path(__file__).parent
+RECIPES_DIR   = Path.home() / "Dropbox/LLMContext/cooking/recipes"
+MENUBUILDER   = Path(__file__).parent
+
+# Quality thresholds — entries failing these get needs_review=true
+_HTML_RE        = re.compile(r"<[^>]+>")
+_MIN_STEPS      = 3
+_MIN_STEP_LEN   = 30
+_MIN_INGREDIENTS = 4
+
+
+def _quality_check(ingredients_raw: list, instructions: list) -> bool:
+    """Return True (needs_review) if content looks auto-generated / incomplete."""
+    if len(instructions) < _MIN_STEPS:
+        return True
+    if any(len(s) < _MIN_STEP_LEN for s in instructions):
+        return True
+    if len(ingredients_raw) < _MIN_INGREDIENTS:
+        return True
+    if any(_HTML_RE.search(s) for s in instructions + ingredients_raw):
+        return True
+    return False
+
+
+def _build_recipe_md(title: str, entry: dict, needs_review: bool) -> str:
+    """Format a recipe entry as a .md file."""
+    lines = [f"# {title}", ""]
+    if needs_review:
+        lines += [
+            "> **Needs Review** — auto-generated content; verify formatting and completeness before first cook.",
+            "",
+        ]
+    time_str   = entry.get("time", "")
+    servings   = entry.get("servings", "")
+    source     = entry.get("source", "")
+    source_url = entry.get("source_url", "")
+    if time_str:
+        lines.append(f"**Time**: {time_str}  ")
+    if servings:
+        lines.append(f"**Serves**: {servings}  ")
+    if source_url:
+        label = source if source else source_url
+        lines.append(f"**Adapted from**: [{label}]({source_url})  ")
+    elif source:
+        lines.append(f"**Source**: {source}  ")
+    if time_str or servings or source_url or source:
+        lines.append("")
+    lines += ["## Ingredients", ""]
+    for ing in entry.get("ingredients_raw", []):
+        lines.append(f"- {ing}")
+    lines.append("")
+    lines += ["## Instructions", ""]
+    for i, step in enumerate(entry.get("instructions", []), 1):
+        lines.append(f"{i}. {step}")
+    lines.append("")
+    return "\n".join(lines)
 
 if not os.environ.get("ANTHROPIC_API_KEY"):
     env_path = Path.home() / "projects/personal/sms-assistant/.env"
@@ -382,24 +437,26 @@ def main():
             "filename": _title_to_filename(title),
             "source": source_name,
             "source_url": source_url,
-            "url": source_url,              # alias — activation code uses "url"
+            "url": source_url,
             "cuisine": cuisine,
             "meal_type": meal_type,
             "health": health,
             "times_cooked": 0,
             "time": time_str,
             "servings": r.get("yield", ""),
-            "status": "idea",
+            "status": "active",
             "cooking_method": cooking_method,
             "last_cooked_date": None,
-            # Full recipe content captured at intake — prevents re-fetch at activation
-            # and enables shopping list generation without a .md file
             "ingredients_raw": r.get("ingredients", []),  # raw strings e.g. "¾ cup toor dal"
             "instructions":    r.get("instructions", []), # raw step strings
             # structured "ingredients" populated when recipe is activated (status → active)
             # Prep guide data — populated at intake by Claude
             "prep_components": prep_data.get("prep_components", []),
             "prep_notes":      prep_data.get("prep_notes", ""),
+            "needs_review":    _quality_check(
+                                   r.get("ingredients", []),
+                                   r.get("instructions", []),
+                               ),
         }
         # Use title as key (same pattern as existing entries)
         entries_to_add[title] = entry
@@ -415,11 +472,24 @@ def main():
         print("\n[DRY RUN] No changes written.")
         return
 
+    # Write .md files at intake
+    RECIPES_DIR.mkdir(exist_ok=True)
+    md_written = 0
+    for title, entry in entries_to_add.items():
+        md_path = RECIPES_DIR / entry["filename"]
+        if not md_path.exists():
+            md_path.write_text(
+                _build_recipe_md(title, entry, entry.get("needs_review", False)),
+                encoding="utf-8",
+            )
+            md_written += 1
+
     # Write to metadata
     recipes.update(entries_to_add)
     metadata["last_updated"] = today
     METADATA_PATH.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"\nWrote {len(entries_to_add)} new idea(s) to {METADATA_PATH}")
+    print(f"\nWrote {len(entries_to_add)} new recipe(s) to {METADATA_PATH}")
+    print(f"  .md files created: {md_written}")
     print(f"Total recipes now: {len(recipes)}")
 
 
