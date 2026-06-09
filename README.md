@@ -83,7 +83,7 @@ or any MCP-compatible client (e.g. Keanu via SMS):
 | `swap_meal` | Replaces one day's meal (auto-picks or takes explicit name) |
 | `approve_menu` | Sends selected meals to Ashley via Keanu for signoff |
 | `handle_ashley_reply` | Processes Ashley's approval or swap request; auto-activates idea recipes |
-| `activate_idea_recipe` | Activates a pending idea from provided markdown content; populates prep data |
+| `activate_idea_recipe` | Activates a pending idea from pasted markdown content or URL auto-fetch; `content` is optional — if empty and `source_url` given, fetch is attempted first; returns `needs_content: True` if fetch fails |
 | `finalize_plan` | Generates plan + shopping CSV, launches apps, notifies admin |
 | `get_prep_guide` | On-demand prep guide — `mode=weekly` (remaining meals this week) or `mode=tonight` (tonight's dinner); applies food-safety classification automatically |
 | `generate_shopping_list` | Writes shopping CSV from a finalized meal dict (authoritative — sms-assistant calls this) |

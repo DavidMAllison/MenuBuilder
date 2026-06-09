@@ -1684,9 +1684,9 @@ def handle_ashley_reply(reply: str) -> dict:
 
 
 @mcp.tool()
-def activate_idea_recipe(name: str, content: str, source_url: str = "") -> dict:
+def activate_idea_recipe(name: str, content: str = "", source_url: str = "") -> dict:
     """
-    Activate a pending idea recipe from provided markdown content.
+    Activate a pending idea recipe from provided markdown content or URL.
 
     Called when handle_ashley_reply returns pending_ideas that couldn't be auto-fetched.
     After activating all pending ideas, call finalize_plan().
@@ -1694,8 +1694,10 @@ def activate_idea_recipe(name: str, content: str, source_url: str = "") -> dict:
     Args:
         name: Recipe name (fuzzy-matched against metadata).
         content: Full markdown content for the recipe file (title, ingredients,
-                 instructions). Provide the complete recipe text.
-        source_url: Source URL for attribution in the .md file (optional).
+                 instructions). Provide the complete recipe text. If empty and
+                 source_url is provided, auto-fetch is attempted first.
+        source_url: Source URL. If content is empty, fetch is attempted from this URL.
+                    If fetch fails, returns needs_content: True so caller can ask for paste.
 
     Returns:
         {
@@ -1704,6 +1706,18 @@ def activate_idea_recipe(name: str, content: str, source_url: str = "") -> dict:
           "filename": str,
           "remaining_pending": int  — how many pending ideas are still unactivated
         }
+        Or on auto-fetch success:
+        {
+          "success": True,
+          "auto_activated": True,
+          "canonical_name": str
+        }
+        Or on auto-fetch failure:
+        {
+          "success": False,
+          "needs_content": True,
+          "canonical_name": str
+        }
     """
     activity = _load_activity()
     recipes = _load_metadata()
@@ -1711,6 +1725,14 @@ def activate_idea_recipe(name: str, content: str, source_url: str = "") -> dict:
 
     if not key:
         return {"success": False, "error": f"Recipe not found in metadata: {name!r}"}
+
+    # If no content but a URL is provided, try auto-fetch first
+    if not content and source_url:
+        recipes[key]["source_url"] = source_url
+        _save_metadata(recipes)
+        if _try_auto_activate(name, recipes):
+            return {"success": True, "auto_activated": True, "canonical_name": key}
+        return {"success": False, "needs_content": True, "canonical_name": key}
 
     # Write .md file
     filename = re.sub(r"[^\w\s-]", "", key).strip().replace(" ", "_") + ".md"
