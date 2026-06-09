@@ -244,7 +244,7 @@ def load_candidates(quick_nights=False):
 
     candidates = []
     for name, r in recipes.items():
-        if r.get('status') != 'active':
+        if r.get('status') in ('disliked', 'ignored'):
             continue
         if is_hiatus(name):
             continue
@@ -429,16 +429,17 @@ def main():
         if by_protein[protein]:
             print_group(protein, by_protein[protein], limit=4)
 
-    # --- IDEAS FROM RECIPEIDEAS (status=idea) ---
+    # --- NEEDS REVIEW (auto-generated .md, verify before first cook) ---
     with open(METADATA_PATH) as f:
         data = json.load(f)
-    ideas = [
+    needs_review = [
         (k, v) for k, v in data['recipes'].items()
-        if v.get('status') == 'idea' and not _is_condiment(k)
+        if v.get('needs_review') and not _is_condiment(k)
+        and v.get('status') not in ('disliked', 'ignored')
     ]
-    if ideas:
-        print(f'\n=== FROM RECIPEIDEAS ({len(ideas)} untried) ===')
-        for name, r in sorted(ideas, key=lambda x: x[0])[:10]:
+    if needs_review:
+        print(f'\n=== NEEDS REVIEW ({len(needs_review)} entries — verify .md before first cook) ===')
+        for name, r in sorted(needs_review, key=lambda x: x[0])[:10]:
             print(f"    - {name} | {r.get('cuisine','?')} | {r.get('health','?')} | {r.get('time','?')}")
 
 
