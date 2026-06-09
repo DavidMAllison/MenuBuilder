@@ -1,29 +1,30 @@
 # MenuBuilder - Backlog
 
-## In Progress
-
-### Sunday Morning Auto-Generation
-- launchd cron fires Sunday AM
-- Sends iMessage asking about schedule changes for the week ("Any schedule changes? Nights out?")
-- User replies via text; script feeds reply + context files (meal plans, inventory, metadata) into Claude API
-- Claude proposes menu; user approves/swaps via text; final plan saved + shopping list populated
-- **Transport**: iMessage via dedicated iCloud account
-- **Dual-mode**: primary interaction via SMS; user may also pick up workflow on laptop (Claude Code). Session state at `/Users/Shared/cooking/menu_session.json` is the bridge.
-- **launchd plist created**: `~/Library/LaunchAgents/com.menubuilder.sundaymenu.plist` — 9 AM Sunday
-- **sms-assistant changes complete** (Jun 4 2026) — trigger_menu.py, handle_start, _handle_meal_logging, dispatch rewrite, advance_to_meal_approval seam all done
-- **Test**: Sunday Jun 8 — first live run. Permission dialogs may appear on first launchd fire.
-
----
-
 ## Planned Features
 
-### Recipe Site MCP Servers ⬅ NEXT
-- Build MCP servers for frequently used recipe sites (ATK, Serious Eats, etc.) to avoid fetching raw HTML in context
-- MCP fetches page with auth cookies, parses and returns structured recipe data (title, ingredients, instructions only)
-- Saves tokens vs. Claude fetching directly; more reliable than WebFetch on paywalled sites
-- Consider local cache: pull once, store, Claude reads from cache thereafter
-- ATK requires session cookie auth (paid subscription)
-- Goal: use MCP instead of web fetch when looking up recipe ideas during meal planning
+### Weekly Lunch Recommendation ⬅ NEXT (unblocked when Ashley confirms preferences)
+- Separate from dinner workflow — standalone suggest + pick flow, not part of Ashley's dinner SMS
+- Same meal all week, batch-cooked Sunday, cold is fine
+- Ashley profile: Mediterranean lean, chicken salad type, somewhat healthy, picky — wants 2-3 options
+- **Schema**: `meal_type: "lunch"` new value; `lunch_suitable: true` flag on dinner recipes that double as lunch
+- **To build**: seed recipe pool → `suggest_lunch.py` → shopping list + prep guide integration
+- **Blocked on**: Ashley's list of 3-5 lunches she actually eats (user asking her Jun 9 2026)
+
+### ATK / America's Test Kitchen
+**Status**: COMPLETE Jun 9 2026. `atk_agent.py` + `sync_atk_recipes` MCP tool.
+- 3 collections synced (Try Out, Sunday Dinner, Dinners) + top-rated fallback
+- 36 new recipes available to import; run `python3 atk_agent.py --target N` or `sync_atk_recipes` MCP tool
+- Playwright auth cached in `config.json`; cookies refresh automatically after 20h
+
+### Sunday Morning Auto-Generation
+**Status**: COMPLETE Jun 4 2026. First live test Jun 8 2026.
+- launchd plist at `~/Library/LaunchAgents/com.menubuilder.sundaymenu.plist` — 9 AM Sunday
+- Full SMS workflow: feedback logging → schedule check → candidate filter → menu proposal → Ashley approval → finalize
+
+### Recipe Site MCP Servers
+- ATK: DONE (Jun 9 2026 — `sync_atk_recipes` MCP tool)
+- Serious Eats: blocked by Cloudflare (403 on both httpx and headless Playwright as of Jun 2026)
+- Other sites: add to `sites_agent.py` registry as needed
 
 ### PDF-to-Markdown Migration
 **Status**: Complete. All PDFs converted to .md (Jun 2026).
@@ -41,7 +42,7 @@
 - **Chef agent** (`chef_agent.py`) — done: Alton Brown, Deb Perelman (Smitten Kitchen), Chetna Makan. Symlinked as `~/.local/bin/chef`. Results to `/tmp/chef_agent_results.json`.
 - **Sites agent** (`sites_agent.py`) — BUILT. Serious Eats live via Playwright (bypasses 403). Symlinked as `~/.local/bin/sites`. Registry-based: add a new site = one dict entry in SITES.
 - **Kenji Lopez-Alt** — blocked: seriouseats.com returns 403. Need alternate source (his Substack, YouTube, or wait for Serious Eats solution).
-- **ATK / America's Test Kitchen** — blocked: paywall, needs session cookie auth.
+- **ATK / America's Test Kitchen** — DONE Jun 9 2026. `atk_agent.py` + `sync_atk_recipes` MCP tool. Playwright auth, httpx fetches, 3 collections.
 - **Chetna Makan YouTube** (nice to have): attach YouTube video link to recipes fetched from chetnamakan.co.uk. Channel: `UC1VkNUPA6ieOuwXmk4SSJZw`.
 - Goal: full recipe discovery pipeline — any source accessible via agent, no manual URL fetching
 
@@ -61,7 +62,7 @@
 
 **Weekly cron** — `com.menubuilder.fillmenuideas.plist` loaded Jun 2026. Fires Saturday 10 AM (ideas ready before Sunday planning). Log: `fill_menu_ideas.log` in project root. Review/unload after ~40 weeks (around Apr 2027) once idea pool is stable.
 
-**One enhancement to build**: at step 3, after `suggest_meals.py` runs, if the candidate pool is thin (< 5 options) or light on a cuisine, surface a prompt: "idea pool is light on [cuisine] — want me to run an agent before proposing?" Keeps agents available without running them by default.
+*(Thin-pool prompt removed Jun 2026 — 163 active recipes across 30+ cuisines; pool is never thin enough to warrant this. Saturday cron replenishes weekly.)*
 
 ### SMS Recipe Display (show_recipe via Keanu)
 - Text a recipe name to Keanu, get back formatted ingredients + steps
@@ -81,10 +82,11 @@
 - **Why not yet**: collection fits in a single context window; `suggest_meals.py` handles structured filtering. Learning project, not a workflow gap.
 
 ### WeeklyShoppingList.app - Completed-Item Skip Window Too Wide
-- **Bug**: 7-day completed-item skip window causes items to be silently dropped when the same ingredient appears on consecutive weekly lists (e.g. parsley, mushrooms completed last week → skipped this week). Both items ARE in the CSV; the drop happens at the Reminders import layer.
-- **Attempted fix (Jun 8 2026)**: Delete all `[menu]` items (completed + uncompleted) before rebuild, remove skip check entirely. Reverted — trade-off is too bad: re-running mid-week for a swap clears all completed state.
-- **Better fix needed**: Narrow the skip window to items completed within the last ~24 hours (handles same-day re-runs), or tie it to the meal plan start date so only items completed since this plan was generated are skipped.
-- **File**: `/Applications/WeeklyShoppingList.app/Contents/Resources/Scripts/main.scpt`; backup at `/tmp/WeeklyShoppingList_backup.applescript`
+**Status**: FIXED Jun 9 2026.
+- **Was**: rolling 7-day cutoff caused recurring ingredients (parsley, mushrooms, etc.) to be silently dropped on consecutive weekly lists.
+- **Fix**: cutoff anchor changed from `(current date) - 7 days` to the plan start date extracted from the CSV filename (`shopping_YYYY-MM-DD.csv`). Items completed before this plan was generated are treated as prior-week → re-added correctly. Items completed on or after plan start → already bought this week → skipped.
+- **Fallback**: if CSV filename parse fails, falls back to 24-hour window (handles same-day re-runs).
+- **File**: `/Applications/WeeklyShoppingList.app/Contents/Resources/Scripts/main.scpt`; source backup at `/tmp/WeeklyShoppingList_backup.applescript`
 
 ### WeeklyShoppingList.app - Grouped Reminders by Category
 - **Known limitation**: iOS Reminders auto-groups items only when added via iOS UI — AppleScript bypasses NLP categorization entirely. No API path available.

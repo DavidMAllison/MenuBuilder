@@ -80,6 +80,39 @@ PROTEIN_KEYWORDS = [
 
 HIATUS = ['salmon']  # proteins currently on hiatus
 
+# Cuisine → family grouping for cap enforcement at step 4.
+# Asian = Japanese + Korean + Chinese + Thai + Vietnamese (max 2/week as one family).
+# Indian is its own family (not folded into Asian).
+# All other cuisines are their own family.
+CUISINE_FAMILY_MAP = {
+    'Japanese':    'Asian',
+    'Korean':      'Asian',
+    'Chinese':     'Asian',
+    'Thai':        'Asian',
+    'Vietnamese':  'Asian',
+    'Indian':      'Indian',
+    'Mexican':     'Mexican',
+    'Italian':     'Italian',
+    'American':    'American',
+    'Mediterranean': 'Mediterranean',
+    'Greek':       'Mediterranean',
+    'Moroccan':    'Mediterranean',
+    'Middle Eastern': 'Middle Eastern',
+    'French':      'French',
+    'Spanish':     'European',
+    'German':      'European',
+    'Caribbean':   'Caribbean',
+    'Peruvian':    'Peruvian',
+}
+
+
+def cuisine_family(cuisine: str) -> str:
+    """Return the cuisine family string for display (e.g. 'Japanese' → '[Asian]')."""
+    family = CUISINE_FAMILY_MAP.get(cuisine)
+    if family and family != cuisine:
+        return f' [{family}]'
+    return ''
+
 # Words to strip when extracting food keywords from inventory item names
 _INVENTORY_STOPWORDS = {
     'costco', 'package', 'packages', 'individual', 'pieces', 'piece',
@@ -348,7 +381,8 @@ def print_group(title, items, limit=6):
             pantry_tag = f" [PANTRY: {', '.join(c['inv_pantry'][:2])}]"
         else:
             pantry_tag = ''
-        print(f"    - {c['name']}{grill_tag}{new_tag}{kid_tag}{score_tag}{stock_tag}{pantry_tag} | {c['cuisine']} | {c['health']} | {time_str} | {last_str}")
+        fam_tag = cuisine_family(c['cuisine'])
+        print(f"    - {c['name']}{grill_tag}{new_tag}{kid_tag}{score_tag}{stock_tag}{pantry_tag} | {c['cuisine']}{fam_tag} | {c['health']} | {time_str} | {last_str}")
 
 
 def main():
