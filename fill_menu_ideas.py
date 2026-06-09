@@ -193,6 +193,66 @@ from prep_utils import classify_prep  # noqa: E402  (after sys.path setup above)
 
 
 # ---------------------------------------------------------------------------
+# Structured ingredient parsing
+# ---------------------------------------------------------------------------
+
+_INGREDIENT_PARSE_PROMPT = """\
+Parse each recipe's ingredient list into structured JSON.
+
+For each ingredient string, extract:
+- name: the food item only, lowercase (no quantities or units)
+- quantity: numeric amount as string (e.g. "1.5", "2", "3/4"), or "" if none
+- unit: measurement unit (e.g. "lbs", "cup", "tbsp"), or "" if none
+- category: one of: Proteins | Produce | Dairy | Pantry/Asian | Dry Goods | Spices/Herbs
+
+Categories: Proteins=meat/fish/eggs/tofu; Produce=fresh veg/herbs/fruit;
+Dairy=milk/cream/cheese/butter; Pantry/Asian=sauces/oils/condiments/stocks;
+Dry Goods=flour/sugar/rice/pasta/dried legumes; Spices/Herbs=dried spices and herbs.
+
+Recipes:
+{recipes}
+
+Return ONLY a JSON array:
+[{{"title": "...", "ingredients": [{{"name":"...","quantity":"...","unit":"...","category":"..."}},...]}},...]"""
+
+
+def _safe_title_for_json(title: str) -> str:
+    return (title
+            .replace("“", "'").replace("”", "'")
+            .replace("‘", "'").replace("’", "'")
+            .replace('"', "'"))
+
+
+def parse_ingredients_structured(recipes: list[dict]) -> dict[str, list]:
+    """Batch parse ingredients_raw → structured list. Returns {title: [ingredient,...]}."""
+    if not recipes:
+        return {}
+
+    safe_to_orig = {_safe_title_for_json(r["title"]): r["title"] for r in recipes}
+    recipe_blocks = []
+    for r in recipes:
+        lines = "\n".join(f"  - {i}" for i in r.get("ingredients", []))
+        recipe_blocks.append(f'Title: {_safe_title_for_json(r["title"])}\nIngredients:\n{lines}')
+
+    prompt = _INGREDIENT_PARSE_PROMPT.format(recipes="\n\n".join(recipe_blocks))
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        m = re.search(r"\[.*\]", text, re.DOTALL)
+        if m:
+            parsed = json.loads(m.group())
+            return {safe_to_orig.get(item["title"], item["title"]): item["ingredients"]
+                    for item in parsed}
+    except Exception as e:
+        print(f"  [!] Ingredient parse error: {e}")
+    return {}
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -392,12 +452,15 @@ def main():
         print("\nNothing new to add.")
         return
 
-    # Classify health and prep in batch calls
+    # Classify health, prep, and structured ingredients in batch calls
     print(f"\nClassifying health for {len(new_recipes)} recipes...")
     health_map = classify_health(new_recipes)
 
     print(f"Extracting prep components for {len(new_recipes)} recipes...")
     prep_map = classify_prep(new_recipes)
+
+    print(f"Parsing structured ingredients for {len(new_recipes)} recipes...")
+    ingredients_map = parse_ingredients_structured(new_recipes)
 
     # Build metadata entries
     today = date.today().isoformat()
@@ -449,7 +512,7 @@ def main():
             "last_cooked_date": None,
             "ingredients_raw": r.get("ingredients", []),  # raw strings e.g. "¾ cup toor dal"
             "instructions":    r.get("instructions", []), # raw step strings
-            # structured "ingredients" populated when recipe is activated (status → active)
+            "ingredients":     ingredients_map.get(title, []),  # structured [{name,qty,unit,category}]
             # Prep guide data — populated at intake by Claude
             "prep_components": prep_data.get("prep_components", []),
             "prep_notes":      prep_data.get("prep_notes", ""),

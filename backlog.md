@@ -17,14 +17,6 @@
 
 ## Planned Features
 
-### fill_menu_ideas.py — Capture Full Recipe Metadata at Intake
-- **Partially fixed Jun 7 2026**:
-  - `fill_menu_ideas.py` now stores `ingredients_raw` (list of raw strings), `instructions`, and `url` alias on every new idea entry
-  - `indian_agent.py` `real_ingredients` filter fixed: `isdigit()` → `isnumeric()` so Unicode fractions (½, ¾, ⅓) in Indian recipe measurements are no longer dropped, which caused the agent to return 0 results
-  - CLAUDE.md updated: shopping list now falls back to `ingredients_raw` for idea recipes before trying to read .md file
-- **Remaining**: structured `ingredients` array (name/quantity/unit/category) still not populated at intake — ideas have `ingredients_raw` (strings) only. Structured parsing happens at activation (step 6b). If this causes shopping list issues for activated-but-not-yet-structured recipes, add a Haiku parsing step to fill_menu_ideas.py.
-- Goal: ideas should be activation-ready — no manual URL lookup or copy-paste required
-
 ### Cuisine Direction: Accept Source Labels
 - When user provides a cuisine direction hint via SMS (e.g. "Serious Eats"), map it to a `cuisine_type` tag before passing to candidate scoring
 - "Serious Eats" → `"American"`; build a small alias map in `menu_server.py`
@@ -39,13 +31,8 @@
 - ATK requires session cookie auth (paid subscription)
 - Goal: use MCP instead of web fetch when looking up recipe ideas during meal planning
 
-### Create Missing Recipe Files
-- **Tinga Verde** — blank PDF, source is Cooking Con Claudia. Provide URL or paste recipe to create `.md` file.
-
 ### PDF-to-Markdown Migration
-**Status**: 1 PDF remaining (down from 28). Pan-Seared Broccolini complete Jun 2026.
-
-- `tinga_verde_recipe.pdf` — image-based scan; need source URL or content to create `.md` manually
+**Status**: Complete. All PDFs converted to .md (Jun 2026).
 
 ### Recipe Verbatim Scan
 **Status**: ATK .md files complete Jun 2026. 15 recipes rewritten, 6 formatting bugs fixed, 2 duplicates removed.

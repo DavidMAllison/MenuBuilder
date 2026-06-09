@@ -4,6 +4,16 @@ Items moved here when shipped. Kept for reference.
 
 ---
 
+### fill_menu_ideas.py — Structured Ingredients at Intake
+**Completed**: Jun 9, 2026
+
+- `backfill_ingredients.py`: Haiku batch-parses `ingredients_raw` → structured `{name, quantity, unit, category}` for all 36 newly-active recipes (31 from `ingredients_raw`, 2 via .md fallback, 1 skipped/Tinga Verde, 1 fixed separately).
+- `fill_menu_ideas.py`: `parse_ingredients_structured()` added — runs alongside health and prep classification at intake. New recipes now arrive fully structured.
+- Fixed `_safe_title_for_json()` helper to handle curly/smart quotes in titles that break JSON round-tripping.
+- Side effects resolved: 2 duplicate key collisions (`Khao Man Gai` and `Pan-Seared Broccolini`) tombstoned. `Tinga Verde` tombstoned + PDF deleted. `Chicken Tinga` added as replacement. 161 clean active entries on GitHub Pages.
+
+---
+
 ### Simplify Recipe Status Model — Eliminate idea/active Split
 **Completed**: Jun 9, 2026
 
