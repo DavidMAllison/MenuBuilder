@@ -2,13 +2,16 @@
 
 ## Planned Features
 
-### Weekly Lunch Recommendation ⬅ NEXT (unblocked when Ashley confirms preferences)
-- Separate from dinner workflow — standalone suggest + pick flow, not part of Ashley's dinner SMS
-- Same meal all week, batch-cooked Sunday, cold is fine
-- Ashley profile: Mediterranean lean, chicken salad type, somewhat healthy, picky — wants 2-3 options
-- **Schema**: `meal_type: "lunch"` new value; `lunch_suitable: true` flag on dinner recipes that double as lunch
-- **To build**: seed recipe pool → `suggest_lunch.py` → shopping list + prep guide integration
-- **Blocked on**: Ashley's list of 3-5 lunches she actually eats (user asking her Jun 9 2026)
+### Weekly Lunch Recommendation
+**Status**: COMPLETE Jun 13 2026.
+- Saturday 10 AM SMS → 3 suggestions → Ashley picks → ingredients added to shopping list dated Saturday
+- Saturday 6 PM nudge if no reply
+- sms-assistant handoff still pending: wire `set_lunch_pick` + `log_lunch_feedback` tools in `tools.py` + system prompt addition
+
+### Lunch Calendar Event (Nice to Have)
+- After `set_lunch_pick` is called, create one iCloud calendar event "Ashley's Lunch: [recipe]" recurring Sun–Fri
+- Could be a small `lunch_calendar.py` AppleScript wrapper or an addition to WeeklyMealCalendar.app
+- Not blocking anything — for reference visibility only
 
 ### ATK / America's Test Kitchen
 **Status**: COMPLETE Jun 9 2026. `atk_agent.py` + `sync_atk_recipes` MCP tool.
