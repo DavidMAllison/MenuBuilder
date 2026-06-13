@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import os
+import random
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -98,16 +99,92 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
 
 client = anthropic.Anthropic()
 
-# Default queries per agent — broad enough for diverse results, cuisine-appropriate
-DEFAULT_TOPICS = {
-    "mexican": "weeknight chicken or pork dinner",
-    "asian":   "weeknight dinner",
-    "indian":  "weeknight chicken or vegetarian curry",
-    "chef":    "healthy weeknight dinner fish or chicken",
-    "sites":   "weeknight dinner",
+# Query pools per agent — one is picked randomly each run for variety.
+# Specific dish names / ingredients work better than broad terms on most sites.
+# Health filtering happens at menu planning, not here — include indulgent too.
+QUERY_POOLS = {
+    "mexican": [
+        "cochinita pibil",
+        "mole negro chicken",
+        "Veracruz fish",
+        "carne asada tacos",
+        "chiles en nogada",
+        "pozole rojo",
+        "birria",
+        "rajas con crema",        # vegetarian
+        "poc chuc",
+        "shrimp tacos",
+        "black bean soup",        # vegetarian
+        "picadillo",
+        "chile colorado pork",
+        "calabacitas vegetarian",
+    ],
+    "asian": [
+        "pork belly braised",
+        "galbi short ribs",
+        "khao soi",
+        "dan dan noodles",
+        "Vietnamese lemongrass pork",
+        "mapo tofu",
+        "pad kra pao",
+        "bun bo hue",
+        "sundubu jjigae",
+        "oyakodon",
+        "lion's head meatballs",
+        "massaman curry",
+        "tofu stir fry",          # vegetarian
+        "japchae",
+        "Vietnamese pork noodle bowl",
+        "Chinese braised lamb",
+    ],
+    "indian": [
+        "lamb rogan josh",
+        "Goan fish curry",
+        "nihari",
+        "Chettinad chicken",
+        "dal makhani",            # vegetarian
+        "lamb biryani",
+        "Kerala prawn curry",
+        "haleem",
+        "Bengali fish curry",
+        "aloo gobi",              # vegetarian
+        "rajma",                  # vegetarian
+        "baingan bharta",         # vegetarian
+        "egg curry South Indian",
+        "mutton seekh kebab",
+        "saag paneer",            # vegetarian
+    ],
+    "chef": [
+        "pork tenderloin",
+        "salmon",
+        "lamb shoulder",
+        "braised chicken thighs",
+        "beef short ribs",
+        "shrimp",
+        "pork chops",
+        "mushroom pasta",         # vegetarian
+        "lentil soup",            # vegetarian
+        "eggplant",               # vegetarian
+        "fish en papillote",
+        "roast chicken",
+        "turkey meatballs",
+    ],
+    "sites": [
+        "pork shoulder",
+        "braised short ribs",
+        "salmon",
+        "lamb",
+        "vegetarian chili",       # vegetarian
+        "shakshuka",              # vegetarian
+        "roast chicken",
+        "Thai curry",
+        "risotto",
+        "grilled fish",
+        "pork belly",
+    ],
 }
 
-ALL_AGENTS = list(DEFAULT_TOPICS.keys())
+ALL_AGENTS = list(QUERY_POOLS.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +427,23 @@ def _extract_url(source_label: str, recipe: dict) -> str:
     return recipe.get("url", "")
 
 
+# Adjectives / stop words that don't identify a dish — strip before title comparison
+# so "Easy Chicken Tikka Masala" matches existing "Chicken Tikka Masala".
+_TITLE_STOP = {
+    "easy", "simple", "quick", "best", "classic", "authentic", "homemade",
+    "traditional", "perfect", "crispy", "tender", "juicy", "creamy", "spicy",
+    "cheesy", "smoky", "hearty", "rustic", "amazing", "ultimate", "foolproof",
+    "the", "a", "an", "my", "with", "and", "in", "or", "for", "style",
+}
+
+
+def _normalize_title(title: str) -> str:
+    """Lowercase, strip punctuation, remove filler adjectives for fuzzy dedup."""
+    t = re.sub(r"[^\w\s]", "", title.lower())
+    words = [w for w in t.split() if w not in _TITLE_STOP]
+    return " ".join(words)
+
+
 def _existing_urls(recipes: dict) -> set[str]:
     """Collect all source_url values already in the metadata."""
     urls = set()
@@ -362,6 +456,10 @@ def _existing_urls(recipes: dict) -> set[str]:
 
 def _existing_titles(recipes: dict) -> set[str]:
     return {v.get("title", "").lower().strip() for v in recipes.values()}
+
+
+def _existing_norm_titles(recipes: dict) -> set[str]:
+    return {_normalize_title(k) for k in recipes}
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +491,7 @@ def main():
     recipes = metadata["recipes"]
     existing_urls = _existing_urls(recipes)
     existing_titles = _existing_titles(recipes)
+    existing_norm = _existing_norm_titles(recipes)
 
     print(f"Loaded {len(recipes)} existing recipes ({len(existing_urls)} with URLs)")
     print(f"Running agents: {agents_to_run}")
@@ -403,7 +502,7 @@ def main():
     with ThreadPoolExecutor(max_workers=len(agents_to_run)) as pool:
         futures = {}
         for agent_name in agents_to_run:
-            topic = args.topic or DEFAULT_TOPICS[agent_name]
+            topic = args.topic or random.choice(QUERY_POOLS[agent_name])
             print(f"  Starting {agent_name} agent: {topic!r}")
             futures[pool.submit(_run_agent, agent_name, topic)] = agent_name
 
@@ -421,12 +520,16 @@ def main():
     for r in all_results:
         url = _extract_url(r.get("source", ""), r).rstrip("/")
         title = r.get("title", "").lower().strip()
+        norm = _normalize_title(r.get("title", ""))
 
         if url and url in existing_urls:
             skipped.append(r.get("title", "?") + " (URL exists)")
             continue
         if title and title in existing_titles:
             skipped.append(r.get("title", "?") + " (title exists)")
+            continue
+        if norm and norm in existing_norm:
+            skipped.append(r.get("title", "?") + " (fuzzy title match)")
             continue
         if not r.get("ingredients") or not r.get("instructions"):
             skipped.append(r.get("title", "?") + " (no ingredients/instructions)")
@@ -441,6 +544,8 @@ def main():
             existing_urls.add(url)
         if title:
             existing_titles.add(title)
+        if norm:
+            existing_norm.add(norm)
 
     print(f"New (not in collection): {len(new_recipes)}")
     print(f"Skipped: {len(skipped)}")
