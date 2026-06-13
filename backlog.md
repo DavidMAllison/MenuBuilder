@@ -31,7 +31,14 @@
 
 ### Recipe Verbatim Scan
 **Status**: ATK .md files complete Jun 2026. 15 recipes rewritten, 6 formatting bugs fixed, 2 duplicates removed.
-- Remaining: 12 ATK recipes still in PDF format (can't scan until converted); non-ATK sources not yet checked
+- PDF filenames in metadata: fixed Jun 9 2026 (18 stale `.pdf` → `.md` references updated)
+- No verbatim ATK boilerplate found in previously-PDF recipes
+- Non-ATK sources: not yet checked
+
+### ATK Recipe Attribution ⬅ IN PROGRESS
+- 33 ATK recipes missing "Adapted from" footer with source URL
+- `needatklinks.md` in project root — fill in ATK URLs, then hand back to Claude to apply
+- Once complete: add `*Adapted from [America's Test Kitchen](url)*` footer to each .md file
 
 ### Recipe Agents for All MenuBuilder Sources
 - **Cuisine agents** (source-specific): Mexican (done), Asian/East+Southeast (done — Japanese, Korean, Thai, Vietnamese, Chinese), Indian (done — Jun 2026, its own agent separate from Asian), Italian, etc.

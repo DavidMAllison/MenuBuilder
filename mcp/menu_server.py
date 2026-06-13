@@ -53,6 +53,7 @@ FEEDBACK_CURRENT_FILE = WEEKLYPLAN_DIR / "feedback_current.json"
 ACTIVITY_FILE = MENUBUILDER_DIR / "menu_activity.json"
 OUTBOX_FILE = Path("/Users/Shared/sms-assistant/.outbox.json")
 PENDING_FILE = Path("/Users/Shared/sms-assistant/menu_feedback_pending.json")
+LUNCH_STATE_FILE = Path("/Users/Shared/cooking/lunch_state.json")
 
 PARTNER_HANDLE = _CONFIG.get("partner_handle", "")          # Ashley
 ADMIN_HANDLE = _CONFIG.get("admin_handle", "")              # David (optional in config)
@@ -1055,6 +1056,34 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
                 raw = str(raw).strip()
                 if raw:
                     rows.append({"Item": raw, "Notes": "", "Date": date_str})
+
+    # Append lunch ingredients if Ashley has picked this week
+    if LUNCH_STATE_FILE.exists():
+        try:
+            lunch = json.loads(LUNCH_STATE_FILE.read_text())
+            pick = lunch.get("current_pick")
+            if pick and lunch.get("status") == "selected":
+                key = _find_recipe_key(pick, recipes)
+                if key:
+                    # Saturday = week_start - 2 days (prep before Sunday cook)
+                    sat_date = (week_start - timedelta(days=2)).isoformat()
+                    structured = recipes[key].get("ingredients", [])
+                    if structured:
+                        for ing in structured:
+                            ing_name = str(ing.get("name", "")).strip()
+                            qty  = str(ing.get("quantity", "")).strip()
+                            unit = str(ing.get("unit", "")).strip()
+                            if not ing_name:
+                                continue
+                            notes = f"{qty} {unit} | Ashley's lunch".strip(" |")
+                            rows.append({"Item": ing_name, "Notes": notes, "Date": sat_date})
+                    else:
+                        for raw in recipes[key].get("ingredients_raw", []):
+                            raw = str(raw).strip()
+                            if raw:
+                                rows.append({"Item": raw, "Notes": "Ashley's lunch", "Date": sat_date})
+        except Exception:
+            pass  # don't let lunch state errors break shopping list generation
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=["Item", "Notes", "Date"])
@@ -2185,6 +2214,202 @@ def sync_atk_recipes(target: int = 5, dry_run: bool = False, collection: str = "
         "added":   added,
         "count":   len(added),
         "dry_run": dry_run,
+    }
+
+
+@mcp.tool()
+def get_lunch_suggestions(exclude: str = "") -> dict:
+    """
+    Return 3 lunch suggestions for Ashley.
+
+    Filters recipes tagged lunch_suitable or meal_type=="lunch", avoids anything
+    eaten in the last 4 weeks. URLs are GitHub Pages clickable links.
+
+    Args:
+        exclude: Recipe name to skip (e.g. last week's pick).
+
+    Returns:
+        {"suggestions": [{"name": str, "url": str, "health": str}]}
+    """
+    import subprocess as _sp
+    script = Path(__file__).parent.parent / "suggest_lunch.py"
+    cmd = [sys.executable, str(script), "--json"]
+    if exclude:
+        cmd += ["--exclude", exclude]
+    result = _sp.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        return {"error": result.stderr.strip(), "suggestions": []}
+    suggestions = json.loads(result.stdout)
+    return {"suggestions": suggestions}
+
+
+@mcp.tool()
+def set_lunch_pick(recipe_name: str) -> dict:
+    """
+    Record Ashley's lunch pick for the week.
+
+    Writes to /Users/Shared/cooking/lunch_state.json. The shopping list
+    generator reads this file and appends lunch ingredients dated Saturday
+    (prep day before the Sunday cook).
+
+    Args:
+        recipe_name: Exact recipe name (or close match) from recipe_metadata.json.
+
+    Returns:
+        {"ok": bool, "recipe": str, "message": str}
+    """
+    data = json.loads(METADATA_PATH.read_text())
+    recipes = data["recipes"]
+    key = _find_recipe_key(recipe_name, recipes)
+    if not key:
+        return {"ok": False, "recipe": recipe_name, "message": f"Recipe not found: {recipe_name}"}
+
+    base_url = _CONFIG.get("github_pages_base_url", "https://davidmallison.github.io/menubuilder-recipes")
+    filename = recipes[key].get("filename", "")
+    url = f"{base_url.rstrip('/')}/{filename.replace('.md', '')}" if filename else ""
+
+    state: dict = {}
+    if LUNCH_STATE_FILE.exists():
+        try:
+            state = json.loads(LUNCH_STATE_FILE.read_text())
+        except Exception:
+            state = {}
+
+    first_week = not state.get("last_pick")
+    state.update({
+        "current_pick": key,
+        "status":       "selected",
+        "first_week":   first_week,
+        "set_date":     date.today().isoformat(),
+        "url":          url,
+    })
+    LUNCH_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LUNCH_STATE_FILE.write_text(json.dumps(state, indent=2))
+
+    return {"ok": True, "recipe": key, "message": f"Lunch pick set: {key}. Ingredients will be added to Saturday's shopping list."}
+
+
+@mcp.tool()
+def log_lunch_feedback(recipe: str, sentiment: str, note: str = "") -> dict:
+    """
+    Log Ashley's feedback on last week's lunch and update tracking fields.
+
+    Updates times_eaten_lunch and last_lunch_date in recipe_metadata.json.
+    Clears current_pick from lunch_state.json after logging.
+
+    Args:
+        recipe:    Recipe name (from lunch_state or direct).
+        sentiment: "liked" | "disliked" | "ok"
+        note:      Optional freeform note.
+
+    Returns:
+        {"ok": bool, "recipe": str, "times_eaten_lunch": int}
+    """
+    data = json.loads(METADATA_PATH.read_text())
+    recipes = data["recipes"]
+    key = _find_recipe_key(recipe, recipes)
+    if not key:
+        return {"ok": False, "recipe": recipe, "times_eaten_lunch": 0}
+
+    r = recipes[key]
+    r["times_eaten_lunch"] = r.get("times_eaten_lunch", 0) + 1
+    r["last_lunch_date"]   = date.today().isoformat()
+    if note:
+        r.setdefault("notes", "")
+        r["notes"] = (r["notes"] + " " + note).strip()
+
+    if sentiment == "disliked":
+        r["lunch_suitable"] = False
+
+    meta_path.write_text(json.dumps(data, indent=2))
+
+    # Clear pick from state
+    if LUNCH_STATE_FILE.exists():
+        try:
+            state = json.loads(LUNCH_STATE_FILE.read_text())
+            state["status"]       = "logged"
+            state["last_pick"]    = key
+            state["current_pick"] = None
+            LUNCH_STATE_FILE.write_text(json.dumps(state, indent=2))
+        except Exception:
+            pass
+
+    return {"ok": True, "recipe": key, "times_eaten_lunch": r["times_eaten_lunch"]}
+
+
+@mcp.tool()
+def add_lunch_recipe_url(url: str) -> dict:
+    """
+    Fetch a recipe URL Ashley texted, create a .md file + metadata entry tagged for lunch.
+
+    Fetches the URL, extracts title/ingredients/instructions, writes the .md file in
+    ~/Dropbox/LLMContext/cooking/recipes/, and adds a metadata entry with:
+      - meal_type: "lunch"
+      - lunch_suitable: true
+      - status: "active"
+      - needs_review: true (so it surfaces in the next review cycle)
+
+    Args:
+        url: Full URL to the recipe page.
+
+    Returns:
+        {"ok": bool, "recipe": str, "url": str, "message": str}
+    """
+    from bs4 import BeautifulSoup as _BS
+
+    try:
+        resp = httpx.get(url, follow_redirects=True, timeout=20,
+                         headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+    except Exception as e:
+        return {"ok": False, "recipe": "", "url": url, "message": f"Fetch failed: {e}"}
+
+    soup = _BS(resp.text, "html.parser")
+    title_tag = soup.find("h1")
+    title = title_tag.get_text(strip=True) if title_tag else "Ashley's Lunch Recipe"
+
+    body_text    = soup.get_text(separator="\n", strip=True)
+    instructions = body_text[:4000]
+
+    safe_name = re.sub(r"[^\w\s-]", "", title).strip().replace(" ", "_")
+    filename  = safe_name + ".md"
+    md_path   = RECIPES_DIR / filename
+
+    md_content = f"# {title}\n\n**Adapted from**: [{url}]({url})\n\n## Instructions\n\n{instructions}\n"
+    md_path.write_text(md_content)
+
+    data    = json.loads(METADATA_PATH.read_text())
+    recipes = data["recipes"]
+
+    if title not in recipes:
+        recipes[title] = {
+            "filename":          filename,
+            "source":            url,
+            "cuisine":           "American",
+            "meal_type":         "lunch",
+            "health":            "Heart-Healthy",
+            "status":            "active",
+            "lunch_suitable":    True,
+            "times_cooked":      0,
+            "times_eaten_lunch": 0,
+            "last_cooked_date":  None,
+            "last_lunch_date":   None,
+            "ingredients":       [],
+            "ingredients_raw":   [],
+            "instructions":      instructions[:2000],
+            "needs_review":      True,
+            "url":               url,
+        }
+        meta_path.write_text(json.dumps(data, indent=2))
+
+    base_url = _CONFIG.get("github_pages_base_url", "https://davidmallison.github.io/menubuilder-recipes")
+    gh_url   = f"{base_url.rstrip('/')}/{safe_name}"
+
+    return {
+        "ok":      True,
+        "recipe":  title,
+        "url":     gh_url,
+        "message": f"Added '{title}' as a lunch recipe. Marked needs_review=true. Run generate_github_pages_data.py + push to publish.",
     }
 
 
