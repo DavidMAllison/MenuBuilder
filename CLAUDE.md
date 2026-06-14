@@ -234,7 +234,7 @@
 
 ### Other Preferences
 - **No duplicate proteins in a week** -- e.g., don't put salmon on two nights
-- **Hoisin-Glazed Pork Tenderloin** is overused; avoid unless specifically requested
+- **Hoisin-Glazed Pork Tenderloin** -- fine to include now that the recipe pool is large enough to rotate naturally; don't over-represent pork tenderloin but no longer needs a blanket avoid
 - **Incorporate new recipes regularly** -- pull from `times_cooked: 0` entries in recipe_metadata.json (all recipes are now `status: "active"` at intake) for variety
 - **Cuisine variety matters** -- aim for zero cuisine repeats across the week when possible
 - **Prefer direct, concise meal plans** -- no verbose notes in the plan file

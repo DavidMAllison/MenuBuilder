@@ -2,6 +2,17 @@
 
 ## Planned Features
 
+### Cooking Notes Into Recipe Files
+Family feedback and cooking tips currently live only in CLAUDE.md and memory files — they aren't in the recipe `.md` files where they'd actually be useful at cook time.
+
+**What to add**: a `## Notes` section at the bottom of each recipe file capturing:
+- Substitution warnings (e.g. "Blackened Cod Fish Tacos: use cod or tilapia only — halibut had off smell")
+- Marination time limits (e.g. "Vietnamese Lemongrass Chicken: marinate max 2 hours — lime breaks down chicken if longer")
+- Family-specific tips (e.g. "kids get plain chicken before sauce is added", "serve mushrooms on side")
+- Seasoning adjustments from experience (e.g. "Lime-Rubbed Chicken Tacos: increase seasoning or marinate longer, chicken lacked flavor first time")
+
+**Scope**: ~6-8 recipes have actionable notes right now. Check `project_recipe_specific_notes.md` in memory and the Workflow Notes section of CLAUDE.md for the full list. Add notes during normal recipe use — no need for a bulk backfill run.
+
 ### Ingredient Name Normalization at Intake
 The current `_ING_ALIASES` dict in `mcp/menu_server.py` hard-codes canonical mappings (e.g. "kosher salt" → "salt", "fresh ginger" → "ginger"). This works but requires manual maintenance every time a new recipe introduces a new naming variant.
 
