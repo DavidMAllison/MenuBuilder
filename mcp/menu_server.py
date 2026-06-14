@@ -2712,6 +2712,38 @@ def sync_atk_recipes(target: int = 5, dry_run: bool = False, collection: str = "
 
 
 @mcp.tool()
+def get_lunch_pick() -> dict:
+    """
+    Return Ashley's current weekly lunch pick (name and URL).
+
+    Returns:
+        {"name": recipe_name, "url": github_pages_url, "status": "selected" | "none"}
+        status is "none" if no pick has been made this week.
+    """
+    if not LUNCH_STATE_FILE.exists():
+        return {"name": "", "url": "", "status": "none"}
+    try:
+        state = json.loads(LUNCH_STATE_FILE.read_text())
+    except Exception:
+        return {"name": "", "url": "", "status": "none"}
+
+    if state.get("status") != "selected" or not state.get("current_pick"):
+        return {"name": "", "url": "", "status": "none"}
+
+    name = state["current_pick"]
+    url = state.get("url", "")
+
+    # Fallback: look up URL from metadata if not stored in state
+    if not url:
+        recipes = _load_metadata()
+        key = _find_recipe_key(name, recipes)
+        if key:
+            url = _recipe_url(key, recipes[key])
+
+    return {"name": name, "url": url, "status": "selected"}
+
+
+@mcp.tool()
 def get_lunch_suggestions(exclude: str = "") -> dict:
     """
     Return 3 lunch suggestions for Ashley.
