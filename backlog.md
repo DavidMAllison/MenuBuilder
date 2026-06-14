@@ -2,6 +2,18 @@
 
 ## Planned Features
 
+### Prep-Adjusted Cook Time for Weeknight Scheduling
+When Sunday prep is done ahead (marinating, chopping, par-cooking components), a recipe that's 60 min total may only need 20–25 min of active evening time. The current scheduler uses total cook time to determine "quick" eligibility — this makes many good weeknight-viable recipes appear too slow.
+
+**Proposed approach:**
+- Add `active_cook_minutes` field to `recipe_metadata.json` — cook time with prepable components already done
+- Or derive it from existing `prep_components`: total time minus estimated prep duration
+- `suggest_meals.py --quick` filter uses `active_cook_minutes` instead of total minutes
+- Meal plan display: "60 min (20 active if prepped Sun)" so the real weeknight commitment is visible
+- Sunday prep guide already outputs what to do ahead — this closes the loop by making those recipes selectable on busy nights
+
+**Note:** `prep_components` and `prep_notes` fields already exist on all recipes (backfilled Jun 2026). The data is there — just needs to flow into the scheduler.
+
 ### Cooking Notes Into Recipe Files
 Family feedback and cooking tips currently live only in CLAUDE.md and memory files — they aren't in the recipe `.md` files where they'd actually be useful at cook time.
 
