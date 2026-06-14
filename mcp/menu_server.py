@@ -17,11 +17,13 @@ Tools:
   activate_idea_recipe     — activate a pending idea from provided markdown content
   generate_shopping_list   — write shopping CSV from finalized meals (authoritative — sms-assistant calls this)
   finalize_plan            — generate plan + shopping CSV, launch apps
+  process_recipe_url       — check for similar recipe, add if new, optionally swap into day
   get_prep_guide           — on-demand prep guide (mode: weekly | tonight | auto)
   sync_atk_recipes         — import new recipes from ATK favorite collections
 """
 
 import csv
+import difflib
 import io
 import json
 import os
@@ -31,6 +33,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -169,6 +172,135 @@ def _find_recipe_key(name: str, recipes: dict) -> Optional[str]:
         if len(words) >= 2 and sum(1 for w in words if w in name_lower) >= 2:
             return key
     return None
+
+
+def _title_similarity(a: str, b: str) -> float:
+    return difflib.SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+
+def _find_similar_recipe(title: str, url: str, recipes: dict) -> Optional[tuple]:
+    """
+    Check if an existing recipe is similar to the given title or URL.
+    Returns (recipe_name, score) if found (score 1.0 = exact URL match), else None.
+    Threshold: 0.75 fuzzy title match.
+    """
+    if url:
+        for name, r in recipes.items():
+            if r.get("source_url") == url or r.get("url") == url:
+                return (name, 1.0)
+    if title:
+        best_name, best_score = None, 0.0
+        for name in recipes:
+            score = _title_similarity(title, name)
+            if score > best_score:
+                best_name, best_score = name, score
+        if best_score >= 0.75:
+            return (best_name, round(best_score, 2))
+    return None
+
+
+_DAY_ALIASES: dict[str, str] = {
+    "monday": "Mon", "mon": "Mon",
+    "tuesday": "Tue", "tue": "Tue", "tues": "Tue",
+    "wednesday": "Wed", "wed": "Wed",
+    "thursday": "Thu", "thu": "Thu", "thur": "Thu", "thurs": "Thu",
+    "friday": "Fri", "fri": "Fri",
+    "saturday": "Sat", "sat": "Sat",
+    "sunday": "Sun", "sun": "Sun",
+}
+
+
+def _extract_day_from_text(text: str) -> str:
+    """Return the first day abbreviation found in free text, or ''."""
+    lower = text.lower()
+    for word, abbrev in _DAY_ALIASES.items():
+        if re.search(r'\b' + word + r'\b', lower):
+            return abbrev
+    return ""
+
+
+def _full_recipe_add(url: str, fetched_data: Optional[dict]) -> dict:
+    """
+    Full parse-and-add pipeline for a new recipe URL.
+    fetched_data may already be populated from a prior _fetch_recipe_data call.
+    Returns {title, health, time} on success or {error: ...} on failure.
+    """
+    import anthropic as _anthropic
+
+    if not fetched_data or not fetched_data.get("title"):
+        try:
+            resp = httpx.get(url, headers=_FETCH_HEADERS, timeout=20, follow_redirects=True)
+            resp.raise_for_status()
+            html = resp.text[:40000]
+        except Exception as e:
+            return {"error": f"Could not fetch URL: {e}"}
+
+        client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        try:
+            extraction = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=2000,
+                messages=[{"role": "user", "content": (
+                    "Extract this recipe from the HTML. Return valid JSON only with keys: "
+                    "title (string), ingredients (list of strings), "
+                    "instructions (list of step strings), time (e.g. '45 minutes'), "
+                    "servings (string), cuisine (string).\n\nHTML:\n" + html
+                )}],
+            )
+            fetched_data = json.loads(extraction.content[0].text)
+        except Exception as e:
+            return {"error": f"Could not extract recipe: {e}"}
+
+    if not fetched_data or not fetched_data.get("title"):
+        return {"error": "Could not determine recipe title from page"}
+
+    title = fetched_data["title"].strip()
+    ings_raw = fetched_data.get("ingredients", [])
+
+    # Health classification
+    try:
+        client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        health_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=20,
+            messages=[{"role": "user", "content": (
+                f"Classify as Heart-Healthy, Moderate, or Indulgent.\n"
+                f"Recipe: {title}\nIngredients: {ings_raw[:10]}\n"
+                "Reply with exactly one of: Heart-Healthy, Moderate, Indulgent"
+            )}],
+        )
+        health = health_resp.content[0].text.strip()
+        if health not in ("Heart-Healthy", "Moderate", "Indulgent"):
+            health = "Moderate"
+    except Exception:
+        health = "Moderate"
+
+    source_name = urlparse(url).netloc.replace("www.", "")
+    md_path = _write_recipe_md(title, fetched_data, url, source_name)
+
+    recipes = _load_metadata()
+    if not _find_recipe_key(title, recipes):
+        time_str = fetched_data.get("time", "")
+        mins = _parse_minutes(time_str)
+        recipes[title] = {
+            "status": "active",
+            "source": source_name,
+            "source_url": url,
+            "url": url,
+            "filename": md_path.name,
+            "time": time_str,
+            "cuisine_type": fetched_data.get("cuisine", ""),
+            "health_classification": health,
+            "meal_type": "Weekend" if mins > 60 else "Weeknight",
+            "times_cooked": 0,
+            "last_cooked_date": None,
+            "ingredients_raw": ings_raw,
+            "instructions": fetched_data.get("instructions", []),
+            "ingredients": [],
+        }
+        _save_metadata(recipes)
+
+    return {"title": title, "health": health, "time": fetched_data.get("time", "")}
 
 
 # ---------------------------------------------------------------------------
@@ -1903,6 +2035,103 @@ def approve_menu() -> dict:
 
 
 @mcp.tool()
+def process_recipe_url(url: str, day: str = "", force_add: bool = False) -> dict:
+    """
+    Process a recipe URL for use in meal planning.
+
+    First checks if a similar recipe already exists in the collection (by URL or
+    fuzzy title match). If a match is found, surfaces it rather than auto-adding —
+    the caller should ask the user whether to use the existing recipe or add the new one.
+
+    Args:
+        url:       Recipe URL to process.
+        day:       Optional day abbreviation (Mon/Tue/Wed/Thu/Fri/Sat/Sun).
+                   If provided and the recipe is new or force_add=True, the recipe
+                   is swapped into that day in the current activity.
+        force_add: If True, skip similarity check and add as a new recipe even if
+                   a similar one already exists. Use this after the user confirms
+                   they want the new variety.
+
+    Returns when similar exists (status="similar_exists"):
+        {
+          status: "similar_exists",
+          recipe: existing recipe name,
+          match_score: 0.0–1.0 (1.0 = exact URL match),
+          url: the input URL,
+          message: human-readable prompt to surface to the user,
+        }
+
+    Returns when added (status="added"):
+        {
+          status: "added",
+          recipe: new recipe name,
+          health: Heart-Healthy | Moderate | Indulgent,
+          time: cook time string,
+          swapped_day: day (if day was provided),
+          outgoing_recipe: recipe replaced (if day was provided),
+          message: summary string,
+        }
+    """
+    recipes = _load_metadata()
+
+    # 1. Lightweight fetch for title (used in similarity check)
+    fetched_data = _fetch_recipe_data(url)
+    title_guess = fetched_data.get("title", "") if fetched_data else ""
+
+    # 2. Similarity check (unless force_add)
+    if not force_add:
+        match = _find_similar_recipe(title_guess, url, recipes)
+        if match:
+            existing_name, score = match
+            msg = (
+                f"Similar recipe already in collection: \"{existing_name}\" "
+                f"({score:.0%} match). "
+                "Ask the user: use the existing recipe, or add this new variety? "
+                "If new variety: call process_recipe_url again with force_add=true."
+            )
+            result: dict = {
+                "status": "similar_exists",
+                "recipe": existing_name,
+                "match_score": score,
+                "url": url,
+                "message": msg,
+            }
+            if day:
+                result["note"] = (
+                    f"Day '{day}' requested. Confirm recipe choice first, "
+                    f"then call swap_meal(day='{day}', replacement='<chosen recipe>')."
+                )
+            return result
+
+    # 3. No match (or force_add) — full parse and add
+    add_result = _full_recipe_add(url, fetched_data)
+    if "error" in add_result:
+        return add_result
+
+    title = add_result["title"]
+
+    # 4. Swap into plan if day provided
+    swap_result: dict = {}
+    if day:
+        activity = _load_activity()
+        selected = dict(activity.get("selected_meals", {}))
+        outgoing = selected.get(day)
+        selected[day] = title
+        activity["selected_meals"] = selected
+        _save_activity(activity)
+        swap_result = {"swapped_day": day, "outgoing_recipe": outgoing}
+
+    return {
+        "status": "added",
+        "recipe": title,
+        "health": add_result.get("health", ""),
+        "time": add_result.get("time", ""),
+        "message": f"Added '{title}' to recipe collection.{' Swapped into ' + day + '.' if day else ''}",
+        **swap_result,
+    }
+
+
+@mcp.tool()
 def handle_ashley_reply(reply: str) -> dict:
     """
     Process Ashley's reply to the proposed menu.
@@ -1935,6 +2164,24 @@ def handle_ashley_reply(reply: str) -> dict:
     lowered = reply.lower().strip()
     selected = activity.get("selected_meals", {})
     week_start = date.fromisoformat(activity["week_start"])
+
+    # ── URL in reply — route to process_recipe_url ──
+    url_match = re.search(r'https?://\S+', reply)
+    if url_match:
+        url = url_match.group(0).rstrip(".,)")
+        extracted_day = _extract_day_from_text(reply)
+        return {
+            "parsed": False,
+            "has_url": True,
+            "url": url,
+            "extracted_day": extracted_day,
+            "message": (
+                f"Reply contains a recipe URL{' for ' + extracted_day if extracted_day else ''}. "
+                f"Call process_recipe_url(url='{url}'"
+                + (f", day='{extracted_day}'" if extracted_day else "")
+                + ") to check for similar recipes before swapping."
+            ),
+        }
 
     # ── Approval ──
     if any(lowered == p or lowered.startswith(p + " ") for p in APPROVAL_PHRASES):
