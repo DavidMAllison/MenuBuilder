@@ -2,6 +2,25 @@
 
 ## Planned Features
 
+### Ingredient Name Normalization at Intake
+The current `_ING_ALIASES` dict in `mcp/menu_server.py` hard-codes canonical mappings (e.g. "kosher salt" → "salt", "fresh ginger" → "ginger"). This works but requires manual maintenance every time a new recipe introduces a new naming variant.
+
+**Root cause**: structured `ingredients` arrays are written to `recipe_metadata.json` with whatever names Haiku parsed from `ingredients_raw` — no normalization step.
+
+**Preferred fix — normalize at intake**:
+1. After Haiku parses `ingredients_raw` → `[{name, quantity, unit, category}]` in `backfill_ingredients.py` and `fill_menu_ideas.py`, add a second Haiku call that canonicalizes ingredient names.
+2. Prompt: "Normalize these ingredient names to their canonical grocery store form. Rules: (1) drop 'fresh' prefix when the dried form is a distinct product ('fresh thyme' stays 'fresh thyme' because 'dried thyme' is different; 'fresh cilantro' → 'cilantro' because dried cilantro isn't used). (2) Flatten punctuation variants ('boneless, skinless chicken thighs' → 'boneless skinless chicken thighs'). (3) Don't merge fresh vs dried herbs (thyme, rosemary, oregano). (4) Don't merge 'chopped tomatoes' with 'diced tomatoes' — one may be fresh."
+3. Write normalized names to JSON. One Haiku call per recipe (batch the name list).
+4. Run `backfill_ingredients.py` once to re-normalize all 161 existing recipes.
+
+**Fallback**: keep `_ING_ALIASES` as a thin safety net for edge cases and variants the normalization misses. The alias dict should shrink over time as intake data gets cleaner.
+
+**Alternative** (if intake normalization is too slow): single Haiku call at list-generation time that receives all ingredient names for the week and returns a dedup/merge map. Adds ~1s latency but handles anything without touching the JSON.
+
+**Why not fuzzy string matching**: food names have too many false positives (garlic ≠ garlic powder, salt ≠ sea salt at the same similarity score as kosher salt ≠ salt).
+
+
+
 ### Weekly Lunch Recommendation
 **Status**: COMPLETE Jun 13 2026.
 - Saturday 10 AM SMS → 3 suggestions → Ashley picks → ingredients added to shopping list dated Saturday
