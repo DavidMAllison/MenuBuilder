@@ -330,7 +330,7 @@ def score(c):
     s -= min(c['age_weeks'], 52) * 2
     # Prefer heart-healthy
     if c['health'] == 'Heart-Healthy':
-        s -= 5
+        s -= 15
     elif c['health'] == 'Indulgent':
         s += 10
     # Prefer less-cooked (new/underused recipes)
@@ -348,12 +348,13 @@ def score(c):
     if c.get('kid_friendly'):
         s -= 3
     # Inventory: lean toward recipes using what's on hand
+    # Capped lower than health bonus so freezer contents don't override health goals
     if c.get('inv_specific'):
-        s -= 12   # specific ingredient match (e.g. pork tenderloin in stock)
+        s -= 7    # specific ingredient match (e.g. pork tenderloin in stock)
     elif c.get('inv_broad'):
-        s -= 5    # broad protein match (e.g. any chicken recipe when chicken is stocked)
+        s -= 3    # broad protein match (e.g. any chicken recipe when chicken is stocked)
     if c.get('inv_pantry'):
-        s -= 4    # pantry/dry goods match (e.g. rigatoni or heavy cream in stock)
+        s -= 2    # pantry/dry goods match (e.g. rigatoni or heavy cream in stock)
     return s
 
 
@@ -391,11 +392,36 @@ def main():
                         help='Comma-separated days with early practices needing quick meals (e.g. mon,tue,thu)')
     parser.add_argument('--week', type=str, default='',
                         help='Week start date YYYY-MM-DD (default: next Monday)')
+    parser.add_argument('--json', action='store_true',
+                        help='Output candidates as JSON array sorted by score (for programmatic use)')
     args = parser.parse_args()
 
     quick_days = [d.strip().lower() for d in args.quick.split(',') if d.strip()]
 
     candidates, is_grill_season = load_candidates()
+
+    if args.json:
+        import json as _json
+        out = []
+        for c in sorted(candidates, key=score):
+            time_str = f"{c['minutes']} min" if c['minutes'] < 900 else '?'
+            if c['method'] == 'slow_cooker':
+                time_str = 'slow cooker'
+            out.append({
+                'name':       c['name'],
+                'cuisine':    c['cuisine'],
+                'health':     c['health'],
+                'minutes':    c['minutes'],
+                'time_str':   time_str,
+                'is_quick':   c['is_quick'],
+                'is_grill':   c['is_grill'],
+                'meal_type':  c['meal_type'],
+                'times_cooked': c['times_cooked'],
+                'last_cooked':  c['last_cooked'],
+                'score':      score(c),
+            })
+        print(_json.dumps(out))
+        return
     inventory_items = load_inventory()
 
     total = len(candidates)
