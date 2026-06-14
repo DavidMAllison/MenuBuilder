@@ -123,7 +123,8 @@ DAY_NAME_MAP = {
 
 APPROVAL_PHRASES = (
     "looks good", "good", "ok", "okay", "approved", "go ahead", "perfect",
-    "great", "sounds good", "yes", "yep", "yeah", "love it", "fine", "sure", "\U0001f44d"
+    "great", "sounds good", "yes", "yep", "yeah", "love it", "fine", "sure",
+    "we're good", "all good", "\U0001f44d"
 )
 
 # ---------------------------------------------------------------------------
@@ -502,7 +503,7 @@ def _candidate_score(c: dict) -> float:
     s -= min(age_weeks, 52) * 2
     health = c.get("health", "Moderate")
     if health == "Heart-Healthy":
-        s -= 5
+        s -= 15
     elif health == "Indulgent":
         s += 10
     s += c.get("times_cooked", 0) * 2
@@ -517,11 +518,11 @@ def _candidate_score(c: dict) -> float:
     if c.get("kid_friendly"):
         s -= 3
     if c.get("inv_specific"):
-        s -= 12
+        s -= 7
     elif c.get("inv_broad"):
-        s -= 5
+        s -= 3
     if c.get("inv_pantry"):
-        s -= 4
+        s -= 2
     return s
 
 
@@ -770,11 +771,14 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
         if not isinstance(swaps, list) or not swaps:
             return None
         new_selected = dict(selected)
+        candidate_set = {n.lower() for n in candidate_names}
         changed = False
         for swap in swaps:
             day = (swap.get("day") or "").strip()
             to_meal = (swap.get("to") or "").strip()
             if day and to_meal and day in new_selected:
+                if to_meal.lower() not in candidate_set:
+                    return None
                 new_selected[day] = to_meal
                 changed = True
         return new_selected if changed else None
@@ -1763,6 +1767,10 @@ def handle_ashley_reply(reply: str) -> dict:
 
     if new_selected:
         activity["selected_meals"] = new_selected
+        # If the reply also signals approval, finalize immediately
+        if any(p in lowered for p in APPROVAL_PHRASES):
+            _save_activity(activity)
+            return _do_finalize(activity)
         day_to_date = _day_date_map(week_start)
         meals_json = [
             {"day": f"{day} {day_to_date[day].strftime('%-m/%-d')}", "recipe": new_selected[day]}
