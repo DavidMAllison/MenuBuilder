@@ -2463,6 +2463,30 @@ def generate_shopping_list(meals: dict, week_start: str) -> dict:
 
 
 @mcp.tool()
+def get_recipe_url(name: str) -> dict:
+    """
+    Look up the GitHub Pages URL for a recipe by name.
+
+    Uses the same fuzzy key lookup and URL construction as the rest of the
+    planning tools. Prefers GitHub Pages URL; falls back to source_url.
+
+    Args:
+        name: Recipe name (exact or fuzzy match).
+
+    Returns:
+        {"name": resolved_name, "url": url_string}
+        url is "" if the recipe is not found or has no URL.
+    """
+    recipes = _load_metadata()
+    key = _find_recipe_key(name, recipes)
+    if not key:
+        return {"name": name, "url": ""}
+    meta = recipes[key]
+    url = _recipe_url(key, meta)
+    return {"name": key, "url": url}
+
+
+@mcp.tool()
 def get_prep_guide(mode: str = "auto") -> dict:
     """
     On-demand prep guide for the current week's meal plan.
