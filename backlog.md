@@ -6,7 +6,7 @@
 **Status**: COMPLETE Jun 13 2026.
 - Saturday 10 AM SMS → 3 suggestions → Ashley picks → ingredients added to shopping list dated Saturday
 - Saturday 6 PM nudge if no reply
-- sms-assistant handoff still pending: wire `set_lunch_pick` + `log_lunch_feedback` tools in `tools.py` + system prompt addition
+- sms-assistant: `set_lunch_pick` + `log_lunch_feedback` wired in `tools.py` + system prompt updated
 
 ### Lunch Calendar Event (Nice to Have)
 - After `set_lunch_pick` is called, create one iCloud calendar event "Ashley's Lunch: [recipe]" recurring Sun–Fri

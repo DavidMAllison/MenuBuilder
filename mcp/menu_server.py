@@ -790,6 +790,61 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
 # Recipe URL helpers
 # ---------------------------------------------------------------------------
 
+def _ensure_url_in_library(url: str) -> Optional[str]:
+    """
+    Given a URL from Ashley's message, ensure the recipe is in the library.
+    - If a recipe already has this source_url, returns its name.
+    - If not, fetches recipe data and adds it as a new active entry.
+    - Returns the recipe name, or None if the URL couldn't be fetched.
+    """
+    url = url.rstrip(".,)")
+    recipes = _load_metadata()
+
+    # Check if already in library by source_url
+    for name, meta in recipes.items():
+        if isinstance(meta, dict) and meta.get("source_url", "").rstrip("/") == url.rstrip("/"):
+            return name
+
+    # Try to fetch
+    recipe_data = _fetch_recipe_data(url)
+    if not recipe_data or not recipe_data.get("title"):
+        return None
+
+    title = recipe_data["title"]
+    source = url.split("/")[2]  # domain as source name
+
+    existing_key = _find_recipe_key(title, recipes)
+    if existing_key:
+        recipes[existing_key]["source_url"] = url
+        _save_metadata(recipes)
+        return existing_key
+
+    # New recipe — write .md and add to metadata
+    RECIPES_DIR.mkdir(exist_ok=True)
+    md_path = _write_recipe_md(title, recipe_data, url, source)
+    recipes[title] = {
+        "title": title,
+        "filename": md_path.name,
+        "source": source,
+        "source_url": url,
+        "cuisine": recipe_data.get("cuisine", ""),
+        "meal_type": "",
+        "health": "",
+        "times_cooked": 0,
+        "time": recipe_data.get("time", ""),
+        "servings": str(recipe_data.get("servings", "")),
+        "status": "active",
+        "cooking_method": "",
+        "last_cooked_date": None,
+        "ingredients": [],
+        "ingredients_raw": recipe_data.get("ingredients", []),
+        "instructions": recipe_data.get("instructions", []),
+        "needs_review": True,
+    }
+    _save_metadata(recipes)
+    return title
+
+
 def _recipe_url(recipe_name: str, metadata_entry: dict) -> str:
     """Return the best URL for a recipe — GitHub Pages if .md exists, else Dropbox."""
     filename = metadata_entry.get("filename", "")
@@ -1019,19 +1074,72 @@ def _build_plan_text(selected: dict, week_start: date, schedule_notes: list) -> 
 # Shopping CSV generation
 # ---------------------------------------------------------------------------
 
+# Canonical ingredient aliases — normalizes pantry staples before deduplication
+_ING_ALIASES: dict[str, str] = {
+    "extra-virgin olive oil": "olive oil",
+    "extra virgin olive oil": "olive oil",
+    "table salt":             "salt",
+    "kosher salt":            "salt",
+    "fine salt":              "salt",
+    "sea salt":               "salt",
+    "black pepper":           "pepper",
+    "ground black pepper":    "pepper",
+    "freshly ground pepper":  "pepper",
+    "white pepper":           "pepper",
+    "garlic clove":           "garlic",
+    "garlic cloves":          "garlic",
+    "vegetable oil":          "neutral oil",
+    "canola oil":             "neutral oil",
+    "chicken stock":          "chicken broth",
+    "chicken bouillon":       "chicken broth",
+    "vegetable stock":        "vegetable broth",
+    "scallion":               "green onions",
+    "scallions":              "green onions",
+    "green onion":            "green onions",
+}
+
+def _canonical_ing(name: str) -> str:
+    lower = name.lower().strip()
+    return _ING_ALIASES.get(lower, lower)
+
+
+def _display_ing(name: str) -> str:
+    """Return canonical alias if one exists, else the original name (preserves case)."""
+    lower = name.lower().strip()
+    return _ING_ALIASES.get(lower, name)
+
+
 def _build_shopping_csv(selected: dict, week_start: date) -> str:
     """
-    Generate shopping CSV content.
-    Format: Item, Notes (qty + unit), Date (cook date as YYYY-MM-DD)
+    Generate shopping CSV content, aggregating duplicate ingredients across recipes.
+    Format: Item, Notes (qty + meal context), Date (earliest date needed as YYYY-MM-DD)
 
     Ingredient fallback order per CLAUDE.md:
-      1. structured `ingredients` array  → Item=name, Notes=qty unit
-      2. `ingredients_raw` strings       → Item=full raw string, Notes=''
-      3. no ingredients                  → skip recipe
+      1. structured `ingredients` array
+      2. `ingredients_raw` strings
+      3. no ingredients → skip recipe
     """
     recipes = _load_metadata()
     day_to_date = _day_date_map(week_start)
-    rows = []
+
+    # Collect all occurrences: (canonical_key, display_name, qty_unit, meal_label, date_str)
+    occurrences: list[tuple] = []
+
+    def _add_structured(ing_list, meal_label, date_str):
+        for ing in ing_list:
+            ing_name = str(ing.get("name", "")).strip()
+            if not ing_name:
+                continue
+            qty  = str(ing.get("quantity", "")).strip()
+            unit = str(ing.get("unit", "")).strip()
+            qty_unit = f"{qty} {unit}".strip()
+            occurrences.append((_canonical_ing(ing_name), _display_ing(ing_name), qty_unit, meal_label, date_str))
+
+    def _add_raw(raw_list, meal_label, date_str):
+        for raw in raw_list:
+            raw = str(raw).strip()
+            if raw:
+                occurrences.append((_canonical_ing(raw), _display_ing(raw), "", meal_label, date_str))
 
     for day in DAYS_ORDER:
         if day not in selected:
@@ -1044,22 +1152,11 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
         if not cook_date:
             continue
         date_str = cook_date.isoformat()
-
         structured = recipes[key].get("ingredients", [])
         if structured:
-            for ing in structured:
-                qty = str(ing.get("quantity", "")).strip()
-                unit = str(ing.get("unit", "")).strip()
-                ing_name = str(ing.get("name", "")).strip()
-                if not ing_name:
-                    continue
-                notes = f"{qty} {unit}".strip() if (qty or unit) else ""
-                rows.append({"Item": ing_name, "Notes": notes, "Date": date_str})
+            _add_structured(structured, name, date_str)
         else:
-            for raw in recipes[key].get("ingredients_raw", []):
-                raw = str(raw).strip()
-                if raw:
-                    rows.append({"Item": raw, "Notes": "", "Date": date_str})
+            _add_raw(recipes[key].get("ingredients_raw", []), name, date_str)
 
     # Append lunch ingredients if Ashley has picked this week
     if LUNCH_STATE_FILE.exists():
@@ -1069,25 +1166,42 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
             if pick and lunch.get("status") == "selected":
                 key = _find_recipe_key(pick, recipes)
                 if key:
-                    # Saturday = week_start - 2 days (prep before Sunday cook)
                     sat_date = (week_start - timedelta(days=2)).isoformat()
                     structured = recipes[key].get("ingredients", [])
                     if structured:
-                        for ing in structured:
-                            ing_name = str(ing.get("name", "")).strip()
-                            qty  = str(ing.get("quantity", "")).strip()
-                            unit = str(ing.get("unit", "")).strip()
-                            if not ing_name:
-                                continue
-                            notes = f"{qty} {unit} | Ashley's lunch".strip(" |")
-                            rows.append({"Item": ing_name, "Notes": notes, "Date": sat_date})
+                        _add_structured(structured, "Ashley's lunch", sat_date)
                     else:
-                        for raw in recipes[key].get("ingredients_raw", []):
-                            raw = str(raw).strip()
-                            if raw:
-                                rows.append({"Item": raw, "Notes": "Ashley's lunch", "Date": sat_date})
+                        _add_raw(recipes[key].get("ingredients_raw", []), "Ashley's lunch", sat_date)
         except Exception:
-            pass  # don't let lunch state errors break shopping list generation
+            pass
+
+    # Aggregate: group by canonical key, earliest date wins
+    grouped: dict[str, dict] = {}
+    for canon, display, qty_unit, meal_label, date_str in occurrences:
+        if canon not in grouped:
+            grouped[canon] = {"display": display, "date": date_str, "parts": []}
+        elif date_str < grouped[canon]["date"]:
+            grouped[canon]["date"] = date_str
+        grouped[canon]["parts"].append((qty_unit, meal_label))
+
+    # Build final rows
+    rows = []
+    for canon, g in grouped.items():
+        parts = g["parts"]
+        if len(parts) == 1:
+            qty_unit, meal_label = parts[0]
+            notes = f"{qty_unit} | {meal_label}".strip(" |") if qty_unit else meal_label
+        else:
+            note_parts = []
+            seen: set = set()
+            for qty_unit, meal_label in parts:
+                short = meal_label.split(" with ")[0][:28]
+                entry = f"{qty_unit} ({short})" if qty_unit else short
+                if entry not in seen:
+                    note_parts.append(entry)
+                    seen.add(entry)
+            notes = " + ".join(note_parts)
+        rows.append({"Item": g["display"], "Notes": notes, "Date": g["date"]})
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=["Item", "Notes", "Date"])
