@@ -1076,26 +1076,123 @@ def _build_plan_text(selected: dict, week_start: date, schedule_notes: list) -> 
 
 # Canonical ingredient aliases — normalizes pantry staples before deduplication
 _ING_ALIASES: dict[str, str] = {
-    "extra-virgin olive oil": "olive oil",
-    "extra virgin olive oil": "olive oil",
-    "table salt":             "salt",
-    "kosher salt":            "salt",
-    "fine salt":              "salt",
-    "sea salt":               "salt",
-    "black pepper":           "pepper",
-    "ground black pepper":    "pepper",
-    "freshly ground pepper":  "pepper",
-    "white pepper":           "pepper",
-    "garlic clove":           "garlic",
-    "garlic cloves":          "garlic",
-    "vegetable oil":          "neutral oil",
-    "canola oil":             "neutral oil",
-    "chicken stock":          "chicken broth",
-    "chicken bouillon":       "chicken broth",
-    "vegetable stock":        "vegetable broth",
-    "scallion":               "green onions",
-    "scallions":              "green onions",
-    "green onion":            "green onions",
+    # Olive oil variants
+    "extra-virgin olive oil":   "olive oil",
+    "extra virgin olive oil":   "olive oil",
+    # Salt variants
+    "table salt":               "salt",
+    "kosher salt":              "salt",
+    "kosher or sea salt":       "salt",
+    "fine salt":                "salt",
+    "sea salt":                 "salt",
+    "fleur de sel":             "salt",
+    "flaky salt":               "salt",
+    # Pepper variants
+    "black pepper":             "pepper",
+    "ground black pepper":      "pepper",
+    "freshly ground pepper":    "pepper",
+    "freshly ground black pepper": "pepper",
+    "cracked black pepper":     "pepper",
+    "white pepper":             "pepper",
+    "ground white pepper":      "pepper",
+    # Garlic variants
+    "garlic clove":             "garlic",
+    "garlic cloves":            "garlic",
+    "minced garlic":            "garlic",
+    # Ginger variants (fresh only — "ground ginger" is a dried spice, not aliased)
+    "fresh ginger":             "ginger",
+    "ginger root":              "ginger",
+    "minced ginger":            "ginger",
+    # Neutral oil variants
+    "vegetable oil":            "neutral oil",
+    "canola oil":               "neutral oil",
+    "peanut oil":               "neutral oil",
+    "grapeseed oil":            "neutral oil",
+    "sunflower oil":            "neutral oil",
+    "corn oil":                 "neutral oil",
+    "oil":                      "neutral oil",
+    # Chicken broth variants
+    "chicken stock":            "chicken broth",
+    "chicken bouillon":         "chicken broth",
+    "low sodium chicken stock": "chicken broth",
+    "low-sodium chicken stock": "chicken broth",
+    "low sodium chicken broth": "chicken broth",
+    "low-sodium chicken broth": "chicken broth",
+    # Vegetable broth variants
+    "vegetable stock":          "vegetable broth",
+    "low sodium vegetable broth": "vegetable broth",
+    "low-sodium vegetable broth": "vegetable broth",
+    # Soy sauce variants
+    "low sodium soy sauce":     "soy sauce",
+    "low-sodium soy sauce":     "soy sauce",
+    "tamari soy sauce":         "soy sauce",
+    # Rice vinegar variants
+    "natural rice vinegar":     "rice vinegar",
+    "unseasoned rice vinegar":  "rice vinegar",
+    "seasoned rice vinegar":    "rice vinegar",
+    # Scallion / green onion variants
+    "scallion":                 "green onions",
+    "scallions":                "green onions",
+    "green onion":              "green onions",
+    # Cilantro variants
+    "fresh cilantro":           "cilantro",
+    "chopped cilantro":         "cilantro",
+    "cilantro leaves":          "cilantro",
+    # Parsley variants
+    "fresh parsley":            "parsley",
+    "chopped parsley":          "parsley",
+    "flat-leaf parsley":        "parsley",
+    "italian parsley":          "parsley",
+    "fresh flat-leaf parsley":  "parsley",
+    # Butter variants
+    "unsalted butter":          "butter",
+    "salted butter":            "butter",
+    # Heavy cream variants
+    "heavy whipping cream":     "heavy cream",
+    "whipping cream":           "heavy cream",
+    # Lemon juice variants
+    "fresh lemon juice":        "lemon juice",
+    "freshly squeezed lemon juice": "lemon juice",
+    # Lime juice variants
+    "fresh lime juice":         "lime juice",
+    "freshly squeezed lime juice": "lime juice",
+    # Flour variants
+    "unbleached all-purpose flour": "all-purpose flour",
+    "unbleached flour":         "all-purpose flour",
+    "plain flour":              "all-purpose flour",
+    # Onion variants
+    "yellow onion":             "onion",
+    "white onion":              "onion",
+    "diced onion":              "onion",
+    "chopped onion":            "onion",
+    "chopped white onion":      "onion",
+    "chopped yellow onion":     "onion",
+    "medium onion":             "onion",
+    # Red onion variants
+    "red onion":                "red onions",
+    # Chicken thigh variants
+    "boneless, skinless chicken thighs":             "boneless skinless chicken thighs",
+    "boneless skinless chicken thighs or breast cutlets": "boneless skinless chicken thighs",
+    "boneless skinless chicken breast or thighs":   "boneless skinless chicken thighs",
+    "chicken thighs boneless skinless":             "boneless skinless chicken thighs",
+    "skinless boneless chicken thighs":             "boneless skinless chicken thighs",
+    # Chicken breast variants
+    "boneless, skinless chicken breasts":           "boneless skinless chicken breasts",
+    "boneless skinless chicken breast":             "boneless skinless chicken breasts",
+    # Mint variants (fresh only — "dried mint" is distinct, don't merge)
+    "fresh mint":               "mint",
+    "mint leaves":              "mint",
+    # Basil variants (fresh only — dried basil is distinct)
+    "fresh basil":              "basil",
+    "basil leaves":             "basil",
+    # NOTE: fresh thyme/rosemary intentionally NOT aliased to "thyme"/"rosemary"
+    # because "dried thyme" and "dried rosemary" are different shopping items.
+    # NOTE: cumin seeds, coriander seeds, ground ginger intentionally NOT aliased
+    # to ground cumin / coriander / ginger — different products.
+    # NOTE: plain "chopped tomatoes" intentionally NOT aliased — could be fresh or canned.
+    # Only explicitly-canned variants are merged.
+    "canned diced tomatoes":    "diced tomatoes",
+    "canned chopped tomatoes":  "diced tomatoes",
 }
 
 def _canonical_ing(name: str) -> str:
