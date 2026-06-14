@@ -54,6 +54,10 @@ atk_agent.py                  # America's Test Kitchen — syncs saved ATK colle
 fill_menu_ideas.py            # Run all agents in parallel and add new results to recipe_metadata.json as status="idea"
 prep_utils.py                 # Shared prep classification — prompt, classify_prep(), parse_md_instructions(); used by fill_menu_ideas and menu_server
 backfill_prep.py              # One-time (re-runnable) backfill of prep_components/prep_notes for all active recipes
+backfill_ingredients.py       # Re-runnable: Haiku batch-parses ingredients_raw → structured ingredients array for all active recipes
+suggest_lunch.py              # Scores lunch candidates for Ashley — filters lunch_suitable recipes, avoids last 4 weeks
+trigger_lunch_saturday.py     # launchd Saturday 10 AM: sends 3 lunch options to Ashley via Keanu
+trigger_lunch_nudge.py        # launchd Saturday 6 PM: nudges if Ashley hasn't picked yet
 save_to_recipeideas.py        # Save agent results to the recipeideas inbox
 generate_github_pages_data.py # Generate _data/recipes.json for GitHub Pages — run after metadata changes
 eval_mexican_agent.py         # Eval harness for mexican_agent
@@ -72,7 +76,7 @@ release-notes.md              # Shipped features log
 
 ## MCP Server
 
-`mcp/menu_server.py` exposes the weekly menu workflow as 6 tools callable from Claude Code
+`mcp/menu_server.py` exposes the weekly menu workflow as 14 tools callable from Claude Code
 or any MCP-compatible client (e.g. Keanu via SMS):
 
 | Tool | What it does |
@@ -89,6 +93,10 @@ or any MCP-compatible client (e.g. Keanu via SMS):
 | `finalize_plan` | Generates plan + shopping CSV, launches apps, notifies admin |
 | `get_prep_guide` | On-demand prep guide — `mode=weekly` (remaining meals this week) or `mode=tonight` (tonight's dinner); applies food-safety classification automatically |
 | `generate_shopping_list` | Writes shopping CSV from a finalized meal dict (authoritative — sms-assistant calls this) |
+| `get_lunch_suggestions` | Returns 3 scored lunch candidates for Ashley based on recency + variety |
+| `set_lunch_pick` | Saves Ashley's lunch pick, adds ingredients to the week's shopping CSV |
+| `log_lunch_feedback` | Records post-week lunch feedback (liked/disliked/not_made) |
+| `add_lunch_recipe_url` | Fetches a URL, parses it into a lunch-suitable recipe entry |
 
 Activity state lives in `menu_activity.json` (MenuBuilder's territory). See `mcp/README.md`
 for setup and Claude Code wiring instructions.
