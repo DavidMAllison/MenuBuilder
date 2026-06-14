@@ -330,7 +330,9 @@ def _parse_last_plan() -> list:
         except ValueError:
             continue
     dated.sort(key=lambda x: x[0], reverse=True)
-    plan_file = next((f for d, f in dated if d <= today), None)
+    # Plan filename is the Monday date; week starts Sunday (d-1). Allow d up to tomorrow
+    # so Sunday is covered by the current week's plan rather than falling back to last week.
+    plan_file = next((f for d, f in dated if d <= today + timedelta(days=1)), None)
     if not plan_file:
         return []
     meals = []
@@ -2510,7 +2512,9 @@ def get_prep_guide(mode: str = "auto") -> dict:
         except ValueError:
             continue
     dated.sort(key=lambda x: x[0], reverse=True)
-    plan_file = next((f for d, f in dated if d <= today), None)
+    # Plan filename is the Monday date; week starts Sunday (d-1). Allow d up to tomorrow
+    # so Sunday is covered by the current week's plan rather than falling back to last week.
+    plan_file = next((f for d, f in dated if d <= today + timedelta(days=1)), None)
     if not plan_file:
         return {"error": "No current meal plan found.", "prep_guide": "", "mode": mode}
 
