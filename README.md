@@ -51,7 +51,7 @@ indian_agent.py               # Indian recipe sources (Indian Healthy Recipes, H
 chef_agent.py                 # Chef recipe sources (Alton Brown, Smitten Kitchen, Chetna Makan)
 sites_agent.py                # Cross-cuisine sites (Serious Eats) via Playwright
 atk_agent.py                  # America's Test Kitchen — syncs saved ATK collections into recipe_metadata.json (paywall auth via Playwright, httpx for fetches)
-fill_menu_ideas.py            # Run all agents in parallel and add new results to recipe_metadata.json as status="idea"
+fill_menu_ideas.py            # Run all agents in parallel and add new results to recipe_metadata.json as status="active"
 prep_utils.py                 # Shared prep classification — prompt, classify_prep(), parse_md_instructions(); used by fill_menu_ideas and menu_server
 backfill_prep.py              # One-time (re-runnable) backfill of prep_components/prep_notes for all active recipes
 backfill_ingredients.py       # Re-runnable: Haiku batch-parses ingredients_raw → structured ingredients array for all active recipes
