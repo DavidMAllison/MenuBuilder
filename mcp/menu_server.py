@@ -3088,11 +3088,18 @@ def process_recipe_image(image_b64: str, mime_type: str = "image/jpeg",
                 ),
             }
 
-    # 3. Classify, write .md, and save metadata
+    # 3. Extract source credit from caption — look for "from <X>" pattern
+    _source_credit = ""
+    if source_note:
+        _m = re.search(r'\bfrom\s+(.+?)(?:\s*[,:]|$)', source_note.strip(), re.IGNORECASE)
+        if _m:
+            _source_credit = _m.group(1).strip()
+
+    # 4. Classify, write .md, and save metadata
     result = _classify_and_write(
         title, fetched_data,
         source_url="", source_name="",
-        source_credit=source_note.strip() if source_note else "",
+        source_credit=_source_credit,
         needs_review=True,
         recipes=recipes,
     )
