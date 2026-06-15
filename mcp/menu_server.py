@@ -197,6 +197,12 @@ def _find_similar_recipe(title: str, url: str, recipes: dict) -> Optional[tuple]
                 best_name, best_score = name, score
         if best_score >= 0.75:
             return (best_name, round(best_score, 2))
+        # Fuzzy match misses when vision extracts a shorter title than what's stored
+        # (e.g. "Chicken Fricassee" vs the full stored name). Word-based key lookup
+        # catches these — if 2+ significant words overlap, treat as similar.
+        key = _find_recipe_key(title, recipes)
+        if key:
+            return (key, 0.8)
     return None
 
 
