@@ -76,7 +76,7 @@ release-notes.md              # Shipped features log
 
 ## MCP Server
 
-`mcp/menu_server.py` exposes the weekly menu workflow as 14 tools callable from Claude Code
+`mcp/menu_server.py` exposes the weekly menu workflow as 18 tools callable from Claude Code
 or any MCP-compatible client (e.g. Keanu via SMS):
 
 | Tool | What it does |
@@ -97,6 +97,8 @@ or any MCP-compatible client (e.g. Keanu via SMS):
 | `set_lunch_pick` | Saves Ashley's lunch pick, adds ingredients to the week's shopping CSV |
 | `log_lunch_feedback` | Records post-week lunch feedback (liked/disliked/not_made) |
 | `add_lunch_recipe_url` | Fetches a URL, parses it into a lunch-suitable recipe entry |
+| `process_recipe_url` | Check for a similar existing recipe by URL or fuzzy title, add if new, optionally swap into a plan day; `force_add=true` skips similarity check |
+| `process_recipe_image` | Extract a recipe from a photo (cookbook page) via Claude vision and add to the collection; `force_add=true` re-runs with same image after user confirms |
 
 Activity state lives in `menu_activity.json` (MenuBuilder's territory). See `mcp/README.md`
 for setup and Claude Code wiring instructions.

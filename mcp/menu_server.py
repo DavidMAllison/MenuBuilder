@@ -18,6 +18,7 @@ Tools:
   generate_shopping_list   — write shopping CSV from finalized meals (authoritative — sms-assistant calls this)
   finalize_plan            — generate plan + shopping CSV, launch apps
   process_recipe_url       — check for similar recipe, add if new, optionally swap into day
+  process_recipe_image     — extract recipe from a photo (cookbook page), add to collection
   get_prep_guide           — on-demand prep guide (mode: weekly | tonight | auto)
   sync_atk_recipes         — import new recipes from ATK favorite collections
 """
@@ -219,6 +220,80 @@ def _extract_day_from_text(text: str) -> str:
     return ""
 
 
+def _classify_and_write(
+    title: str,
+    fetched_data: dict,
+    source_url: str,
+    source_name: str,
+    source_credit: str = "",
+    needs_review: bool = False,
+    recipes: Optional[dict] = None,
+) -> dict:
+    """
+    Shared final stage of recipe intake: health classify, write .md, save metadata.
+    Called by both _full_recipe_add (URL path) and process_recipe_image (image path).
+
+    source_url / source_name: populated for URL-sourced recipes.
+    source_credit:            plain-text attribution for book/non-URL recipes.
+    needs_review:             True for image-extracted recipes (vision can misread).
+    recipes:                  pass in if already loaded to avoid a double load.
+
+    Returns {title, health, time} on success.
+    """
+    import anthropic as _anthropic
+
+    ings_raw = fetched_data.get("ingredients", [])
+
+    try:
+        client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        health_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=20,
+            messages=[{"role": "user", "content": (
+                f"Classify as Heart-Healthy, Moderate, or Indulgent.\n"
+                f"Recipe: {title}\nIngredients: {ings_raw[:10]}\n"
+                "Reply with exactly one of: Heart-Healthy, Moderate, Indulgent"
+            )}],
+        )
+        health = health_resp.content[0].text.strip()
+        if health not in ("Heart-Healthy", "Moderate", "Indulgent"):
+            health = "Moderate"
+    except Exception:
+        health = "Moderate"
+
+    md_path = _write_recipe_md(title, fetched_data, source_url, source_name, source_credit)
+
+    if recipes is None:
+        recipes = _load_metadata()
+
+    if not _find_recipe_key(title, recipes):
+        time_str = fetched_data.get("time", "")
+        mins = _parse_minutes(time_str)
+        entry: dict = {
+            "status": "active",
+            "source": source_name or source_credit or "user submission",
+            "source_url": source_url,
+            "url": source_url,
+            "filename": md_path.name,
+            "time": time_str,
+            "cuisine_type": fetched_data.get("cuisine", ""),
+            "health_classification": health,
+            "meal_type": "Weekend" if mins > 60 else "Weeknight",
+            "times_cooked": 0,
+            "last_cooked_date": None,
+            "ingredients_raw": ings_raw,
+            "instructions": fetched_data.get("instructions", []),
+            "ingredients": [],
+        }
+        if needs_review:
+            entry["needs_review"] = True
+        recipes[title] = entry
+        _save_metadata(recipes)
+
+    time_str = fetched_data.get("time", "")
+    return {"title": title, "health": health, "time": time_str}
+
+
 def _full_recipe_add(url: str, fetched_data: Optional[dict]) -> dict:
     """
     Full parse-and-add pipeline for a new recipe URL.
@@ -227,7 +302,15 @@ def _full_recipe_add(url: str, fetched_data: Optional[dict]) -> dict:
     """
     import anthropic as _anthropic
 
-    if not fetched_data or not fetched_data.get("title"):
+    # Fall back to Haiku HTML extraction if ld+json was missing or incomplete.
+    # ld+json often has a title but empty recipeIngredient/recipeInstructions.
+    _needs_extraction = (
+        not fetched_data
+        or not fetched_data.get("title")
+        or not fetched_data.get("ingredients")
+        or not fetched_data.get("instructions")
+    )
+    if _needs_extraction:
         try:
             resp = httpx.get(url, headers=_FETCH_HEADERS, timeout=20, follow_redirects=True)
             resp.raise_for_status()
@@ -247,7 +330,11 @@ def _full_recipe_add(url: str, fetched_data: Optional[dict]) -> dict:
                     "servings (string), cuisine (string).\n\nHTML:\n" + html
                 )}],
             )
-            fetched_data = json.loads(extraction.content[0].text)
+            extracted = json.loads(extraction.content[0].text)
+            # Merge: keep ld+json title if we had one, fill missing fields from Haiku
+            if fetched_data and fetched_data.get("title"):
+                extracted["title"] = fetched_data["title"]
+            fetched_data = extracted
         except Exception as e:
             return {"error": f"Could not extract recipe: {e}"}
 
@@ -255,52 +342,8 @@ def _full_recipe_add(url: str, fetched_data: Optional[dict]) -> dict:
         return {"error": "Could not determine recipe title from page"}
 
     title = fetched_data["title"].strip()
-    ings_raw = fetched_data.get("ingredients", [])
-
-    # Health classification
-    try:
-        client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
-        health_resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=20,
-            messages=[{"role": "user", "content": (
-                f"Classify as Heart-Healthy, Moderate, or Indulgent.\n"
-                f"Recipe: {title}\nIngredients: {ings_raw[:10]}\n"
-                "Reply with exactly one of: Heart-Healthy, Moderate, Indulgent"
-            )}],
-        )
-        health = health_resp.content[0].text.strip()
-        if health not in ("Heart-Healthy", "Moderate", "Indulgent"):
-            health = "Moderate"
-    except Exception:
-        health = "Moderate"
-
     source_name = urlparse(url).netloc.replace("www.", "")
-    md_path = _write_recipe_md(title, fetched_data, url, source_name)
-
-    recipes = _load_metadata()
-    if not _find_recipe_key(title, recipes):
-        time_str = fetched_data.get("time", "")
-        mins = _parse_minutes(time_str)
-        recipes[title] = {
-            "status": "active",
-            "source": source_name,
-            "source_url": url,
-            "url": url,
-            "filename": md_path.name,
-            "time": time_str,
-            "cuisine_type": fetched_data.get("cuisine", ""),
-            "health_classification": health,
-            "meal_type": "Weekend" if mins > 60 else "Weeknight",
-            "times_cooked": 0,
-            "last_cooked_date": None,
-            "ingredients_raw": ings_raw,
-            "instructions": fetched_data.get("instructions", []),
-            "ingredients": [],
-        }
-        _save_metadata(recipes)
-
-    return {"title": title, "health": health, "time": fetched_data.get("time", "")}
+    return _classify_and_write(title, fetched_data, url, source_name)
 
 
 # ---------------------------------------------------------------------------
@@ -1049,15 +1092,22 @@ def _fetch_recipe_data(url: str) -> Optional[dict]:
     return None
 
 
-def _write_recipe_md(title: str, recipe_data: dict, source_url: str, source_name: str) -> Path:
+def _write_recipe_md(title: str, recipe_data: dict, source_url: str, source_name: str,
+                     source_credit: str = "") -> Path:
     """Write a recipe .md file to RECIPES_DIR. Returns the path."""
     filename = title.replace(" ", "_") + ".md"
     path = RECIPES_DIR / filename
+    if source_url:
+        attribution = f"**Adapted from**: [{source_name or source_url}]({source_url})"
+    elif source_credit:
+        attribution = f"**Source**: {source_credit}"
+    else:
+        attribution = ""
     lines = [
         f"# {title}", "",
         f"**Time**: {recipe_data.get('time', '')}  ",
         f"**Yield**: {recipe_data.get('servings', '')}  ",
-        f"**Adapted from**: [{source_name or source_url}]({source_url})" if source_url else "",
+        attribution,
         "", "## Ingredients", "",
     ]
     for ing in recipe_data.get("ingredients", []):
@@ -2936,6 +2986,126 @@ def add_lunch_recipe_url(url: str) -> dict:
         "recipe":  title,
         "url":     gh_url,
         "message": f"Added '{title}' as a lunch recipe. Marked needs_review=true. Run generate_github_pages_data.py + push to publish.",
+    }
+
+
+@mcp.tool()
+def process_recipe_image(image_b64: str, mime_type: str = "image/jpeg",
+                         source_note: str = "", force_add: bool = False) -> dict:
+    """
+    Extract a recipe from a photo (e.g. a cookbook page) and add it to the collection.
+
+    Uses Claude vision to extract title, ingredients, and instructions from the image,
+    then runs the same intake pipeline as process_recipe_url: similarity check,
+    health classification, metadata write, and .md file creation.
+
+    Args:
+        image_b64:   Base64-encoded image bytes.
+        mime_type:   MIME type (default: image/jpeg).
+        source_note: Caption or context from the user, e.g. "Julia Child book, chicken fricassee".
+                     Used for source attribution in the recipe .md file.
+        force_add:   If True, skip similarity check and add even if a similar recipe exists.
+                     Use this after the user confirms they want the new variety added.
+                     Re-pass the same image_b64 from the original call.
+
+    Returns when similar exists (status="similar_exists"):
+        { status, recipe, match_score, message }
+
+    Returns when added (status="added"):
+        { status, recipe, health, time, needs_review, message }
+
+    Returns on failure (status="error"):
+        { status, error }
+    """
+    import anthropic as _anthropic
+
+    client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+
+    # 1. Vision extraction — Sonnet for complex OCR (cookbook layouts, small text)
+    try:
+        extraction = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=3000,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": image_b64,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Extract the complete recipe from this image. "
+                            "Return valid JSON only with these keys:\n"
+                            "  title: recipe name (string)\n"
+                            "  ingredients: list of ingredient strings exactly as written "
+                            "(e.g. '3 lbs chicken thighs', '1/2 cup dry white wine')\n"
+                            "  instructions: list of instruction step strings\n"
+                            "  time: total cook/prep time if shown (string, e.g. '1 hour 30 minutes')\n"
+                            "  servings: serving size if shown (string)\n"
+                            "  cuisine: cuisine type (string)\n"
+                            "Return only the JSON object, no commentary."
+                        ),
+                    },
+                ],
+            }],
+        )
+        raw = extraction.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw.strip())
+        fetched_data = json.loads(raw)
+    except Exception as e:
+        return {"status": "error", "error": f"Vision extraction failed: {e}"}
+
+    title = (fetched_data.get("title") or "").strip()
+    if not title:
+        return {"status": "error", "error": "Could not determine recipe title from image"}
+
+    ings_raw = fetched_data.get("ingredients", [])
+    if not ings_raw:
+        return {"status": "error", "error": "Could not extract ingredients from image"}
+
+    # 2. Similarity check (title only — no URL for book recipes)
+    recipes = _load_metadata()
+    if not force_add:
+        match = _find_similar_recipe(title, "", recipes)
+        if match:
+            existing_name, score = match
+            return {
+                "status": "similar_exists",
+                "recipe": existing_name,
+                "match_score": score,
+                "message": (
+                    f"Similar recipe already in collection: \"{existing_name}\" "
+                    f"({score:.0%} match). Use the existing one, or confirm to add this new variety? "
+                    "If adding new: call process_recipe_image again with force_add=true and the same image_b64."
+                ),
+            }
+
+    # 3. Classify, write .md, and save metadata
+    result = _classify_and_write(
+        title, fetched_data,
+        source_url="", source_name="",
+        source_credit=source_note.strip() if source_note else "",
+        needs_review=True,
+        recipes=recipes,
+    )
+    return {
+        "status": "added",
+        "recipe": result["title"],
+        "health": result["health"],
+        "time": result["time"],
+        "needs_review": True,
+        "message": (
+            f"Added '{result['title']}' to the collection ({result['health']}). "
+            "Run generate_github_pages_data.py + push to publish to GitHub Pages."
+        ),
     }
 
 
