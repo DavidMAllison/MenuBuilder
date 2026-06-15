@@ -566,6 +566,78 @@ def _load_inventory_keywords() -> list:
         return []
 
 
+def _deduct_inventory_protein(ingredients: list) -> list:
+    """
+    Deduct 1 unit from the best-matching protein inventory item for each protein
+    ingredient in the recipe. Always 1 unit regardless of recipe quantity — everything
+    is frozen in meal-sized portions.
+
+    Returns list of {"item", "from_qty", "to_qty"} for each deduction made.
+    """
+    inv_path_str = _CONFIG.get("inventory_path", "")
+    if not inv_path_str:
+        return []
+    inv_path = Path(inv_path_str)
+    if not inv_path.exists():
+        return []
+
+    try:
+        inv = json.loads(inv_path.read_text())
+    except Exception:
+        return []
+
+    items = inv.get("items", [])
+    protein_ingredients = [i for i in ingredients if i.get("category") == "Proteins"]
+    deductions = []
+
+    def _kw(name: str) -> set:
+        """Extract match-ready keywords: strip stopwords, normalise plurals."""
+        words = set()
+        for w in name.lower().split():
+            if w in _INVENTORY_STOPWORDS or len(w) <= 2:
+                continue
+            words.add(w)
+            if w.endswith("s") and len(w) > 4:
+                words.add(w[:-1])  # "tenderloins" → also add "tenderloin"
+        return words
+
+    for ing in protein_ingredients:
+        ing_words = _kw(ing.get("name", ""))
+        if not ing_words:
+            continue
+
+        best_item = None
+        best_score = 0
+        for item in items:
+            if item.get("category") != "Proteins":
+                continue
+            if item.get("quantity", 0) <= 0:
+                continue
+            item_words = _kw(item.get("name", ""))
+            score = len(ing_words & item_words)
+            if score > best_score:
+                best_score = score
+                best_item = item
+
+        if best_item and best_score >= 1:
+            old_qty = best_item["quantity"]
+            best_item["quantity"] = max(0, old_qty - 1)
+            deductions.append({
+                "item": best_item["name"],
+                "from_qty": old_qty,
+                "to_qty": best_item["quantity"],
+            })
+
+    if deductions:
+        inv["last_updated"] = date.today().isoformat()
+        try:
+            inv_path.write_text(json.dumps(inv, indent=2))
+        except Exception:
+            pass
+
+    return deductions
+
+
 def _inventory_match(recipe_name: str, ingredients: list, inventory: list) -> tuple:
     """
     Return (broad_match, protein_specific, pantry_specific) for a recipe.
@@ -1687,6 +1759,7 @@ def log_meal_feedback(feedback: str) -> dict:
         disliked_meals = []     # sentiment was disliked; caller should discuss tombstone
         not_cooked_meals = []   # explicitly skipped; do not log
         logged_count = 0
+        all_deductions = []     # inventory protein deductions
 
         for meal in meals:
             key = _find_recipe_key(meal["name"], recipes)
@@ -1713,6 +1786,9 @@ def log_meal_feedback(feedback: str) -> dict:
             if was_first_cook:
                 first_cook_meals.append(meal["name"])
 
+            deductions = _deduct_inventory_protein(recipes[key].get("ingredients", []))
+            all_deductions.extend(deductions)
+
         _save_metadata(recipes)
 
         if FEEDBACK_CURRENT_FILE.exists():
@@ -1733,6 +1809,7 @@ def log_meal_feedback(feedback: str) -> dict:
             "first_cook_meals": first_cook_meals,
             "disliked_meals": disliked_meals,
             "not_cooked_meals": not_cooked_meals,
+            "inventory_deductions": all_deductions,
         }
 
     lowered = feedback.lower()

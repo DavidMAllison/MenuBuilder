@@ -2,6 +2,14 @@
 
 ## Planned Features
 
+### Perishable Herb/Produce Pairing (Low Priority)
+When the week's 7 meals are proposed at step 4, scan for unusual fresh herbs across all recipes. If recipe A uses mint (or fresh basil, dill, cilantro, etc.), apply a small bonus to other candidates that also use the same herb — so the bunch gets used rather than wasted. Signal weight: very low (below health, budget, frequency). Herbs to track: mint, dill, basil, cilantro, parsley, chives, tarragon, rosemary (fresh), thyme (fresh). Common pantry herbs (dried) excluded.
+
+**Where**: `suggest_meals.py` — post-selection pass over the 7 proposed meals; or as a tie-breaker during scoring if a herb from an already-selected meal appears in a candidate.
+
+### Budget Display in suggest_meals.py
+Read `~/Dropbox/LLMContext/Personal/grocery_budget_status.json` on startup and print a `BUDGET` summary line at the top of output (`$X remaining, $X/week suggested`). Currently budget context is a manual CLAUDE.md step — surfacing it in the script output makes it automatic and visible during every planning run. No signal-boosting until inventory accuracy is validated.
+
 ### Prep-Adjusted Cook Time for Weeknight Scheduling
 When Sunday prep is done ahead (marinating, chopping, par-cooking components), a recipe that's 60 min total may only need 20–25 min of active evening time. The current scheduler uses total cook time to determine "quick" eligibility — this makes many good weeknight-viable recipes appear too slow.
 
