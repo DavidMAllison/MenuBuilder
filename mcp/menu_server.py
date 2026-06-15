@@ -3069,8 +3069,10 @@ def process_recipe_image(image_b64: str, mime_type: str = "image/jpeg",
             raw = re.sub(r"^```[a-z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw.strip())
         fetched_data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"status": "error", "error": f"Vision extraction returned non-JSON: {raw[:300]!r}"}
     except Exception as e:
-        return {"status": "error", "error": f"Vision extraction failed: {e}"}
+        return {"status": "error", "error": f"Vision extraction API error: {e}"}
 
     title = (fetched_data.get("title") or "").strip()
     if not title:
