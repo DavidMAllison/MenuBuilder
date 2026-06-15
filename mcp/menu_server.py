@@ -169,7 +169,8 @@ def _find_recipe_key(name: str, recipes: dict) -> Optional[str]:
         if key.lower() == name_lower:
             return key
     for key in recipes:
-        words = [w for w in key.lower().split() if len(w) > 3]
+        # Deduplicate words so repeated tokens (e.g. "Chicken ... Chicken") don't double-count
+        words = {w for w in key.lower().split() if len(w) > 4}
         if len(words) >= 2 and sum(1 for w in words if w in name_lower) >= 2:
             return key
     return None
@@ -197,12 +198,14 @@ def _find_similar_recipe(title: str, url: str, recipes: dict) -> Optional[tuple]
                 best_name, best_score = name, score
         if best_score >= 0.75:
             return (best_name, round(best_score, 2))
-        # Fuzzy match misses when vision extracts a shorter title than what's stored
-        # (e.g. "Chicken Fricassee" vs the full stored name). Word-based key lookup
-        # catches these — if 2+ significant words overlap, treat as similar.
-        key = _find_recipe_key(title, recipes)
-        if key:
-            return (key, 0.8)
+        # Substring check: catches resubmissions where vision extracts a shorter title
+        # than the stored name (e.g. "Chicken Fricassee" vs the full stored title).
+        title_lower = title.lower()
+        if len(title_lower) > 8:
+            for name in recipes:
+                name_k = name.lower()
+                if title_lower in name_k or name_k in title_lower:
+                    return (name, 0.85)
     return None
 
 
@@ -272,7 +275,7 @@ def _classify_and_write(
     if recipes is None:
         recipes = _load_metadata()
 
-    if not _find_recipe_key(title, recipes):
+    if not any(k.lower() == title.lower() for k in recipes):
         time_str = fetched_data.get("time", "")
         mins = _parse_minutes(time_str)
         entry: dict = {
