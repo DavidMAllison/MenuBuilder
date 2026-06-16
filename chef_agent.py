@@ -40,6 +40,26 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 client = anthropic.Anthropic()
 
 
+def _og_image(soup: BeautifulSoup) -> str:
+    tag = soup.find("meta", property="og:image")
+    return (tag.get("content", "") if tag else "") or ""
+
+
+def _ld_image(item: dict) -> str:
+    img = item.get("image", "")
+    if isinstance(img, str):
+        return img
+    if isinstance(img, dict):
+        return img.get("url", "") or img.get("contentUrl", "")
+    if isinstance(img, list) and img:
+        first = img[0]
+        if isinstance(first, str):
+            return first
+        if isinstance(first, dict):
+            return first.get("url", "") or first.get("contentUrl", "")
+    return ""
+
+
 # --- Alton Brown ---
 
 def search_altonbrown(query: str, max_results: int = 10) -> list[dict]:
@@ -132,6 +152,7 @@ def _fetch_smittenkitchen(url: str, soup: BeautifulSoup) -> dict:
         "ingredients": ingredients,
         "instructions": instructions,
         "cuisine": "",
+        "image": _og_image(soup),
         "category": "",
         "time": time_str,
     }
@@ -219,6 +240,7 @@ def _fetch_chetnamakan(url: str, soup: BeautifulSoup) -> dict:
         "cuisine": "",
         "category": "",
         "time": "",
+        "image": _og_image(soup),
     }
 
 
@@ -301,6 +323,7 @@ def fetch_recipe(url: str) -> dict:
                 "cuisine": item.get("recipeCuisine", ""),
                 "category": item.get("recipeCategory", ""),
                 "time": _iso_to_human(total_time),
+                "image": _ld_image(item) or _og_image(soup),
             }
 
     # Site-specific parsers
@@ -314,6 +337,7 @@ def fetch_recipe(url: str) -> dict:
         "url": url,
         "title": title_el.get_text(strip=True) if title_el else "Unknown",
         "error": "No ld+json recipe schema and no site-specific parser for this URL",
+        "image": _og_image(soup),
     }
 
 

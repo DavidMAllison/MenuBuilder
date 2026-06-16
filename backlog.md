@@ -2,53 +2,31 @@
 
 ## Planned Features
 
-### Perishable Herb/Produce Pairing (Low Priority)
-When the week's 7 meals are proposed at step 4, scan for unusual fresh herbs across all recipes. If recipe A uses mint (or fresh basil, dill, cilantro, etc.), apply a small bonus to other candidates that also use the same herb — so the bunch gets used rather than wasted. Signal weight: very low (below health, budget, frequency). Herbs to track: mint, dill, basil, cilantro, parsley, chives, tarragon, rosemary (fresh), thyme (fresh). Common pantry herbs (dried) excluded.
-
-**Where**: `suggest_meals.py` — post-selection pass over the 7 proposed meals; or as a tie-breaker during scoring if a herb from an already-selected meal appears in a candidate.
+### Perishable Herb/Produce Pairing
+**Status**: COMPLETE Jun 15 2026.
+- `garden_herbs: ["basil", "thyme", "rosemary"]` in `config.json` (update each spring/fall)
+- Garden herb recipes get -4 score bonus in `suggest_meals.py` (free herb = slight preference) + `[GARDEN: X]` tag in output
+- Shopping CSV (`_build_shopping_csv` in `menu_server.py`) skips garden herb ingredients — they never appear on the shopping list
+- Purchased herb pairing note: if cilantro, mint, dill, parsley, tarragon, or chives appear in 3+ candidates, `suggest_meals.py` prints "FRESH HERB PAIRING" section at bottom — pick 2 recipes to use the bunch
+- Garden herbs suppress the waste-pairing signal (excluded from bought_herbs check)
 
 ### Budget Display in suggest_meals.py
-Read `~/Dropbox/LLMContext/Personal/grocery_budget_status.json` on startup and print a `BUDGET` summary line at the top of output (`$X remaining, $X/week suggested`). Currently budget context is a manual CLAUDE.md step — surfacing it in the script output makes it automatic and visible during every planning run. No signal-boosting until inventory accuracy is validated.
+**Status**: COMPLETE Jun 15 2026. Prints `BUDGET: $X remaining / $X/week suggested` at top of output. Reads `grocery_budget_status.json`; silently skipped if file missing. No signal-boosting until inventory accuracy is validated.
 
-### Prep-Adjusted Cook Time for Weeknight Scheduling
-When Sunday prep is done ahead (marinating, chopping, par-cooking components), a recipe that's 60 min total may only need 20–25 min of active evening time. The current scheduler uses total cook time to determine "quick" eligibility — this makes many good weeknight-viable recipes appear too slow.
-
-**Proposed approach:**
-- Add `active_cook_minutes` field to `recipe_metadata.json` — cook time with prepable components already done
-- Or derive it from existing `prep_components`: total time minus estimated prep duration
-- `suggest_meals.py --quick` filter uses `active_cook_minutes` instead of total minutes
-- Meal plan display: "60 min (20 active if prepped Sun)" so the real weeknight commitment is visible
-- Sunday prep guide already outputs what to do ahead — this closes the loop by making those recipes selectable on busy nights
-
-**Note:** `prep_components` and `prep_notes` fields already exist on all recipes (backfilled Jun 2026). The data is there — just needs to flow into the scheduler.
+### Weeknight Effort Classification
+**Status**: COMPLETE Jun 15 2026.
+- `weeknight_effort: low | medium | high` added to all 228 active recipes in `recipe_metadata.json`
+- Classified by Haiku from `cooking_method`, `prep_components`, `time`, `instructions`
+- `suggest_meals.py` shows `[LOW]` / `[MEDIUM]` / `[HIGH]` tags on every candidate
+- `--quick` header now reads "Busy nights (prefer LOW/MED effort)" instead of a minute threshold
+- `backfill_weeknight_effort.py` is re-runnable for new recipes
+- **Feedback path (future)**: when user reports "that was harder than expected," update `weeknight_effort` via SMS/Keanu
 
 ### Cooking Notes Into Recipe Files
-Family feedback and cooking tips currently live only in CLAUDE.md and memory files — they aren't in the recipe `.md` files where they'd actually be useful at cook time.
+**Status**: COMPLETE Jun 15 2026. All 8 recipes with actionable notes have `## Notes` sections in their `.md` files. Add notes to new recipes as you cook them — no bulk process needed.
 
-**What to add**: a `## Notes` section at the bottom of each recipe file capturing:
-- Substitution warnings (e.g. "Blackened Cod Fish Tacos: use cod or tilapia only — halibut had off smell")
-- Marination time limits (e.g. "Vietnamese Lemongrass Chicken: marinate max 2 hours — lime breaks down chicken if longer")
-- Family-specific tips (e.g. "kids get plain chicken before sauce is added", "serve mushrooms on side")
-- Seasoning adjustments from experience (e.g. "Lime-Rubbed Chicken Tacos: increase seasoning or marinate longer, chicken lacked flavor first time")
-
-**Scope**: ~6-8 recipes have actionable notes right now. Check `project_recipe_specific_notes.md` in memory and the Workflow Notes section of CLAUDE.md for the full list. Add notes during normal recipe use — no need for a bulk backfill run.
-
-### Ingredient Name Normalization at Intake
-The current `_ING_ALIASES` dict in `mcp/menu_server.py` hard-codes canonical mappings (e.g. "kosher salt" → "salt", "fresh ginger" → "ginger"). This works but requires manual maintenance every time a new recipe introduces a new naming variant.
-
-**Root cause**: structured `ingredients` arrays are written to `recipe_metadata.json` with whatever names Haiku parsed from `ingredients_raw` — no normalization step.
-
-**Preferred fix — normalize at intake**:
-1. After Haiku parses `ingredients_raw` → `[{name, quantity, unit, category}]` in `backfill_ingredients.py` and `fill_menu_ideas.py`, add a second Haiku call that canonicalizes ingredient names.
-2. Prompt: "Normalize these ingredient names to their canonical grocery store form. Rules: (1) drop 'fresh' prefix when the dried form is a distinct product ('fresh thyme' stays 'fresh thyme' because 'dried thyme' is different; 'fresh cilantro' → 'cilantro' because dried cilantro isn't used). (2) Flatten punctuation variants ('boneless, skinless chicken thighs' → 'boneless skinless chicken thighs'). (3) Don't merge fresh vs dried herbs (thyme, rosemary, oregano). (4) Don't merge 'chopped tomatoes' with 'diced tomatoes' — one may be fresh."
-3. Write normalized names to JSON. One Haiku call per recipe (batch the name list).
-4. Run `backfill_ingredients.py` once to re-normalize all 161 existing recipes.
-
-**Fallback**: keep `_ING_ALIASES` as a thin safety net for edge cases and variants the normalization misses. The alias dict should shrink over time as intake data gets cleaner.
-
-**Alternative** (if intake normalization is too slow): single Haiku call at list-generation time that receives all ingredient names for the week and returns a dedup/merge map. Adds ~1s latency but handles anything without touching the JSON.
-
-**Why not fuzzy string matching**: food names have too many false positives (garlic ≠ garlic powder, salt ≠ sea salt at the same similarity score as kosher salt ≠ salt).
+### Ingredient Name Normalization
+**Status**: Won't do (Jun 15 2026). `_ING_ALIASES` in `mcp/menu_server.py` already handles the safe normalizations at query time. Remaining variants (fresh vs dried herbs, chopped vs diced tomatoes) are genuinely distinct products — bulk Haiku normalization would risk wrong merges. Fix ingredient names manually when noticed during cooking or shopping.
 
 
 
@@ -166,7 +144,23 @@ The current `_ING_ALIASES` dict in `mcp/menu_server.py` hard-codes canonical map
 - Goal: single `mealplan_YYYY-MM-DD.json` containing meals + feedback together
 - Requires reworking both apps to read JSON instead of txt
 
+### Recipe Review UI — image backfill for existing collection
+- Existing recipes in `recipe_metadata.json` have no `image` field (only Italian agent captures it at intake)
+- Backfill: for each active recipe with a `source_url`, scrape `og:image` and write to metadata
+- Makes Full Collection view cards useful (currently mostly placeholders)
+
+### Recipe Review UI — remove button in Full Collection view
+- Full Collection view should have a Remove button in the modal toolbar
+- Removes recipe from `recipe_metadata.json`, deletes `.md` file from Dropbox, deletes from GitHub Pages repo
+- Requires confirmation step before deleting
+
+### Recipe Review UI — metadata caching
+- `recipe_review_server.py` loads `recipe_metadata.json` on every `/api/recipes` request
+- Cache in memory with a file-modified-time check; only re-read when file changes
+- Not needed at current scale but will matter when recipe pool grows
+
 ### Meal Costing (Long-Term)
 - Once price history accumulates, cost recipes using `ingredients` array + price-per-unit averages from `price_history.json`
 - MenuBuilder will skip entries missing `price_per_unit` gracefully
 - **Owner**: GroceryAgent pipeline feeds the data; MenuBuilder is the consumer
+- **Hold until**: ~Sep 15 2026 — need 3 more months of receipt data before price_history has enough coverage to be useful

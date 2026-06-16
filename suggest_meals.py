@@ -15,7 +15,7 @@ import argparse
 import os
 import re
 from datetime import date, datetime, timedelta
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.json')
 with open(_CONFIG_PATH) as _f:
@@ -27,6 +27,9 @@ ADULT_NAMES = set(name.lower() for name in _CONFIG['adult_names'])
 RECENCY_WEEKS = 3          # avoid meals cooked within this many weeks
 QUICK_THRESHOLD = 35       # minutes -- "quick" meals for practice nights
 SPRING_SUMMER = (4, 9)     # months April-September: prioritize grill
+BUDGET_PATH = os.path.expanduser('~/Dropbox/LLMContext/Personal/grocery_budget_status.json')
+GARDEN_HERBS = [h.lower() for h in _CONFIG.get('garden_herbs', [])]
+TRACKED_FRESH_HERBS = ['cilantro', 'mint', 'dill', 'parsley', 'tarragon', 'chives']
 
 _CONDIMENT_TERMINAL = {
     "sauce", "salsa", "dressing", "marinade", "rub", "glaze", "vinaigrette",
@@ -45,6 +48,33 @@ _DISH_ANCHORS = {
     "sausage", "turkey", "duck", "tenderloin", "thigh", "breast", "chop",
     "rib", "ribs", "fillet", "steak", "cutlet", "schnitzel",
 }
+
+
+def load_budget():
+    try:
+        with open(BUDGET_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def _herbs_in_recipe(r, herb_list):
+    """Return list of herbs from herb_list found in recipe's ingredients."""
+    found = []
+    structured = r.get('ingredients', [])
+    if structured:
+        for ing in structured:
+            ing_name = str(ing.get('name', '')).lower()
+            for herb in herb_list:
+                if herb in ing_name and herb not in found:
+                    found.append(herb)
+    else:
+        for raw in r.get('ingredients_raw', []):
+            raw_lower = str(raw).lower()
+            for herb in herb_list:
+                if herb in raw_lower and herb not in found:
+                    found.append(herb)
+    return found
 
 
 def _is_condiment(title: str) -> bool:
@@ -82,28 +112,7 @@ HIATUS = ['salmon']  # proteins currently on hiatus
 
 # Cuisine → family grouping for cap enforcement at step 4.
 # Asian = Japanese + Korean + Chinese + Thai + Vietnamese (max 2/week as one family).
-# Indian is its own family (not folded into Asian).
-# All other cuisines are their own family.
-CUISINE_FAMILY_MAP = {
-    'Japanese':    'Asian',
-    'Korean':      'Asian',
-    'Chinese':     'Asian',
-    'Thai':        'Asian',
-    'Vietnamese':  'Asian',
-    'Indian':      'Indian',
-    'Mexican':     'Mexican',
-    'Italian':     'Italian',
-    'American':    'American',
-    'Mediterranean': 'Mediterranean',
-    'Greek':       'Mediterranean',
-    'Moroccan':    'Mediterranean',
-    'Middle Eastern': 'Middle Eastern',
-    'French':      'French',
-    'Spanish':     'European',
-    'German':      'European',
-    'Caribbean':   'Caribbean',
-    'Peruvian':    'Peruvian',
-}
+CUISINE_FAMILY_MAP: dict[str, str] = _CONFIG.get('cuisine_family_map', {})
 
 
 def cuisine_family(cuisine: str) -> str:
@@ -298,6 +307,8 @@ def load_candidates(quick_nights=False):
         feedback = r.get('feedback', [])
         ingredients = r.get('ingredients', [])
         broad_match, specific_matches, pantry_matches = inventory_match(name, ingredients, inventory_items)
+        garden_herbs = _herbs_in_recipe(r, GARDEN_HERBS)
+        bought_herbs = [h for h in _herbs_in_recipe(r, TRACKED_FRESH_HERBS) if h not in GARDEN_HERBS]
 
         candidates.append({
             'name': name,
@@ -313,11 +324,14 @@ def load_candidates(quick_nights=False):
             'age_weeks': age_weeks,
             'meal_type': meal_type,
             'method': r.get('cooking_method', ''),
+            'weeknight_effort': r.get('weeknight_effort', ''),
             'adult_score': compute_adult_score(feedback),
             'kid_friendly': compute_kid_friendly(feedback),
             'inv_broad': broad_match,
             'inv_specific': specific_matches,
             'inv_pantry': pantry_matches,
+            'garden_herbs': garden_herbs,
+            'bought_herbs': bought_herbs,
         })
 
     return candidates, is_grill_season
@@ -355,6 +369,9 @@ def score(c):
         s -= 3    # broad protein match (e.g. any chicken recipe when chicken is stocked)
     if c.get('inv_pantry'):
         s -= 2    # pantry/dry goods match (e.g. rigatoni or heavy cream in stock)
+    # Garden herb bonus (free fresh herb from garden)
+    if c.get('garden_herbs'):
+        s -= 4
     return s
 
 
@@ -367,6 +384,10 @@ def print_group(title, items, limit=6):
         if c['method'] == 'slow_cooker':
             time_str = 'slow cooker'
         last_str = f"last:{c['last_cooked']}" if c['last_cooked'] != 'never' else 'never cooked'
+        effort = c.get('weeknight_effort', '')
+        effort_tag = f' [{effort.upper()}]' if effort else ''
+        garden = c.get('garden_herbs', [])
+        garden_tag = f' [GARDEN: {garden[0]}]' if garden else ''
         grill_tag = ' [GRILL]' if c['is_grill'] else ''
         new_tag = ' [NEW]' if c['times_cooked'] == 0 else ''
         kid_tag = ' [KID-FRIENDLY]' if c.get('kid_friendly') else ''
@@ -383,7 +404,7 @@ def print_group(title, items, limit=6):
         else:
             pantry_tag = ''
         fam_tag = cuisine_family(c['cuisine'])
-        print(f"    - {c['name']}{grill_tag}{new_tag}{kid_tag}{score_tag}{stock_tag}{pantry_tag} | {c['cuisine']}{fam_tag} | {c['health']} | {time_str} | {last_str}")
+        print(f"    - {c['name']}{effort_tag}{garden_tag}{grill_tag}{new_tag}{kid_tag}{score_tag}{stock_tag}{pantry_tag} | {c['cuisine']}{fam_tag} | {c['health']} | {time_str} | {last_str}")
 
 
 def main():
@@ -426,6 +447,12 @@ def main():
 
     total = len(candidates)
     print(f"MEAL CANDIDATES  |  {date.today().strftime('%b %d, %Y')}")
+    budget = load_budget()
+    if budget:
+        remaining = budget.get('grocery_remaining', 0)
+        weekly = budget.get('suggested_weekly_spend', 0)
+        as_of = budget.get('as_of', '')
+        print(f"BUDGET: ${remaining:.0f} remaining this month | ${weekly:.0f}/week suggested (as of {as_of})")
     if inventory_items:
         protein_stock = [i for i in inventory_items if i['category'] == 'Proteins']
         if protein_stock:
@@ -445,7 +472,7 @@ def main():
     if is_grill_season:
         print("** GRILL SEASON -- grill options highlighted **")
     if quick_days:
-        print(f"Quick nights (<={QUICK_THRESHOLD} min or slow cooker): {', '.join(quick_days).upper()}")
+        print(f"Busy nights (prefer LOW/MED effort): {', '.join(quick_days).upper()}")
 
     quick = [c for c in candidates if c['is_quick']]
     standard = [c for c in candidates if not c['is_quick'] and c['meal_type'] == 'Weeknight']
@@ -488,6 +515,17 @@ def main():
     for protein in ['Fish', 'Chicken', 'Pork', 'Beef', 'Lamb', 'Vegetarian', 'Pasta/Veg', 'Other']:
         if by_protein[protein]:
             print_group(protein, by_protein[protein], limit=4)
+
+    # --- FRESH HERB PAIRING (purchased herbs shared across candidates) ---
+    herb_counter: Counter = Counter()
+    for c in candidates:
+        for herb in c.get('bought_herbs', []):
+            herb_counter[herb] += 1
+    shared_herbs = [(herb, cnt) for herb, cnt in herb_counter.items() if cnt >= 3]
+    if shared_herbs:
+        print('\n=== FRESH HERB PAIRING ===')
+        for herb, cnt in sorted(shared_herbs, key=lambda x: -x[1]):
+            print(f'  {herb.capitalize()}: {cnt} candidates use it — pair 2 to use the whole bunch')
 
     # --- NEEDS REVIEW (auto-generated .md, verify before first cook) ---
     with open(METADATA_PATH) as f:

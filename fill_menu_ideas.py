@@ -26,6 +26,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 
+_ROTATION_STATE = Path(__file__).parent / "agent_rotation_state.json"
+
 import anthropic
 
 # ---------------------------------------------------------------------------
@@ -35,6 +37,20 @@ import anthropic
 METADATA_PATH = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
 RECIPES_DIR   = Path.home() / "Dropbox/LLMContext/cooking/recipes"
 MENUBUILDER   = Path(__file__).parent
+
+_CONFIG_PATH = MENUBUILDER / "config.json"
+_CUISINE_FAMILY_MAP: dict[str, str] = json.loads(_CONFIG_PATH.read_text()).get("cuisine_family_map", {})
+
+
+def _register_cuisine(cuisine: str) -> None:
+    """Add an unknown cuisine to config.json with itself as its own family."""
+    if not cuisine or cuisine in _CUISINE_FAMILY_MAP:
+        return
+    _CUISINE_FAMILY_MAP[cuisine] = cuisine
+    raw = json.loads(_CONFIG_PATH.read_text())
+    raw.setdefault("cuisine_family_map", {})[cuisine] = cuisine
+    _CONFIG_PATH.write_text(json.dumps(raw, indent=2, ensure_ascii=False))
+    print(f"  [cuisine] Registered new cuisine '{cuisine}' in config.json")
 
 # Quality thresholds — entries failing these get needs_review=true
 _HTML_RE        = re.compile(r"<[^>]+>")
@@ -169,6 +185,23 @@ QUERY_POOLS = {
         "roast chicken",
         "turkey meatballs",
     ],
+    "italian": [
+        "pasta carbonara",
+        "ossobuco",
+        "saltimbocca",
+        "ribollita",              # vegetarian
+        "pasta e fagioli",        # vegetarian
+        "chicken cacciatore",
+        "pasta all'amatriciana",
+        "branzino al forno",
+        "polpette al sugo",
+        "pasta e ceci",           # vegetarian
+        "abbacchio alla romana",
+        "risotto ai funghi",      # vegetarian
+        "pesce all'acqua pazza",
+        "involtini di carne",
+        "caponata siciliana",     # vegetarian
+    ],
     "sites": [
         "pork shoulder",
         "braised short ribs",
@@ -203,6 +236,8 @@ def _run_agent(agent_name: str, topic: str) -> list[dict]:
             from indian_agent import run_agent
         elif agent_name == "chef":
             from chef_agent import run_agent
+        elif agent_name == "italian":
+            from italian_agent import run_agent
         elif agent_name == "sites":
             from sites_agent import run_agent
         else:
@@ -217,6 +252,54 @@ def _run_agent(agent_name: str, topic: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Health classification — one Claude call for all new recipes
 # ---------------------------------------------------------------------------
+
+_EFFORT_PROMPT = """Classify the weeknight cooking effort for each recipe as low, medium, or high.
+
+low   -- oven or slow cooker does the work; minimal active attention; set and step away
+medium -- active but manageable; some chopping, moderate stove attention, one pan
+high  -- multiple components simultaneously, timing pressure, or constant attention required
+
+Recipes:
+{recipes}
+
+Reply with a JSON array only — no prose:
+[{{"title": "...", "weeknight_effort": "low|medium|high"}}, ...]"""
+
+
+def classify_effort(recipes: list[dict]) -> dict[str, str]:
+    """Batch classify weeknight effort for a list of recipe dicts. Returns {title: effort}."""
+    if not recipes:
+        return {}
+
+    recipe_lines = []
+    for r in recipes:
+        parts = [f'- {r["title"]}']
+        if r.get("cooking_method"):
+            parts.append(f'method={r["cooking_method"]}')
+        if r.get("time"):
+            parts.append(f'time={r["time"]}')
+        recipe_lines.append(" | ".join(parts))
+
+    prompt = _EFFORT_PROMPT.format(recipes="\n".join(recipe_lines))
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        m = re.search(r"\[.*\]", text, re.DOTALL)
+        if m:
+            classified = json.loads(m.group())
+            return {item["title"]: item["weeknight_effort"]
+                    for item in classified
+                    if item.get("weeknight_effort") in ("low", "medium", "high")}
+    except Exception as e:
+        print(f"  [!] Effort classification error: {e}")
+
+    return {}
+
 
 _CLASSIFY_PROMPT = """Classify each recipe as Heart-Healthy, Moderate, or Indulgent based on the recipe name and ingredients listed. Reply with a JSON array only — no prose.
 
@@ -469,15 +552,25 @@ def _existing_norm_titles(recipes: dict) -> set[str]:
 def main():
     parser = argparse.ArgumentParser(description="Replenish recipe idea pool from all agents.")
     parser.add_argument("--agents", default="all",
-                        help="Comma-separated list of agents to run (mexican,asian,indian,chef,sites) or 'all'")
+                        help="Comma-separated list of agents to run, or 'all'")
+    parser.add_argument("--rotate", type=int, default=0, metavar="N",
+                        help="Run next N agents in rotation instead of all (persists state in agent_rotation_state.json)")
     parser.add_argument("--topic", default=None,
                         help="Override search topic for all agents (default: per-agent defaults)")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Show what would be added without writing to metadata")
+                        help="Run agents (populates /tmp) but do not write to metadata")
     args = parser.parse_args()
 
     # Resolve agents list
-    if args.agents == "all":
+    if args.rotate > 0:
+        # Load rotation state
+        state = json.loads(_ROTATION_STATE.read_text()) if _ROTATION_STATE.exists() else {"next": 0}
+        start = state["next"] % len(ALL_AGENTS)
+        agents_to_run = [ALL_AGENTS[(start + i) % len(ALL_AGENTS)] for i in range(args.rotate)]
+        state["next"] = (start + args.rotate) % len(ALL_AGENTS)
+        _ROTATION_STATE.write_text(json.dumps(state))
+        print(f"Rotation: running {agents_to_run} (next run starts at index {state['next']})")
+    elif args.agents == "all":
         agents_to_run = ALL_AGENTS
     else:
         agents_to_run = [a.strip().lower() for a in args.agents.split(",")]
@@ -564,6 +657,9 @@ def main():
     print(f"Extracting prep components for {len(new_recipes)} recipes...")
     prep_map = classify_prep(new_recipes)
 
+    print(f"Classifying weeknight effort for {len(new_recipes)} recipes...")
+    effort_map = classify_effort(new_recipes)
+
     print(f"Parsing structured ingredients for {len(new_recipes)} recipes...")
     ingredients_map = parse_ingredients_structured(new_recipes)
 
@@ -594,6 +690,7 @@ def main():
                     parts.append(f"{m} minute{'s' if m > 1 else ''}")
                 time_str = " ".join(parts)
 
+        _register_cuisine(cuisine)
         health = health_map.get(title, "Moderate")
         meal_type = _infer_meal_type(r)
         cooking_method = _infer_cooking_method(title, r.get("instructions", []))
@@ -619,8 +716,9 @@ def main():
             "instructions":    r.get("instructions", []), # raw step strings
             "ingredients":     ingredients_map.get(title, []),  # structured [{name,qty,unit,category}]
             # Prep guide data — populated at intake by Claude
-            "prep_components": prep_data.get("prep_components", []),
-            "prep_notes":      prep_data.get("prep_notes", ""),
+            "prep_components":   prep_data.get("prep_components", []),
+            "prep_notes":        prep_data.get("prep_notes", ""),
+            "weeknight_effort":  effort_map.get(title, ""),
             "needs_review":    _quality_check(
                                    r.get("ingredients", []),
                                    r.get("instructions", []),
