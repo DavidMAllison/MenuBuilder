@@ -464,7 +464,10 @@ def collection():
                 "meal_type":    v.get("meal_type", ""),
                 "times_cooked": v.get("times_cooked", 0),
                 "image":        v.get("image", ""),
-                "ingredients":  v.get("ingredients_raw", []),
+                "ingredients":  v.get("ingredients_raw") or [
+                    f"{i.get('quantity','')} {i.get('unit','')} {i.get('name','')}".strip()
+                    for i in (v.get("ingredients") or []) if isinstance(i, dict)
+                ],
                 "instructions": v.get("instructions", []),
                 "in_collection": True,
             })
