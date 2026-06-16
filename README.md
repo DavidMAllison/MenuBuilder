@@ -60,6 +60,11 @@ trigger_lunch_saturday.py     # launchd Saturday 10 AM: sends 3 lunch options to
 trigger_lunch_nudge.py        # launchd Saturday 6 PM: nudges if Ashley hasn't picked yet
 save_to_recipeideas.py        # Save agent results to the recipeideas inbox
 generate_github_pages_data.py # Generate _data/recipes.json for GitHub Pages — run after metadata changes
+migrate_plan_to_json.py       # One-shot (re-runnable) migration of mealplan_*.txt → mealplan_*.json
+recipe_review_server.py       # Local recipe review web UI server (port 5051) — Flask, session auth, metadata cache, RAG search
+recipe_review/
+  index.html                  # Recipe review UI — This Week grid, Full Collection, New Recipes views; semantic search
+  login.html                  # Login page for recipe review UI
 eval_mexican_agent.py         # Eval harness for mexican_agent
 eval_chef_agent.py            # Eval harness for chef_agent
 eval/                         # Eval prompt suites (mexican_prompts.json, chef_prompts.json)

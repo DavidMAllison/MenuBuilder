@@ -378,7 +378,7 @@ def _parse_last_plan() -> list:
         return []
     today = date.today()
     dated = []
-    for f in WEEKLYPLAN_DIR.glob("mealplan_*.txt"):
+    for f in WEEKLYPLAN_DIR.glob("mealplan_*.json"):
         try:
             d = date.fromisoformat(f.stem.replace("mealplan_", ""))
             dated.append((d, f))
@@ -390,15 +390,18 @@ def _parse_last_plan() -> list:
     plan_file = next((f for d, f in dated if d <= today + timedelta(days=1)), None)
     if not plan_file:
         return []
+    try:
+        data = json.loads(plan_file.read_text())
+    except Exception:
+        return []
     meals = []
-    for line in plan_file.read_text().splitlines():
-        m = _PLAN_LINE_RE.match(line.strip())
-        if m:
-            name = m.group(2).strip()
-            name_lower = name.lower()
-            if any(kw in name_lower for kw in _SKIP_FEEDBACK_KEYWORDS):
-                continue
-            meals.append({"name": name, "day": m.group(1), "sms_feedback": None})
+    for m in data.get("meals", []):
+        name = m.get("title", "")
+        if not name:
+            continue
+        if any(kw in name.lower() for kw in _SKIP_FEEDBACK_KEYWORDS):
+            continue
+        meals.append({"name": name, "day": m.get("day", ""), "sms_feedback": None})
     return meals
 
 
@@ -1259,16 +1262,19 @@ def _try_auto_activate(name: str, recipes: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Plan text generation
+# Plan JSON generation
 # ---------------------------------------------------------------------------
 
-def _build_plan_text(selected: dict, week_start: date, schedule_notes: list) -> str:
-    """Generate mealplan_YYYY-MM-DD.txt content. Calls Claude for REMINDERS."""
+def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> dict:
+    """Build mealplan dict. week_start is Monday; Sunday is week_start - 1."""
     import anthropic as _anthropic
 
     recipes = _load_metadata()
     day_to_date = _day_date_map(week_start)
     ordered = [(day, selected[day]) for day in DAYS_ORDER if day in selected]
+
+    week_sunday = week_start - timedelta(days=1)
+    week_saturday = week_start + timedelta(days=5)
 
     meals_info = []
     for day, name in ordered:
@@ -1276,37 +1282,24 @@ def _build_plan_text(selected: dict, week_start: date, schedule_notes: list) -> 
         meta = recipes.get(key, {}) if key else {}
         health = meta.get("health", "Moderate")
         time_str = meta.get("time", "?")
-        filename = meta.get("filename", "")
         url = _recipe_url(name, meta)
         dt = day_to_date.get(day)
-        date_str = dt.strftime("%-m/%-d") if dt else ""
+        date_iso = dt.isoformat() if dt else ""
         meals_info.append({
-            "day": day, "date": date_str, "name": name,
-            "health": health, "time": time_str, "url": url,
+            "day": day, "date": date_iso, "title": name,
+            "health": health, "time": time_str, "url": url, "reminder": "",
         })
 
-    week_end = week_start + timedelta(days=5)
-    week_start_display = (week_start - timedelta(days=1)).strftime("%B %d")
-    week_end_display = week_end.strftime("%B %d, %Y")
-
-    # DINNERS block
-    dinners_lines = []
-    for m in meals_info:
-        dinners_lines.append(f"{m['day']} {m['date']}  {m['name']} [{m['health']}] | {m['time']}")
-        if m["url"]:
-            dinners_lines.append(f"          {m['url']}")
-
-    # BALANCE line
     health_counts: dict = {}
     for m in meals_info:
         h = m["health"]
         health_counts[h] = health_counts.get(h, 0) + 1
-    balance_line = "BALANCE: " + ", ".join(f"{v} {k}" for k, v in sorted(health_counts.items()))
 
-    # REMINDERS via Claude
+    week_start_display = week_sunday.strftime("%B %d")
+    week_end_display = week_saturday.strftime("%B %d, %Y")
     schedule_context = "\n".join(schedule_notes) if schedule_notes else "No special schedule notes."
     meal_lines = "\n".join(
-        f"{m['day']} {m['date']}: {m['name']} ({m['health']}, {m['time']})"
+        f"{m['day']} {m['date']}: {m['title']} ({m['health']}, {m['time']})"
         for m in meals_info
     )
 
@@ -1333,23 +1326,39 @@ def _build_plan_text(selected: dict, week_start: date, schedule_notes: list) -> 
             max_tokens=500,
             messages=[{"role": "user", "content": reminder_prompt}],
         )
-        reminders = response.content[0].text.strip()
-    except Exception as e:
-        # Fallback: simple reminder per day
-        reminders = "\n".join(f"- {m['day'].upper()}: {m['name']}" for m in meals_info)
+        reminders_text = response.content[0].text.strip()
+    except Exception:
+        reminders_text = "\n".join(f"- {m['day'].upper()}: {m['title']}" for m in meals_info)
 
-    return (
-        f"WEEKLY MEAL PLAN: {week_start_display} - {week_end_display}\n\n"
-        f"========================================\n"
-        f"DINNERS\n"
-        f"========================================\n\n"
-        f"{chr(10).join(dinners_lines)}\n\n"
-        f"{balance_line}\n\n"
-        f"========================================\n"
-        f"REMINDERS\n"
-        f"========================================\n"
-        f"{reminders}"
-    )
+    day_reminders: dict = {}
+    for line in reminders_text.splitlines():
+        rm = re.match(r"^-\s+(Sun|Mon|Tue|Wed|Thu|Fri|Sat)[^:]*:\s*(.+)", line, re.IGNORECASE)
+        if rm:
+            day_reminders[rm.group(1)[:3].title()] = rm.group(2).strip()
+    for m in meals_info:
+        m["reminder"] = day_reminders.get(m["day"], "")
+
+    return {
+        "week_start": week_sunday.isoformat(),
+        "week_end": week_saturday.isoformat(),
+        "generated_date": date.today().isoformat(),
+        "balance": health_counts,
+        "meals": meals_info,
+    }
+
+
+def _plan_summary_text(data: dict) -> str:
+    """Plain-text plan summary for SMS notification."""
+    sun = date.fromisoformat(data["week_start"])
+    sat = date.fromisoformat(data["week_end"])
+    lines = [f"WEEKLY MEAL PLAN: {sun.strftime('%B %d')} - {sat.strftime('%B %d, %Y')}", ""]
+    for m in data.get("meals", []):
+        d = date.fromisoformat(m["date"])
+        lines.append(f"{m['day']} {d.month}/{d.day}  {m['title']} [{m['health']}] | {m['time']}")
+    balance = data.get("balance", {})
+    lines.append("")
+    lines.append("BALANCE: " + ", ".join(f"{v} {k}" for k, v in sorted(balance.items())))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1618,14 +1627,14 @@ def _do_finalize(activity: dict) -> dict:
     week_start = date.fromisoformat(activity["week_start"])
     schedule_notes = activity.get("schedule_notes", [])
 
-    # Generate plan text
-    plan_text = _build_plan_text(selected, week_start, schedule_notes)
+    # Generate plan JSON
+    plan_data = _build_plan_json(selected, week_start, schedule_notes)
 
     # Write plan file
-    plan_path = WEEKLYPLAN_DIR / f"mealplan_{week_start.isoformat()}.txt"
+    plan_path = WEEKLYPLAN_DIR / f"mealplan_{week_start.isoformat()}.json"
     shopping_path = WEEKLYPLAN_DIR / f"shopping_{week_start.isoformat()}.csv"
     WEEKLYPLAN_DIR.mkdir(exist_ok=True)
-    plan_path.write_text(plan_text)
+    plan_path.write_text(json.dumps(plan_data, indent=2, ensure_ascii=False))
     shopping_path.write_text(_build_shopping_csv(selected, week_start))
 
     # Launch apps
@@ -1633,8 +1642,7 @@ def _do_finalize(activity: dict) -> dict:
     subprocess.Popen(["open", "/Applications/WeeklyMealCalendar.app"])
 
     # Summary notification to admin only
-    summary_lines = plan_text.split("\n")[:15]
-    summary = "\n".join(summary_lines)
+    summary = _plan_summary_text(plan_data)
     if ADMIN_HANDLE:
         _send_outbox(ADMIN_HANDLE, f"Plan ready!\n\n{summary}")
 
@@ -1787,10 +1795,12 @@ def log_meal_feedback(feedback: str) -> dict:
 
             fb = (meal.get("sms_feedback") or "").lower()
             is_not_cooked = fb.startswith("not_cooked") or "not cooked" in fb or "did not make" in fb
+            is_already_logged = fb == "already logged"
             is_disliked = fb.startswith("disliked")
 
-            if is_not_cooked:
-                not_cooked_meals.append(meal["name"])
+            if is_not_cooked or is_already_logged:
+                if is_not_cooked:
+                    not_cooked_meals.append(meal["name"])
                 continue  # don't log
 
             if is_disliked:
@@ -2635,6 +2645,130 @@ def generate_shopping_list(meals: dict, week_start: str) -> dict:
 
 
 @mcp.tool()
+def get_current_plan() -> dict:
+    """
+    Return the current week's meal plan.
+
+    Finds the most recent mealplan_YYYY-MM-DD.json that covers today
+    (plan filename is Monday; week starts Sunday, so Sunday is included).
+
+    Returns:
+        {
+          "found": bool,
+          "week_start": "YYYY-MM-DD",   # Sunday
+          "week_end":   "YYYY-MM-DD",   # Saturday
+          "balance": {"Heart-Healthy": N, ...},
+          "meals": [
+            {"day": "Sun", "date": "YYYY-MM-DD", "title": "...",
+             "health": "...", "time": "...", "url": "...", "reminder": "..."},
+            ...
+          ],
+          "formatted_text": "WEEKLY MEAL PLAN: ...\n\nDINNERS\n..."
+        }
+
+    formatted_text is suitable for injection into agent context (same layout
+    the old .txt files used, URLs included). Callers that want a clean version
+    can strip URLs themselves.
+
+    "found": false is returned when no plan covers today.
+    """
+    if not WEEKLYPLAN_DIR.exists():
+        return {"found": False}
+
+    today = date.today()
+    dated = []
+    for f in WEEKLYPLAN_DIR.glob("mealplan_*.json"):
+        try:
+            d = date.fromisoformat(f.stem.replace("mealplan_", ""))
+            dated.append((d, f))
+        except ValueError:
+            continue
+    dated.sort(key=lambda x: x[0], reverse=True)
+    plan_file = next((f for d, f in dated if d <= today + timedelta(days=1)), None)
+    if not plan_file:
+        return {"found": False}
+
+    try:
+        data = json.loads(plan_file.read_text())
+    except Exception:
+        return {"found": False}
+
+    formatted = _plan_summary_text(data)
+    reminders = [
+        f"- {m['day'].upper()}: {m['reminder']}"
+        for m in data.get("meals", [])
+        if m.get("reminder")
+    ]
+    if reminders:
+        formatted += "\n\nREMINDERS\n" + "\n".join(reminders)
+
+    return {
+        "found": True,
+        "week_start": data.get("week_start", ""),
+        "week_end":   data.get("week_end", ""),
+        "balance":    data.get("balance", {}),
+        "meals":      data.get("meals", []),
+        "formatted_text": formatted,
+    }
+
+
+@mcp.tool()
+def update_plan_meal(day: str, title: str) -> dict:
+    """
+    Update the recipe title for a single day in the current week's plan.
+
+    Lightweight admin override — only changes the title field in the JSON.
+    Does NOT update the shopping list or calendar. Use swap_meal (via the
+    execute_swap pipeline) when a full mid-week swap with shopping changes
+    is needed.
+
+    Args:
+        day:   Day abbreviation: Sun, Mon, Tue, Wed, Thu, Fri, Sat.
+        title: New recipe title to put on that day.
+
+    Returns:
+        {"success": bool, "day": day, "title": title, "error": "..."}
+    """
+    if not WEEKLYPLAN_DIR.exists():
+        return {"success": False, "day": day, "title": title, "error": "No weeklyplan directory found."}
+
+    today = date.today()
+    dated = []
+    for f in WEEKLYPLAN_DIR.glob("mealplan_*.json"):
+        try:
+            d = date.fromisoformat(f.stem.replace("mealplan_", ""))
+            dated.append((d, f))
+        except ValueError:
+            continue
+    dated.sort(key=lambda x: x[0], reverse=True)
+    plan_file = next((f for d, f in dated if d <= today + timedelta(days=1)), None)
+    if not plan_file:
+        return {"success": False, "day": day, "title": title, "error": "No current meal plan found."}
+
+    try:
+        data = json.loads(plan_file.read_text())
+    except Exception as e:
+        return {"success": False, "day": day, "title": title, "error": str(e)}
+
+    updated = False
+    for meal in data.get("meals", []):
+        if meal.get("day") == day:
+            meal["title"] = title
+            updated = True
+            break
+
+    if not updated:
+        return {"success": False, "day": day, "title": title, "error": f"Day '{day}' not found in plan."}
+
+    try:
+        plan_file.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    except Exception as e:
+        return {"success": False, "day": day, "title": title, "error": str(e)}
+
+    return {"success": True, "day": day, "title": title}
+
+
+@mcp.tool()
 def get_recipe_url(name: str) -> dict:
     """
     Look up the GitHub Pages URL for a recipe by name.
@@ -2701,7 +2835,7 @@ def get_prep_guide(mode: str = "auto") -> dict:
         return {"error": "No meal plans found.", "prep_guide": "", "mode": mode}
 
     dated = []
-    for f in WEEKLYPLAN_DIR.glob("mealplan_*.txt"):
+    for f in WEEKLYPLAN_DIR.glob("mealplan_*.json"):
         try:
             d = date.fromisoformat(f.stem.replace("mealplan_", ""))
             dated.append((d, f))
@@ -2716,11 +2850,11 @@ def get_prep_guide(mode: str = "auto") -> dict:
 
     week_start_str = plan_file.stem.replace("mealplan_", "")
 
-    selected = {}
-    for line in plan_file.read_text().splitlines():
-        m = _PLAN_LINE_RE.match(line.strip())
-        if m:
-            selected[m.group(1)] = m.group(2).strip()
+    try:
+        plan_data = json.loads(plan_file.read_text())
+    except Exception:
+        return {"error": "Could not read meal plan.", "prep_guide": "", "week_start": week_start_str, "mode": mode}
+    selected = {m["day"]: m["title"] for m in plan_data.get("meals", []) if m.get("title")}
 
     if not selected:
         return {"error": "Could not parse meals from plan.", "prep_guide": "", "week_start": week_start_str, "mode": mode}

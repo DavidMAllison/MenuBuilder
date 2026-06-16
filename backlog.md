@@ -131,9 +131,13 @@
 - Calendar update flow needs design: WeeklyMealCalendar.app rewrites all events on each run
 
 ### Consolidate Meal Plan to JSON Format
-- Currently meal plan is `.txt` (for WeeklyShoppingList.app and WeeklyMealCalendar.app) with a separate feedback JSON
-- Goal: single `mealplan_YYYY-MM-DD.json` containing meals + feedback together
-- Requires reworking both apps to read JSON instead of txt
+**Status**: COMPLETE Jun 16 2026.
+- `mealplan_YYYY-MM-DD.json` replaces `.txt`. Schema: `{week_start, week_end, generated_date, balance, meals[{day, date, title, health, time, url, reminder}]}`
+- All 25 historical plans migrated via `migrate_plan_to_json.py` (pre-Mar 2026 plans used a different format — 0 meals, not migrated; kept as-is for reference)
+- `menu_server.py` writes JSON; `_parse_last_plan()` and `get_prep_guide()` read JSON
+- `meal_swap.py` reads/writes JSON
+- `WeeklyMealCalendar.app` reads JSON (parses dates from `date` field directly, no regex)
+- Old `.txt` files left in place as archive
 
 ### Recipe Review UI — image backfill for existing collection
 **Status**: COMPLETE Jun 16 2026. `backfill_images.py` ran; 140/149 recipes with source_url updated. 78 recipes (ATK + originals) have no source_url and remain without images. Re-run `backfill_images.py --force` after adding new sourced recipes.

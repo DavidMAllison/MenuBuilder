@@ -428,11 +428,11 @@ def _iso_to_human(iso: str) -> str:
 
 def _source_label(url: str) -> str:
     if "patijinich.com" in url:
-        return f"Pati Jinich - {url}"
+        return "Pati Jinich"
     if "rickbayless.com" in url:
-        return f"Rick Bayless - {url}"
+        return "Rick Bayless"
     if "youtube.com" in url or "youtu.be" in url:
-        return f"Cooking con Claudia - {url}"
+        return "Cooking con Claudia"
     return url
 
 
