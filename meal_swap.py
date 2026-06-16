@@ -70,12 +70,14 @@ def _parse_day_to_date(day_str: str) -> Optional[date]:
 def _find_week_files(target: date) -> Tuple[Optional[Path], Optional[Path]]:
     """Return (mealplan_path, shopping_csv_path) for the week covering target."""
     plan_dir = _weeklyplan_dir()
-    for f in sorted(plan_dir.glob("mealplan_*.txt"), reverse=True):
-        m = re.search(r"mealplan_(\d{4}-\d{2}-\d{2})\.txt", f.name)
+    for f in sorted(plan_dir.glob("mealplan_*.json"), reverse=True):
+        m = re.search(r"mealplan_(\d{4}-\d{2}-\d{2})\.json", f.name)
         if not m:
             continue
-        week_start = date.fromisoformat(m.group(1))
-        if week_start <= target <= week_start + timedelta(days=6):
+        week_monday = date.fromisoformat(m.group(1))
+        week_sunday = week_monday - timedelta(days=1)
+        week_saturday = week_monday + timedelta(days=5)
+        if week_sunday <= target <= week_saturday:
             shopping = plan_dir / f"shopping_{m.group(1)}.csv"
             return f, shopping if shopping.exists() else None
     return None, None
@@ -260,13 +262,18 @@ def _create_recipe_md(recipe: dict, source_url: str, source_name: str) -> Path:
     return path
 
 
-def _update_meal_plan_txt(plan_path: Path, day_str: str, outgoing: str,
-                           incoming: str, time_str: str, health: str, url: str) -> None:
-    text = plan_path.read_text()
-    pattern = rf"({re.escape(day_str)}\s+){re.escape(outgoing)}[^\n]*\n(\s+https?://\S+)"
-    replacement = f"\\g<1>{incoming} [{health}] | {time_str}\n          {url}"
-    updated = re.sub(pattern, replacement, text)
-    plan_path.write_text(updated)
+def _update_meal_plan_json(plan_path: Path, day_str: str, outgoing: str,
+                            incoming: str, time_str: str, health: str, url: str) -> None:
+    day_abbrev = day_str.split()[0]
+    data = json.loads(plan_path.read_text())
+    for meal in data.get("meals", []):
+        if meal.get("day") == day_abbrev and meal.get("title", "").lower() == outgoing.lower():
+            meal["title"] = incoming
+            meal["time"] = time_str
+            meal["health"] = health
+            meal["url"] = url
+            break
+    plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def _update_shopping_csv(csv_path: Path, outgoing: str,
@@ -308,16 +315,15 @@ def _log_swap_to_feedback(outgoing: str, incoming: str, target_date: date) -> No
 # ---------------------------------------------------------------------------
 
 def _recompute_balance(plan_path: Path) -> None:
-    """Re-count health labels in DINNERS section and rewrite the BALANCE line."""
-    text = plan_path.read_text()
-    labels = re.findall(r"\[(Heart-Healthy|Moderate|Indulgent)\]", text)
+    """Recount health labels across meals and update balance dict."""
+    data = json.loads(plan_path.read_text())
     counts: Dict[str, int] = {}
-    for label in labels:
-        counts[label] = counts.get(label, 0) + 1
-    parts = [f"{counts[l]} {l}" for l in ["Heart-Healthy", "Moderate", "Indulgent"] if l in counts]
-    new_balance = f"BALANCE: {', '.join(parts)}"
-    updated = re.sub(r"BALANCE:.*", new_balance, text)
-    plan_path.write_text(updated)
+    for meal in data.get("meals", []):
+        h = meal.get("health", "")
+        if h:
+            counts[h] = counts.get(h, 0) + 1
+    data["balance"] = counts
+    plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def _suggest_start_time(time_str: str) -> str:
@@ -338,14 +344,17 @@ def _suggest_start_time(time_str: str) -> str:
 
 
 def _update_reminder_line(plan_path: Path, day_str: str, incoming: str, time_str: str) -> None:
-    """Replace the REMINDERS entry for the swapped day with updated timing."""
-    day_abbrev = day_str.split()[0].upper()  # "Wed 5/27" → "WED"
+    """Update the reminder field for the swapped day."""
+    day_abbrev = day_str.split()[0]  # "Wed 5/27" → "Wed"
     start_time = _suggest_start_time(time_str)
     time_display = time_str if time_str else "?"
-    new_line = f"- {day_abbrev}: {time_display} — {incoming}, start by {start_time}."
-    text = plan_path.read_text()
-    updated = re.sub(rf"- {day_abbrev}:.*", new_line, text)
-    plan_path.write_text(updated)
+    new_reminder = f"{time_display} — {incoming}, start by {start_time}."
+    data = json.loads(plan_path.read_text())
+    for meal in data.get("meals", []):
+        if meal.get("day") == day_abbrev:
+            meal["reminder"] = new_reminder
+            break
+    plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +497,7 @@ def execute_swap(
 
     # --- Update files ---
     _update_shopping_csv(csv_path, outgoing_recipe, canonical_name, parsed_ingredients, target)
-    _update_meal_plan_txt(plan_path, day, outgoing_recipe, canonical_name, time_str, health, recipe_url)
+    _update_meal_plan_json(plan_path, day, outgoing_recipe, canonical_name, time_str, health, recipe_url)
     _recompute_balance(plan_path)
     _update_reminder_line(plan_path, day, canonical_name, time_str)
     _log_swap_to_feedback(outgoing_recipe, canonical_name, target)

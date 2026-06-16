@@ -590,17 +590,17 @@ def _iso_to_human(iso: str) -> str:
 
 def _source_label(url: str) -> str:
     if "indianhealthyrecipes.com" in url:
-        return f"Indian Healthy Recipes - {url}"
+        return "Indian Healthy Recipes"
     if "hebbarskitchen.com" in url:
-        return f"Hebbars Kitchen - {url}"
+        return "Hebbars Kitchen"
     if "chetnamakan.co.uk" in url:
-        return f"Chetna Makan - {url}"
+        return "Chetna Makan"
     if "kannammacooks.com" in url:
-        return f"Kannamma Cooks - {url}"
+        return "Kannamma Cooks"
     if "ranveerbrar.com" in url:
-        return f"Ranveer Brar - {url}"
+        return "Ranveer Brar"
     if "archanaskitchen.com" in url:
-        return f"Archana's Kitchen - {url}"
+        return "Archana's Kitchen"
     return url
 
 
