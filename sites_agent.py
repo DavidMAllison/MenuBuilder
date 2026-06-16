@@ -43,6 +43,26 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 
 client = anthropic.Anthropic()
 
+
+def _og_image(soup: BeautifulSoup) -> str:
+    tag = soup.find("meta", property="og:image")
+    return (tag.get("content", "") if tag else "") or ""
+
+
+def _ld_image(item: dict) -> str:
+    img = item.get("image", "")
+    if isinstance(img, str):
+        return img
+    if isinstance(img, dict):
+        return img.get("url", "") or img.get("contentUrl", "")
+    if isinstance(img, list) and img:
+        first = img[0]
+        if isinstance(first, str):
+            return first
+        if isinstance(first, dict):
+            return first.get("url", "") or first.get("contentUrl", "")
+    return ""
+
 # ---------------------------------------------------------------------------
 # Site registry — add a new site here, no other code changes needed for
 # standard ld+json sites.
@@ -167,20 +187,26 @@ _LD_JSON_JS = '''() => {
             for (const item of candidates) {
                 const t = item['@type'];
                 const types = Array.isArray(t) ? t : [t];
-                if (types.includes('Recipe')) return {
-                    title: item.name || '',
-                    description: item.description || '',
-                    prepTime: item.prepTime || '',
-                    cookTime: item.cookTime || '',
-                    totalTime: item.totalTime || '',
-                    recipeYield: String(item.recipeYield || ''),
-                    ingredients: item.recipeIngredient || [],
-                    instructions: (item.recipeInstructions || []).map(s =>
-                        typeof s === 'string' ? s : (s.text || '')
-                    ),
-                    cuisine: item.recipeCuisine || '',
-                    category: item.recipeCategory || '',
-                };
+                if (types.includes('Recipe')) {
+                    const imgF = item.image;
+                    const ldImg = typeof imgF === 'string' ? imgF : (Array.isArray(imgF) && imgF.length ? (typeof imgF[0] === 'string' ? imgF[0] : (imgF[0].url || '')) : (imgF && imgF.url ? imgF.url : ''));
+                    const ogEl = document.querySelector('meta[property="og:image"]');
+                    return {
+                        title: item.name || '',
+                        description: item.description || '',
+                        prepTime: item.prepTime || '',
+                        cookTime: item.cookTime || '',
+                        totalTime: item.totalTime || '',
+                        recipeYield: String(item.recipeYield || ''),
+                        ingredients: item.recipeIngredient || [],
+                        instructions: (item.recipeInstructions || []).map(s =>
+                            typeof s === 'string' ? s : (s.text || '')
+                        ),
+                        cuisine: item.recipeCuisine || '',
+                        category: item.recipeCategory || '',
+                        image: ldImg || (ogEl ? ogEl.content : ''),
+                    };
+                }
             }
         } catch(e) {}
     }
@@ -242,6 +268,7 @@ def _fetch_httpx(url: str) -> dict:
                 "instructions": instructions,
                 "cuisine": item.get("recipeCuisine", ""),
                 "category": item.get("recipeCategory", ""),
+                "image": _ld_image(item) or _og_image(soup),
             }
     return {"error": "No ld+json Recipe schema found", "url": url}
 

@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recipe Review</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f5f5;
+      color: #222;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid #e0e0e0;
+      padding: 14px 24px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+    header p  { font-size: 12px; color: #888; margin-top: 2px; }
+
+    main {
+      padding: 16px 24px 40px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    /* Cuisine sections */
+    .cuisine-group { margin-bottom: 40px; }
+
+    .cuisine-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 0;
+      border-bottom: 2px solid #e0e0e0;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .cuisine-header:hover h2 { color: #555; }
+    .cuisine-header h2 { font-size: 17px; font-weight: 700; color: #222; }
+
+    .cuisine-header .count {
+      font-size: 11px;
+      color: #aaa;
+      background: #eee;
+      border-radius: 10px;
+      padding: 2px 8px;
+    }
+
+    .cuisine-header .chevron {
+      margin-left: auto;
+      color: #bbb;
+      font-size: 12px;
+      transition: transform 0.2s ease;
+    }
+
+    .cuisine-group.collapsed .chevron { transform: rotate(-90deg); }
+
+    .cuisine-body {
+      overflow: hidden;
+      transition: max-height 0.25s ease, opacity 0.2s ease;
+      max-height: 4000px;
+      opacity: 1;
+    }
+
+    .cuisine-group.collapsed .cuisine-body { max-height: 0; opacity: 0; }
+
+    /* Source legend */
+    .source-legend {
+      display: flex;
+      gap: 14px;
+      margin: 12px 0;
+      flex-wrap: wrap;
+    }
+
+    .source-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      color: #666;
+    }
+
+    .source-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* Card grid */
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      overflow: hidden;
+      cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      position: relative;
+    }
+
+    .card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+    }
+
+    .card-image {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      display: block;
+    }
+
+    .card-image-placeholder {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      background: linear-gradient(135deg, #e8e8e8, #d0d0d0);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+    }
+
+    .card-body { padding: 10px 12px 12px; }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.4;
+      color: #222;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .card-meta { font-size: 11px; color: #999; margin-top: 4px; }
+
+    .source-badge {
+      position: absolute;
+      top: 7px;
+      left: 7px;
+      border-radius: 5px;
+      padding: 2px 7px;
+      font-size: 9px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: 0.5px;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: #fff;
+      border-radius: 16px;
+      max-width: 680px;
+      width: 100%;
+      max-height: 92vh;
+      overflow-y: auto;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Modal toolbar — sticky at top */
+    .modal-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #f0f0f0;
+      position: sticky;
+      top: 0;
+      background: #fff;
+      z-index: 1;
+      border-radius: 16px 16px 0 0;
+    }
+
+    .modal-action {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      border: none;
+      background: none;
+      cursor: pointer;
+      padding: 6px 14px;
+      border-radius: 8px;
+      color: #444;
+      transition: background 0.15s;
+      text-decoration: none;
+    }
+
+    .modal-action:hover { background: #f5f5f5; }
+
+    .modal-action svg { flex-shrink: 0; }
+
+    .modal-action span {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      color: #666;
+    }
+
+    .modal-action.add-btn { color: #27ae60; }
+    .modal-action.add-btn span { color: #27ae60; }
+    .modal-action.add-btn.added { color: #aaa; cursor: default; }
+    .modal-action.add-btn.added span { color: #aaa; }
+
+    .modal-action.visit-btn { color: #2980b9; }
+    .modal-action.visit-btn span { color: #2980b9; }
+
+    .modal-close-btn {
+      margin-left: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      border: none;
+      background: none;
+      cursor: pointer;
+      padding: 6px 14px;
+      border-radius: 8px;
+      color: #999;
+      transition: background 0.15s;
+    }
+
+    .modal-close-btn:hover { background: #f5f5f5; color: #555; }
+
+    .modal-close-btn svg { flex-shrink: 0; }
+
+    .modal-close-btn span {
+      font-size: 10px;
+      font-weight: 600;
+      color: #999;
+      letter-spacing: 0.3px;
+    }
+
+    .modal-image {
+      width: 100%;
+      height: 240px;
+      object-fit: cover;
+      display: block;
+      flex-shrink: 0;
+    }
+
+    .modal-image-placeholder {
+      width: 100%;
+      height: 160px;
+      background: linear-gradient(135deg, #e8e8e8, #d0d0d0);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 56px;
+      flex-shrink: 0;
+    }
+
+    .modal-body { padding: 20px 24px 28px; }
+
+    .modal-source {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #c0392b;
+      margin-bottom: 5px;
+    }
+
+    .modal-title {
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.3;
+      color: #111;
+      margin-bottom: 8px;
+    }
+
+    .modal-meta {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 16px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .modal-section-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #555;
+      margin: 18px 0 8px;
+    }
+
+    .modal-ingredients {
+      list-style: none;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3px 16px;
+    }
+
+    .modal-ingredients li {
+      font-size: 13px;
+      color: #333;
+      padding: 3px 0;
+      border-bottom: 1px solid #f5f5f5;
+    }
+
+    .modal-instructions { list-style: none; counter-reset: steps; }
+
+    .modal-instructions li {
+      counter-increment: steps;
+      font-size: 13px;
+      color: #333;
+      line-height: 1.6;
+      padding: 9px 0 9px 34px;
+      position: relative;
+      border-bottom: 1px solid #f5f5f5;
+    }
+
+    .modal-instructions li::before {
+      content: counter(steps);
+      position: absolute;
+      left: 0;
+      top: 9px;
+      width: 22px;
+      height: 22px;
+      background: #c0392b;
+      color: #fff;
+      border-radius: 50%;
+      font-size: 10px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .empty-state { text-align: center; padding: 80px 24px; color: #aaa; }
+    .empty-state p { margin-top: 12px; font-size: 14px; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* View toggle */
+    .view-bar {
+      display: flex;
+      gap: 6px;
+      padding: 10px 24px;
+      background: #fff;
+      border-bottom: 1px solid #e8e8e8;
+      position: sticky;
+      top: 49px;
+      z-index: 9;
+    }
+
+    .view-btn {
+      border: 1.5px solid #ddd;
+      background: #fff;
+      border-radius: 20px;
+      padding: 5px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #666;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .view-btn.active {
+      background: #222;
+      border-color: #222;
+      color: #fff;
+    }
+
+    /* Filter bar */
+    .filter-bar {
+      padding: 8px 24px;
+      background: #fafafa;
+      border-bottom: 1px solid #e8e8e8;
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .filter-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .filter-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: #aaa;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .filter-pills { display: flex; gap: 4px; }
+
+    .filter-pill {
+      border: 1.5px solid #ddd;
+      background: #fff;
+      border-radius: 14px;
+      padding: 3px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #666;
+      cursor: pointer;
+      transition: all 0.12s;
+      white-space: nowrap;
+    }
+
+    .filter-pill:hover { border-color: #bbb; color: #333; }
+
+    .filter-pill.active {
+      background: #eaf4fe;
+      border-color: #2980b9;
+      color: #2980b9;
+    }
+
+    /* Added card overlay */
+    .card.in-collection::after {
+      content: '✓';
+      position: absolute;
+      inset: 0;
+      background: rgba(39, 174, 96, 0.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      color: #27ae60;
+      border-radius: 10px;
+      pointer-events: none;
+    }
+
+    /* Mobile */
+    @media (max-width: 600px) {
+      header { padding: 12px 16px; }
+      main   { padding: 12px 12px 32px; }
+
+      .card-grid {
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 8px;
+      }
+
+      .modal-overlay { padding: 0; align-items: flex-end; }
+
+      .modal {
+        border-radius: 20px 20px 0 0;
+        max-height: 95vh;
+      }
+
+      .modal-ingredients { grid-template-columns: 1fr; }
+
+      .modal-image { height: 180px; }
+
+      .modal-action span,
+      .modal-close-btn span { display: none; }
+
+      .modal-action { padding: 8px 12px; }
+      .modal-close-btn { padding: 8px 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Recipe Review</h1>
+  <p id="subtitle">Loading...</p>
+</header>
+
+<div class="view-bar">
+  <button class="view-btn active" onclick="setView('new', this)">New</button>
+  <button class="view-btn" onclick="setView('collection', this)">Full Collection</button>
+  <button class="view-btn collapse-toggle" id="collapse-toggle-btn" onclick="toggleAllGroups()" style="margin-left:auto">Collapse all</button>
+</div>
+
+<div class="filter-bar" id="filter-bar"></div>
+
+<main id="main"></main>
+
+<div class="modal-overlay" id="modal" onclick="handleOverlayClick(event)">
+  <div class="modal" id="modal-inner">
+    <div class="modal-toolbar" id="modal-toolbar">
+      <!-- populated by openModal -->
+    </div>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<script>
+  let allRecipes = [];
+  let currentIdx = null;
+  let currentView = 'new';
+
+  const activeFilters = { health: null, mealType: null, timesCooked: null };
+
+  function renderFilters() {
+    const groups = [
+      { label: 'Health', key: 'health', pills: [
+        ['All', null], ['Heart-Healthy', 'Heart-Healthy'], ['Moderate', 'Moderate'], ['Indulgent', 'Indulgent']
+      ]},
+      { label: 'Time', key: 'mealType', pills: [
+        ['All', null], ['Weeknight', 'Weeknight'], ['Weekend', 'Weekend']
+      ]},
+    ];
+    if (currentView === 'collection') {
+      groups.push({ label: 'Tried', key: 'timesCooked', pills: [
+        ['All', null], ['Never Tried', 'never'], ['Tried', 'tried']
+      ]});
+    }
+    document.getElementById('filter-bar').innerHTML = groups.map(g => {
+      const pillsHtml = g.pills.map(([label, value]) => {
+        const active = activeFilters[g.key] === value ? ' active' : '';
+        const oc = value === null
+          ? `setFilter('${g.key}', null, this)`
+          : `setFilter('${g.key}', '${value}', this)`;
+        return `<button class="filter-pill${active}" onclick="${oc}">${label}</button>`;
+      }).join('');
+      return `<div class="filter-group"><span class="filter-label">${g.label}</span><div class="filter-pills">${pillsHtml}</div></div>`;
+    }).join('');
+  }
+
+  function setFilter(key, value, btn) {
+    activeFilters[key] = value;
+    btn.closest('.filter-pills').querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    renderGrid();
+  }
+
+  function applyFilters(recipes) {
+    return recipes.filter(r => {
+      if (activeFilters.health !== null && r.health !== activeFilters.health) return false;
+      if (activeFilters.mealType !== null) {
+        if ((r.meal_type || '').toLowerCase() !== activeFilters.mealType.toLowerCase()) return false;
+      }
+      if (activeFilters.timesCooked === 'never' && (r.times_cooked || 0) > 0) return false;
+      if (activeFilters.timesCooked === 'tried' && (r.times_cooked || 0) === 0) return false;
+      return true;
+    });
+  }
+
+  const SOURCE_COLORS = [
+    '#c0392b', '#2980b9', '#27ae60', '#8e44ad',
+    '#d35400', '#16a085', '#2c3e50', '#f39c12',
+  ];
+  const sourceColorCache = {};
+  let colorIdx = 0;
+
+  function sourceColor(src) {
+    if (!sourceColorCache[src]) {
+      sourceColorCache[src] = SOURCE_COLORS[colorIdx % SOURCE_COLORS.length];
+      colorIdx++;
+    }
+    return sourceColorCache[src];
+  }
+
+  async function load() {
+    const endpoint = currentView === 'collection' ? '/api/collection' : '/api/recipes';
+    const res = await fetch(endpoint);
+    allRecipes = await res.json();
+
+    if (!Array.isArray(allRecipes) || allRecipes.length === 0) {
+      renderFilters();
+      document.getElementById('main').innerHTML = `
+        <div class="empty-state">
+          <div style="font-size:48px">🍝</div>
+          <p>${currentView === 'new'
+            ? 'No new candidates. Run an agent first:<br><code>python3 fill_menu_ideas.py --dry-run --agents italian</code>'
+            : 'No recipes in the collection yet.'}</p>
+        </div>`;
+      document.getElementById('subtitle').textContent = '0 results';
+      return;
+    }
+
+    // New view: only show candidates not yet in the collection
+    if (currentView === 'new') {
+      allRecipes = allRecipes.filter(r => !r.in_collection);
+    }
+
+    for (const r of allRecipes) sourceColor(r.source || 'Unknown');
+    document.getElementById('collapse-toggle-btn').textContent = 'Collapse all';
+    renderFilters();
+    renderGrid();
+  }
+
+  function updateSubtitle(visibleCount) {
+    const total = allRecipes.length;
+    const label = currentView === 'collection' ? 'in collection' : 'new candidates';
+    const suffix = visibleCount < total ? ` of ${total}` : '';
+    document.getElementById('subtitle').textContent = `${visibleCount}${suffix} ${label}`;
+  }
+
+  async function setView(v, btn) {
+    currentView = v;
+    activeFilters.health = null;
+    activeFilters.mealType = null;
+    activeFilters.timesCooked = null;
+    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('main').innerHTML = '';
+    document.getElementById('subtitle').textContent = 'Loading...';
+    await load();
+  }
+
+  function renderGrid() {
+    const main = document.getElementById('main');
+    main.innerHTML = '';
+
+    const visible = applyFilters(allRecipes);
+
+    if (visible.length === 0) {
+      main.innerHTML = `<div class="empty-state"><p>No recipes match the active filters.</p></div>`;
+      updateSubtitle(0);
+      return;
+    }
+
+    const cuisineGroups = {};
+    for (const r of visible) {
+      const c = r.cuisine || 'Other';
+      if (!cuisineGroups[c]) cuisineGroups[c] = [];
+      cuisineGroups[c].push(r);
+    }
+
+    for (const [cuisine, recipes] of Object.entries(cuisineGroups)) {
+      const sources = [...new Set(recipes.map(r => r.source || 'Unknown'))];
+      const legend = sources.map(s => `
+        <div class="source-legend-item">
+          <div class="source-dot" style="background:${sourceColor(s)}"></div>
+          ${escHtml(s)}
+        </div>`).join('');
+
+      const groupId = `group-${slugify(cuisine)}`;
+      const section = document.createElement('div');
+      section.className = 'cuisine-group';
+      section.innerHTML = `
+        <div class="cuisine-header" onclick="toggleGroup('${groupId}')">
+          <h2>${escHtml(cuisine)}</h2>
+          <span class="count">${recipes.length}</span>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="cuisine-body" id="${groupId}">
+          <div class="source-legend">${legend}</div>
+          <div class="card-grid"></div>
+        </div>
+      `;
+      main.appendChild(section);
+
+      const grid = section.querySelector('.card-grid');
+      for (const r of recipes) {
+        grid.appendChild(buildCard(r, allRecipes.indexOf(r)));
+      }
+    }
+    updateSubtitle(visible.length);
+  }
+
+  function toggleGroup(groupId) {
+    document.getElementById(groupId).closest('.cuisine-group').classList.toggle('collapsed');
+  }
+
+  function toggleAllGroups() {
+    const btn = document.getElementById('collapse-toggle-btn');
+    const groups = document.querySelectorAll('.cuisine-group');
+    const anyExpanded = [...groups].some(g => !g.classList.contains('collapsed'));
+    groups.forEach(g => g.classList.toggle('collapsed', anyExpanded));
+    btn.textContent = anyExpanded ? 'Expand all' : 'Collapse all';
+  }
+
+  function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]/g, '-'); }
+
+  function buildCard(recipe, idx) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.onclick = () => openModal(idx);
+
+    const src    = recipe.source || 'Unknown';
+    const color  = sourceColor(src);
+    const abbrev = src.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 3);
+
+    const imageHtml = recipe.image
+      ? `<img class="card-image" src="${recipe.image}" alt="${escHtml(recipe.title)}"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+        + `<div class="card-image-placeholder" style="display:none">🍽</div>`
+      : `<div class="card-image-placeholder">🍽</div>`;
+
+    if (recipe.in_collection) card.classList.add('in-collection');
+
+    card.innerHTML = `
+      ${imageHtml}
+      <div class="source-badge" style="background:${color}">${abbrev}</div>
+      <div class="card-body">
+        <div class="card-title">${escHtml(recipe.title)}</div>
+        ${recipe.time ? `<div class="card-meta">${escHtml(recipe.time)}</div>` : ''}
+      </div>
+    `;
+    return card;
+  }
+
+  function openModal(idx) {
+    currentIdx = idx;
+    const r = allRecipes[idx];
+
+    // Toolbar
+    const visitHref = r.url ? `href="${r.url}" target="_blank" rel="noopener"` : '';
+    document.getElementById('modal-toolbar').innerHTML = `
+      ${currentView === 'new'
+        ? `<button class="modal-action add-btn" onclick="addToCollection(${idx})" title="Add to Recipe Collection">
+             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+               <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+               <line x1="12" y1="9" x2="12" y2="15"/><line x1="9" y1="12" x2="15" y2="12"/>
+             </svg>
+             <span>Add</span>
+           </button>`
+        : ''
+      }
+      ${r.url
+        ? `<a class="modal-action visit-btn" ${visitHref} title="Visit original site">
+             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+               <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+             </svg>
+             <span>Visit</span>
+           </a>`
+        : ''}
+      <button class="modal-close-btn" onclick="closeModal()" title="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+        <span>Close</span>
+      </button>
+    `;
+
+    // Content
+    const imageHtml = r.image
+      ? `<img class="modal-image" src="${r.image}" alt="${escHtml(r.title)}" onerror="this.style.display='none'">`
+      : `<div class="modal-image-placeholder">🍽</div>`;
+
+    const ings  = (r.ingredients  || []).map(i => `<li>${escHtml(i)}</li>`).join('');
+    const steps = (r.instructions || []).map(s => `<li>${escHtml(s)}</li>`).join('');
+    const meta  = [r.time, r.yield ? `Serves ${r.yield}` : ''].filter(Boolean).join(' · ');
+
+    document.getElementById('modal-content').innerHTML = `
+      ${imageHtml}
+      <div class="modal-body">
+        <div class="modal-source">${escHtml(r.source || '')}</div>
+        <div class="modal-title">${escHtml(r.title)}</div>
+        ${meta ? `<div class="modal-meta">${escHtml(meta)}</div>` : ''}
+        ${ings  ? `<div class="modal-section-title">Ingredients</div><ul class="modal-ingredients">${ings}</ul>` : ''}
+        ${steps ? `<div class="modal-section-title">Instructions</div><ol class="modal-instructions">${steps}</ol>` : ''}
+      </div>
+    `;
+
+    document.getElementById('modal').classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeModal() {
+    document.getElementById('modal').classList.remove('open');
+    document.body.style.overflow = '';
+    currentIdx = null;
+  }
+
+  function handleOverlayClick(e) {
+    if (e.target === document.getElementById('modal')) closeModal();
+  }
+
+  async function addToCollection(idx) {
+    const btn = document.querySelector('.modal-action.add-btn');
+    btn.disabled = true;
+    btn.innerHTML = `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           style="animation:spin 1s linear infinite">
+        <circle cx="12" cy="12" r="10" stroke-dasharray="31" stroke-dashoffset="10"/>
+      </svg>
+      <span>Adding...</span>`;
+
+    try {
+      const res = await fetch('/api/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(allRecipes[idx]),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        btn.classList.add('added');
+        btn.innerHTML = `
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          <span>Added</span>`;
+        btn.onclick = null;
+
+        // Remove from New view candidates and re-render
+        allRecipes.splice(idx, 1);
+        setTimeout(() => {
+          closeModal();
+          renderGrid();
+        }, 600);
+      } else {
+        const msg = data.error === 'already_exists' ? 'Exists' : 'Error';
+        btn.innerHTML = `
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>${msg}</span>`;
+        btn.disabled = false;
+        btn.onclick = () => addToCollection(idx);
+      }
+    } catch (e) {
+      btn.innerHTML = `
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+        <span>Error</span>`;
+      btn.disabled = false;
+      btn.onclick = () => addToCollection(idx);
+    }
+  }
+
+
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+  function escHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  load();
+</script>
+</body>
+</html>

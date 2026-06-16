@@ -48,8 +48,10 @@ from mcp.server.fastmcp import FastMCP
 # Config and paths
 # ---------------------------------------------------------------------------
 
-_CONFIG = json.loads((MENUBUILDER_DIR / "config.json").read_text())
+_CONFIG_PATH = MENUBUILDER_DIR / "config.json"
+_CONFIG = json.loads(_CONFIG_PATH.read_text())
 METADATA_PATH = Path(_CONFIG["metadata_path"])
+_CUISINE_FAMILY_MAP: dict[str, str] = _CONFIG.get("cuisine_family_map", {})
 WEEKLYPLAN_DIR = METADATA_PATH.parent / "weeklyplan"
 RECIPES_DIR = METADATA_PATH.parent / "recipes"
 FEEDBACK_CURRENT_FILE = WEEKLYPLAN_DIR / "feedback_current.json"
@@ -66,6 +68,7 @@ DROPBOX_BASE_URL = _CONFIG.get("dropbox_recipe_base_url", "")
 
 DAYS_ORDER = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 ADULT_NAMES = set(n.lower() for n in _CONFIG.get("adult_names", []))
+_GARDEN_HERBS = set(h.lower() for h in _CONFIG.get("garden_herbs", []))
 
 # Day-of-week helpers (date.weekday(): Mon=0 … Sun=6)
 _WD_TO_ABBREV = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -446,11 +449,18 @@ def _day_date_map(week_start: date) -> dict:
 RECENCY_WEEKS = 3
 QUICK_THRESHOLD = 35
 HIATUS_PROTEINS = ["salmon"]
-KNOWN_CUISINES = {
-    "american", "italian", "mexican", "mediterranean", "chinese",
-    "japanese", "indian", "thai", "greek", "french", "asian",
-    "korean", "vietnamese", "moroccan", "caribbean", "spanish",
-}
+KNOWN_CUISINES: set[str] = {k.lower() for k in _CUISINE_FAMILY_MAP}
+
+
+def _register_cuisine(cuisine: str) -> None:
+    """Add an unknown cuisine to config.json with itself as its own family."""
+    if cuisine in _CUISINE_FAMILY_MAP:
+        return
+    _CUISINE_FAMILY_MAP[cuisine] = cuisine
+    KNOWN_CUISINES.add(cuisine.lower())
+    raw = json.loads(_CONFIG_PATH.read_text())
+    raw.setdefault("cuisine_family_map", {})[cuisine] = cuisine
+    _CONFIG_PATH.write_text(json.dumps(raw, indent=2, ensure_ascii=False))
 
 # Source-name → cuisine-type aliases for cuisine_direction normalization.
 # Keys are lowercase substrings to match against; values are canonical cuisine types.
@@ -481,6 +491,11 @@ _SOURCE_CUISINE_ALIASES: list[tuple[str, str]] = [
     ("chetna makan",              "Indian"),
     ("chetna",                    "Indian"),
     ("kannamma cooks",            "Indian"),
+    ("giallozafferano",           "Italian"),
+    ("cucchiaio",                 "Italian"),
+    ("memorie di angelina",       "Italian"),
+    ("memoriediangelina",         "Italian"),
+    ("frank fariello",            "Italian"),
 ]
 
 
@@ -510,8 +525,9 @@ def _normalize_cuisine_direction(direction: str) -> tuple[str, Optional[str]]:
         if kc in d_lower:
             return (direction.strip(), None)
 
-    # Unknown — pass through with a warning
-    note = f"Unrecognized cuisine direction '{direction}' — passing through as-is."
+    # Unknown — register it in config.json and pass through
+    _register_cuisine(direction.strip())
+    note = f"Registered new cuisine '{direction.strip()}' in config.json."
     return (direction.strip(), note)
 
 
@@ -839,6 +855,7 @@ def _load_candidates(quick_days: list) -> list:
             "age_weeks": age_weeks,
             "meal_type": r.get("meal_type", "Weeknight"),
             "method": r.get("cooking_method", ""),
+            "weeknight_effort": r.get("weeknight_effort", ""),
             "adult_score": adult_score,
             "kid_friendly": kid_friendly,
             "inv_broad": inv_broad,
@@ -1492,6 +1509,8 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
             ing_name = str(ing.get("name", "")).strip()
             if not ing_name:
                 continue
+            if _GARDEN_HERBS and any(herb in ing_name.lower() for herb in _GARDEN_HERBS):
+                continue
             qty  = str(ing.get("quantity", "")).strip()
             unit = str(ing.get("unit", "")).strip()
             qty_unit = f"{qty} {unit}".strip()
@@ -1500,7 +1519,7 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
     def _add_raw(raw_list, meal_label, date_str):
         for raw in raw_list:
             raw = str(raw).strip()
-            if raw:
+            if raw and not (_GARDEN_HERBS and any(herb in raw.lower() for herb in _GARDEN_HERBS)):
                 occurrences.append((_canonical_ing(raw), _display_ing(raw), "", meal_label, date_str))
 
     for day in DAYS_ORDER:
@@ -1894,6 +1913,7 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
             "meal_type": c["meal_type"],
             "is_quick": c["is_quick"],
             "last_cooked": c["last_cooked"],
+            "weeknight_effort": c["weeknight_effort"],
         }
         for c in candidates[:20]
     ]
@@ -2056,7 +2076,16 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 if cuisine_match:
                     eligible = cuisine_match + [c for c in eligible if c not in cuisine_match]
 
-        # 3. Category diversity — deprioritise overrepresented categories (e.g. pasta ≥ 2)
+        # 3. Effort filter from reason ("low effort", "easy", "simple")
+        effort_signals = ("low effort", "easy", "simple", "not too hard", "quick and easy")
+        if any(s in reason_lower for s in effort_signals):
+            effort_filtered = [c for c in eligible if c.get("weeknight_effort") in ("low", "medium")]
+            if effort_filtered:
+                eligible = effort_filtered
+            else:
+                filter_notes.append("No low/medium effort recipes available — picked best alternative")
+
+        # 4. Category diversity — deprioritise overrepresented categories (e.g. pasta ≥ 2)
         tallies = _plan_tallies({k: v for k, v in selected.items() if k != day}, all_recipes)
         cat_counts = tallies["category"]
         overloaded_cats = {cat for cat, cnt in cat_counts.items() if cnt >= 2}
@@ -2071,7 +2100,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             if non_overloaded:
                 eligible = non_overloaded
 
-        # 4. Cook-time filter — weeknight days default to quick meals
+        # 5. Cook-time filter — weeknight days default to quick meals
         weeknight_days = {"Mon", "Tue", "Wed", "Thu", "Fri"}
         if day in weeknight_days:
             quick_eligible = [c for c in eligible if c.get("minutes", 999) <= QUICK_THRESHOLD
@@ -2079,7 +2108,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             if quick_eligible:
                 eligible = quick_eligible
 
-        # 5. Inventory boost — sort by inventory match, preserving existing order otherwise
+        # 6. Inventory boost — sort by inventory match, preserving existing order otherwise
         inventory = _load_inventory_keywords()
         if inventory:
             def _swap_score(c):
@@ -2090,7 +2119,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 return _inventory_boost(c["name"], ing, inventory)
             eligible.sort(key=_swap_score)
 
-        # 6. meal_type match (weekend vs weeknight) — soft filter, only if pool survives
+        # 7. meal_type match (weekend vs weeknight) — soft filter, only if pool survives
         if outgoing:
             key = _find_recipe_key(outgoing, all_recipes)
             if key:
@@ -2105,12 +2134,19 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
     activity["selected_meals"] = selected
     _save_activity(activity)
 
+    new_effort = ""
+    new_key = _find_recipe_key(replacement, all_recipes)
+    if new_key:
+        new_effort = all_recipes[new_key].get("weeknight_effort", "")
+
     result = {
         "selected_meals": selected,
         "swapped_day": day,
         "new_recipe": replacement,
         "outgoing_recipe": outgoing,
     }
+    if new_effort:
+        result["new_recipe_effort"] = new_effort
     if filter_notes:
         result["note"] = " | ".join(filter_notes)
     return result

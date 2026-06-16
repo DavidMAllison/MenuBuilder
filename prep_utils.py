@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 prep_utils.py — shared prep-component classification helpers.
 

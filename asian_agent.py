@@ -42,6 +42,26 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 client = anthropic.Anthropic()
 
 
+def _og_image(soup: BeautifulSoup) -> str:
+    tag = soup.find("meta", property="og:image")
+    return (tag.get("content", "") if tag else "") or ""
+
+
+def _ld_image(item: dict) -> str:
+    img = item.get("image", "")
+    if isinstance(img, str):
+        return img
+    if isinstance(img, dict):
+        return img.get("url", "") or img.get("contentUrl", "")
+    if isinstance(img, list) and img:
+        first = img[0]
+        if isinstance(first, str):
+            return first
+        if isinstance(first, dict):
+            return first.get("url", "") or first.get("contentUrl", "")
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Just One Cookbook -- Japanese (justonecookbook.com)
 # WP REST API search; ld+json on recipe pages
@@ -289,6 +309,7 @@ def fetch_recipe(url: str) -> dict:
                 "instructions": instructions,
                 "cuisine": cuisine,
                 "category": item.get("recipeCategory", ""),
+                "image": _ld_image(item) or _og_image(soup),
             }
 
     title_el = soup.find("h1")
@@ -296,6 +317,7 @@ def fetch_recipe(url: str) -> dict:
         "url": url,
         "title": title_el.get_text(strip=True) if title_el else "Unknown",
         "error": "No ld+json recipe schema found on this page",
+        "image": _og_image(soup),
     }
 
 
