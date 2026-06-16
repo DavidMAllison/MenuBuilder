@@ -640,123 +640,21 @@ def main():
         if norm:
             existing_norm.add(norm)
 
-    print(f"New (not in collection): {len(new_recipes)}")
-    print(f"Skipped: {len(skipped)}")
+    print(f"New (not yet in collection): {len(new_recipes)}")
+    print(f"Skipped (already in collection): {len(skipped)}")
     if skipped:
         for s in skipped:
             print(f"  - {s}")
 
     if not new_recipes:
-        print("\nNothing new to add.")
+        print("\nNothing new in the queue.")
         return
 
-    # Classify health, prep, and structured ingredients in batch calls
-    print(f"\nClassifying health for {len(new_recipes)} recipes...")
-    health_map = classify_health(new_recipes)
-
-    print(f"Extracting prep components for {len(new_recipes)} recipes...")
-    prep_map = classify_prep(new_recipes)
-
-    print(f"Classifying weeknight effort for {len(new_recipes)} recipes...")
-    effort_map = classify_effort(new_recipes)
-
-    print(f"Parsing structured ingredients for {len(new_recipes)} recipes...")
-    ingredients_map = parse_ingredients_structured(new_recipes)
-
-    # Build metadata entries
-    today = date.today().isoformat()
-    entries_to_add = {}
-
+    print(f"\nNew recipes available in Review UI (/New view):")
     for r in new_recipes:
-        title = r.get("title", "Unknown").strip()
-        source_label = r.get("source", "")
-        source_name = _extract_source_name(source_label)
-        source_url = _extract_url(source_label, r)
+        print(f"  + {r.get('title','?')} ({r.get('source','?')})")
 
-        cuisine = r.get("cuisine", "")
-        if isinstance(cuisine, list):
-            cuisine = ", ".join(cuisine)
-
-        time_str = r.get("time", "")
-        if not time_str:
-            total_iso = r.get("total_time") or r.get("cook_time", "")
-            mins = _iso_to_minutes(total_iso)
-            if mins:
-                h, m = divmod(mins, 60)
-                parts = []
-                if h:
-                    parts.append(f"{h} hour{'s' if h > 1 else ''}")
-                if m:
-                    parts.append(f"{m} minute{'s' if m > 1 else ''}")
-                time_str = " ".join(parts)
-
-        _register_cuisine(cuisine)
-        health = health_map.get(title, "Moderate")
-        meal_type = _infer_meal_type(r)
-        cooking_method = _infer_cooking_method(title, r.get("instructions", []))
-
-        prep_data = prep_map.get(title, {})
-
-        entry = {
-            "title": title,
-            "filename": _title_to_filename(title),
-            "source": source_name,
-            "source_url": source_url,
-            "url": source_url,
-            "cuisine": cuisine,
-            "meal_type": meal_type,
-            "health": health,
-            "times_cooked": 0,
-            "time": time_str,
-            "servings": r.get("yield", ""),
-            "status": "active",
-            "cooking_method": cooking_method,
-            "last_cooked_date": None,
-            "ingredients_raw": r.get("ingredients", []),  # raw strings e.g. "¾ cup toor dal"
-            "instructions":    r.get("instructions", []), # raw step strings
-            "ingredients":     ingredients_map.get(title, []),  # structured [{name,qty,unit,category}]
-            # Prep guide data — populated at intake by Claude
-            "prep_components":   prep_data.get("prep_components", []),
-            "prep_notes":        prep_data.get("prep_notes", ""),
-            "weeknight_effort":  effort_map.get(title, ""),
-            "needs_review":    _quality_check(
-                                   r.get("ingredients", []),
-                                   r.get("instructions", []),
-                               ),
-        }
-        # Use title as key (same pattern as existing entries)
-        entries_to_add[title] = entry
-
-    # Print summary
-    print(f"\n{'[DRY RUN] ' if args.dry_run else ''}Adding {len(entries_to_add)} new idea(s):\n")
-    for title, entry in entries_to_add.items():
-        print(f"  + {title}")
-        print(f"    Source: {entry['source']} | Cuisine: {entry['cuisine']} | "
-              f"Time: {entry['time']} | Health: {entry['health']} | Type: {entry['meal_type']}")
-
-    if args.dry_run:
-        print("\n[DRY RUN] No changes written.")
-        return
-
-    # Write .md files at intake
-    RECIPES_DIR.mkdir(exist_ok=True)
-    md_written = 0
-    for title, entry in entries_to_add.items():
-        md_path = RECIPES_DIR / entry["filename"]
-        if not md_path.exists():
-            md_path.write_text(
-                _build_recipe_md(title, entry, entry.get("needs_review", False)),
-                encoding="utf-8",
-            )
-            md_written += 1
-
-    # Write to metadata
-    recipes.update(entries_to_add)
-    metadata["last_updated"] = today
-    METADATA_PATH.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"\nWrote {len(entries_to_add)} new recipe(s) to {METADATA_PATH}")
-    print(f"  .md files created: {md_written}")
-    print(f"Total recipes now: {len(recipes)}")
+    print(f"\nAgents wrote results to /tmp — open the Recipe Review UI and use Add to Collection.")
 
 
 if __name__ == "__main__":

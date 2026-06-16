@@ -567,7 +567,15 @@ def run_agent(user_request: str) -> list[dict]:
         print(f"\nTranslating {len(cucchiaio_results)} Cucchiaio d'Argento recipe(s) via Haiku...")
         _translate_cucchiaio_batch(cucchiaio_results)
 
-    RESULTS_PATH.write_text(json.dumps(found_recipes, indent=2), encoding="utf-8")
+    existing = []
+    if RESULTS_PATH.exists():
+        try:
+            existing = json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    seen_urls = {(r.get("url") or "").rstrip("/") for r in existing}
+    merged = existing + [r for r in found_recipes if (r.get("url") or "").rstrip("/") not in seen_urls]
+    RESULTS_PATH.write_text(json.dumps(merged, indent=2), encoding="utf-8")
     return found_recipes
 
 
