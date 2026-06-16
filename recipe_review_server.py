@@ -80,6 +80,7 @@ def logout():
 
 
 UID = os.getuid()
+DISMISSED_FILE = Path(f"/tmp/dismissed_{UID}.json")
 METADATA_PATH = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
 IMG_CACHE_DIR = Path.home() / ".cache" / "recipe_images"
 IMG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -255,6 +256,13 @@ def me():
 @app.route("/api/recipes")
 @login_required
 def recipes():
+    dismissed: set = set()
+    if DISMISSED_FILE.exists():
+        try:
+            dismissed = set(json.loads(DISMISSED_FILE.read_text()))
+        except Exception:
+            pass
+
     files = sorted(glob.glob(f"/tmp/*_agent_results_{UID}.json"))
     candidates = []
     seen_urls: set = set()
@@ -263,6 +271,8 @@ def recipes():
             for r in json.loads(Path(path).read_text(encoding="utf-8")):
                 url = (r.get("url", "") or "").rstrip("/")
                 if url and url in seen_urls:
+                    continue
+                if url and url in dismissed:
                     continue
                 seen_urls.add(url)
                 candidates.append(r)
@@ -509,6 +519,27 @@ def remove_recipe():
     _save_metadata(metadata)
 
     return jsonify({"removed": entry.get("title", key_to_remove)})
+
+
+@app.route("/api/dismiss", methods=["POST"])
+@login_required
+def dismiss_recipe():
+    """Dismiss a recipe from the New queue for this session."""
+    body = request.get_json()
+    url  = (body.get("url", "") or "").rstrip("/")
+    if not url:
+        return jsonify({"error": "url required"}), 400
+
+    dismissed: list = []
+    if DISMISSED_FILE.exists():
+        try:
+            dismissed = json.loads(DISMISSED_FILE.read_text())
+        except Exception:
+            pass
+    if url not in dismissed:
+        dismissed.append(url)
+    DISMISSED_FILE.write_text(json.dumps(dismissed))
+    return jsonify({"dismissed": url})
 
 
 def _negation_terms(q: str) -> list[str]:
