@@ -354,16 +354,30 @@ def _iso_to_human(iso: str) -> str:
 
 def _source_label(url: str) -> str:
     if "justonecookbook.com" in url:
-        return f"Just One Cookbook - {url}"
+        return "Just One Cookbook"
     if "maangchi.com" in url:
-        return f"Maangchi - {url}"
+        return "Maangchi"
     if "hot-thai-kitchen.com" in url:
-        return f"Hot Thai Kitchen - {url}"
+        return "Hot Thai Kitchen"
     if "vietworldkitchen.com" in url:
-        return f"Viet World Kitchen - {url}"
+        return "Viet World Kitchen"
     if "thewoksoflife.com" in url:
-        return f"The Woks of Life - {url}"
+        return "The Woks of Life"
     return url
+
+
+def _cuisine_from_url(url: str) -> str:
+    if "justonecookbook.com" in url:
+        return "Japanese"
+    if "maangchi.com" in url:
+        return "Korean"
+    if "hot-thai-kitchen.com" in url:
+        return "Thai"
+    if "vietworldkitchen.com" in url:
+        return "Vietnamese"
+    if "thewoksoflife.com" in url:
+        return "Chinese"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +597,8 @@ def run_agent(user_request: str) -> list[dict]:
                     print(f"  Got: {title}" + (f" ({time_str})" if time_str else ""))
                     if result.get("ingredients") and result.get("instructions"):
                         result["source"] = _source_label(result["url"])
+                        if not result.get("cuisine"):
+                            result["cuisine"] = _cuisine_from_url(result["url"])
                         found_recipes.append(result)
 
             else:

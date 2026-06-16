@@ -151,7 +151,7 @@ def _fetch_smittenkitchen(url: str, soup: BeautifulSoup) -> dict:
         "yield": yield_str,
         "ingredients": ingredients,
         "instructions": instructions,
-        "cuisine": "",
+        "cuisine": "American",
         "image": _og_image(soup),
         "category": "",
         "time": time_str,
@@ -237,7 +237,7 @@ def _fetch_chetnamakan(url: str, soup: BeautifulSoup) -> dict:
         "yield": "",
         "ingredients": ingredients,
         "instructions": instructions,
-        "cuisine": "",
+        "cuisine": "Indian",
         "category": "",
         "time": "",
         "image": _og_image(soup),
@@ -343,12 +343,22 @@ def fetch_recipe(url: str) -> dict:
 
 def _source_label(url: str) -> str:
     if "altonbrown.com" in url:
-        return f"Alton Brown - {url}"
+        return "Alton Brown"
     if "smittenkitchen.com" in url:
-        return f"Deb Perelman (Smitten Kitchen) - {url}"
+        return "Deb Perelman (Smitten Kitchen)"
     if "chetnamakan.co.uk" in url:
-        return f"Chetna Makan - {url}"
+        return "Chetna Makan"
     return url
+
+
+def _cuisine_from_url(url: str) -> str:
+    if "altonbrown.com" in url:
+        return "American"
+    if "smittenkitchen.com" in url:
+        return "American"
+    if "chetnamakan.co.uk" in url:
+        return "Indian"
+    return ""
 
 
 # --- Tool definitions for Claude ---
@@ -496,6 +506,8 @@ def run_agent(user_request: str) -> list[dict]:
                     print(f"  Got: {title}" + (f" ({time_str})" if time_str else ""))
                     if result.get("ingredients") and result.get("instructions"):
                         result["source"] = _source_label(result["url"])
+                        if not result.get("cuisine"):
+                            result["cuisine"] = _cuisine_from_url(result["url"])
                         found_recipes.append(result)
 
             else:

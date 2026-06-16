@@ -16,14 +16,101 @@
     header {
       background: #fff;
       border-bottom: 1px solid #e0e0e0;
-      padding: 14px 24px;
+      padding: 12px 24px;
       position: sticky;
       top: 0;
       z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 16px;
     }
 
+    .header-title { flex-shrink: 0; }
     header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
     header p  { font-size: 12px; color: #888; margin-top: 2px; }
+
+    .search-wrap {
+      flex: 1;
+      max-width: 480px;
+      margin-left: auto;
+      position: relative;
+    }
+
+    .search-wrap svg.search-icon {
+      position: absolute;
+      left: 11px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #bbb;
+      pointer-events: none;
+    }
+
+    #search-input {
+      width: 100%;
+      padding: 8px 34px 8px 34px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 22px;
+      font-size: 13px;
+      background: #f8f8f8;
+      color: #222;
+      outline: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    #search-input:focus {
+      border-color: #2980b9;
+      background: #fff;
+    }
+
+    #search-clear {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #bbb;
+      padding: 2px;
+      display: none;
+      line-height: 0;
+    }
+
+    #search-clear:hover { color: #555; }
+
+    .search-hint {
+      font-size: 10px;
+      color: #bbb;
+      text-align: right;
+      margin-top: 3px;
+      padding-right: 4px;
+    }
+
+    /* Search results mode */
+    .search-results-header {
+      padding: 10px 24px 0;
+      font-size: 12px;
+      color: #888;
+    }
+
+    .score-badge {
+      display: inline-block;
+      background: #eaf4fe;
+      color: #2980b9;
+      border-radius: 8px;
+      padding: 1px 6px;
+      font-size: 9px;
+      font-weight: 700;
+      margin-left: 4px;
+      vertical-align: middle;
+    }
+
+    .building-notice {
+      text-align: center;
+      padding: 40px 24px;
+      color: #888;
+      font-size: 14px;
+    }
 
     main {
       padding: 16px 24px 40px;
@@ -73,25 +160,43 @@
 
     .cuisine-group.collapsed .cuisine-body { max-height: 0; opacity: 0; }
 
-    /* Source legend */
-    .source-legend {
+    /* Source filter chips */
+    .source-chips {
       display: flex;
-      gap: 14px;
-      margin: 12px 0;
+      gap: 6px;
+      margin: 10px 0 12px;
       flex-wrap: wrap;
     }
 
-    .source-legend-item {
-      display: flex;
+    .source-chip {
+      display: inline-flex;
       align-items: center;
       gap: 5px;
-      font-size: 12px;
-      color: #666;
+      padding: 3px 10px 3px 7px;
+      border-radius: 20px;
+      border: 1.5px solid #ddd;
+      font-size: 11px;
+      font-weight: 500;
+      color: #555;
+      cursor: pointer;
+      user-select: none;
+      transition: border-color 0.12s, background 0.12s, color 0.12s;
+      background: #fff;
     }
 
-    .source-dot {
-      width: 9px;
-      height: 9px;
+    .source-chip:hover {
+      border-color: #bbb;
+      background: #f5f5f5;
+    }
+
+    .source-chip.active {
+      color: #fff;
+      border-color: transparent;
+    }
+
+    .source-chip-dot {
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
       flex-shrink: 0;
     }
@@ -495,8 +600,24 @@
 <body>
 
 <header>
-  <h1>Recipe Review</h1>
-  <p id="subtitle">Loading...</p>
+  <div class="header-title">
+    <h1>Recipe Review</h1>
+    <p id="subtitle">Loading...</p>
+  </div>
+  <div class="search-wrap">
+    <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input id="search-input" type="text" placeholder="Search or ask a question…"
+           autocomplete="off" spellcheck="false">
+    <button id="search-clear" onclick="clearSearch()" title="Clear search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+    <div class="search-hint" id="search-hint">Enter for semantic search</div>
+  </div>
 </header>
 
 <div class="view-bar">
@@ -522,8 +643,111 @@
   let allRecipes = [];
   let currentIdx = null;
   let currentView = 'new';
+  let searchMode = null;   // null = off, 'local' = live filter, 'semantic' = results
+  let searchResults = [];  // semantic results
+  let searchIndexReady = false;
+  let _localDebounce = null;
 
   const activeFilters = { health: null, mealType: null, timesCooked: null };
+
+  // Poll index status in background once page loads
+  async function pollIndexStatus() {
+    try {
+      const res = await fetch('/api/search_status');
+      const data = await res.json();
+      searchIndexReady = data.ready;
+      updateSearchHint();
+      if (!searchIndexReady) setTimeout(pollIndexStatus, 2000);
+    } catch { setTimeout(pollIndexStatus, 3000); }
+  }
+
+  function updateSearchHint() {
+    const hint = document.getElementById('search-hint');
+    if (!hint) return;
+    if (searchIndexReady) {
+      hint.textContent = 'Enter for semantic search';
+      hint.style.color = '#bbb';
+    } else {
+      hint.textContent = 'Building index…';
+      hint.style.color = '#e67e22';
+    }
+  }
+
+  function onSearchInput(e) {
+    const q = e.target.value.trim();
+    document.getElementById('search-clear').style.display = q ? 'block' : 'none';
+    document.getElementById('search-hint').style.display = q ? 'block' : 'none';
+
+    if (!q) {
+      clearSearch();
+      return;
+    }
+
+    // Live local filter while typing
+    clearTimeout(_localDebounce);
+    _localDebounce = setTimeout(() => {
+      if (searchMode !== 'semantic') {
+        searchMode = 'local';
+        renderGrid();
+      }
+    }, 120);
+  }
+
+  async function onSearchKeydown(e) {
+    if (e.key === 'Escape') { clearSearch(); return; }
+    if (e.key !== 'Enter') return;
+
+    const q = e.target.value.trim();
+    if (!q) return;
+
+    if (!searchIndexReady) {
+      // Fall back to local-only if index not ready
+      searchMode = 'local';
+      renderGrid();
+      return;
+    }
+
+    searchMode = 'semantic';
+    document.getElementById('main').innerHTML =
+      `<div class="building-notice">Searching for "${escHtml(q)}"…</div>`;
+    updateSubtitle(0);
+
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+      if (res.status === 202) {
+        document.getElementById('main').innerHTML =
+          `<div class="building-notice">Index still building — try again in a moment.</div>`;
+        return;
+      }
+      searchResults = await res.json();
+      renderGrid();
+    } catch (err) {
+      document.getElementById('main').innerHTML =
+        `<div class="building-notice">Search error: ${escHtml(String(err))}</div>`;
+    }
+  }
+
+  function clearSearch() {
+    document.getElementById('search-input').value = '';
+    document.getElementById('search-clear').style.display = 'none';
+    document.getElementById('search-hint').style.display = 'none';
+    searchMode = null;
+    searchResults = [];
+    renderGrid();
+  }
+
+  function localFilter(recipes) {
+    const q = (document.getElementById('search-input').value || '').toLowerCase().trim();
+    if (!q) return recipes;
+    return recipes.filter(r => {
+      const hay = [
+        r.title, r.cuisine, r.source,
+        ...(r.ingredients || []),
+        ...(typeof r.ingredients === 'string' ? [] : []),
+      ].join(' ').toLowerCase();
+      return q.split(/\s+/).every(word => hay.includes(word));
+    });
+  }
 
   function renderFilters() {
     const groups = [
@@ -615,6 +839,16 @@
   }
 
   function updateSubtitle(visibleCount) {
+    if (searchMode === 'semantic') {
+      document.getElementById('subtitle').textContent = `${visibleCount} search results`;
+      return;
+    }
+    if (searchMode === 'local') {
+      const total = allRecipes.length;
+      const label = currentView === 'collection' ? 'in collection' : 'new candidates';
+      document.getElementById('subtitle').textContent = `${visibleCount} of ${total} ${label}`;
+      return;
+    }
     const total = allRecipes.length;
     const label = currentView === 'collection' ? 'in collection' : 'new candidates';
     const suffix = visibleCount < total ? ` of ${total}` : '';
@@ -637,7 +871,39 @@
     const main = document.getElementById('main');
     main.innerHTML = '';
 
-    const visible = applyFilters(allRecipes);
+    // Semantic search results bypass the normal grid
+    if (searchMode === 'semantic') {
+      const q = document.getElementById('search-input').value.trim();
+      const visible = applyFilters(searchResults);
+      if (!visible.length) {
+        main.innerHTML = `<div class="empty-state"><p>No results for "${escHtml(q)}".</p></div>`;
+        updateSubtitle(0);
+        return;
+      }
+      const header = document.createElement('div');
+      header.className = 'search-results-header';
+      header.textContent = `Semantic results for "${q}"`;
+      main.appendChild(header);
+
+      const grid = document.createElement('div');
+      grid.className = 'card-grid';
+      grid.style.padding = '14px 0';
+      for (const r of visible) {
+        const idx = searchResults.indexOf(r);
+        const card = buildCard(r, idx, true);
+        grid.appendChild(card);
+      }
+      main.appendChild(grid);
+      updateSubtitle(visible.length);
+      return;
+    }
+
+    // Local mode: filter allRecipes by keyword
+    let base = allRecipes;
+    if (searchMode === 'local') {
+      base = localFilter(allRecipes);
+    }
+    const visible = applyFilters(base);
 
     if (visible.length === 0) {
       main.innerHTML = `<div class="empty-state"><p>No recipes match the active filters.</p></div>`;
@@ -652,25 +918,31 @@
       cuisineGroups[c].push(r);
     }
 
-    for (const [cuisine, recipes] of Object.entries(cuisineGroups)) {
+    for (const [cuisine, recipes] of Object.entries(cuisineGroups).sort(([a], [b]) => a.localeCompare(b))) {
       const sources = [...new Set(recipes.map(r => r.source || 'Unknown'))];
-      const legend = sources.map(s => `
-        <div class="source-legend-item">
-          <div class="source-dot" style="background:${sourceColor(s)}"></div>
-          ${escHtml(s)}
-        </div>`).join('');
-
       const groupId = `group-${slugify(cuisine)}`;
+
+      // Only render chips when there are multiple sources
+      const chipsHtml = sources.length > 1
+        ? `<div class="source-chips" data-group="${groupId}">` +
+          sources.map(s =>
+            `<div class="source-chip" data-source="${escHtml(s)}" onclick="toggleSourceChip(this,'${groupId}')" style="">` +
+            `<div class="source-chip-dot" style="background:${sourceColor(s)}"></div>` +
+            `${escHtml(s)}</div>`
+          ).join('') +
+          `</div>`
+        : '';
+
       const section = document.createElement('div');
       section.className = 'cuisine-group';
       section.innerHTML = `
         <div class="cuisine-header" onclick="toggleGroup('${groupId}')">
           <h2>${escHtml(cuisine)}</h2>
-          <span class="count">${recipes.length}</span>
+          <span class="count" id="count-${groupId}">${recipes.length}</span>
           <span class="chevron">▼</span>
         </div>
         <div class="cuisine-body" id="${groupId}">
-          <div class="source-legend">${legend}</div>
+          ${chipsHtml}
           <div class="card-grid"></div>
         </div>
       `;
@@ -678,7 +950,9 @@
 
       const grid = section.querySelector('.card-grid');
       for (const r of recipes) {
-        grid.appendChild(buildCard(r, allRecipes.indexOf(r)));
+        const card = buildCard(r, allRecipes.indexOf(r));
+        card.dataset.source = r.source || 'Unknown';
+        grid.appendChild(card);
       }
     }
     updateSubtitle(visible.length);
@@ -686,6 +960,41 @@
 
   function toggleGroup(groupId) {
     document.getElementById(groupId).closest('.cuisine-group').classList.toggle('collapsed');
+  }
+
+  function toggleSourceChip(chip, groupId) {
+    const src = chip.dataset.source;
+    const color = sourceColor(src);
+    const body = document.getElementById(groupId);
+    const chips = body.querySelectorAll('.source-chip');
+
+    // Toggle active state on chip
+    if (chip.classList.contains('active')) {
+      chip.classList.remove('active');
+      chip.style.background = '';
+    } else {
+      chip.classList.add('active');
+      chip.style.background = color;
+    }
+
+    // Collect active sources for this group
+    const active = [...chips]
+      .filter(c => c.classList.contains('active'))
+      .map(c => c.dataset.source);
+
+    // Show/hide cards
+    const cards = body.querySelectorAll('.card-grid .card');
+    let visible = 0;
+    for (const card of cards) {
+      const show = active.length === 0 || active.includes(card.dataset.source);
+      card.style.display = show ? '' : 'none';
+      if (show) visible++;
+    }
+
+    // Update count badge
+    const total = cards.length;
+    const countEl = document.getElementById(`count-${groupId}`);
+    if (countEl) countEl.textContent = active.length === 0 ? total : `${visible}/${total}`;
   }
 
   function toggleAllGroups() {
@@ -698,37 +1007,41 @@
 
   function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]/g, '-'); }
 
-  function buildCard(recipe, idx) {
+  function buildCard(recipe, idx, isSearchResult = false) {
     const card = document.createElement('div');
     card.className = 'card';
-    card.onclick = () => openModal(idx);
+    card.onclick = () => openModal(idx, isSearchResult);
 
     const src    = recipe.source || 'Unknown';
     const color  = sourceColor(src);
     const abbrev = src.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 3);
 
     const imageHtml = recipe.image
-      ? `<img class="card-image" src="${recipe.image}" alt="${escHtml(recipe.title)}"
+      ? `<img class="card-image" src="/api/img?url=${encodeURIComponent(recipe.image)}"
+             alt="${escHtml(recipe.title)}" loading="lazy"
              onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
         + `<div class="card-image-placeholder" style="display:none">🍽</div>`
       : `<div class="card-image-placeholder">🍽</div>`;
 
     if (recipe.in_collection) card.classList.add('in-collection');
 
+    const scoreBadge = (isSearchResult && recipe.score != null)
+      ? `<span class="score-badge">${Math.round(recipe.score * 100)}%</span>` : '';
+
     card.innerHTML = `
       ${imageHtml}
       <div class="source-badge" style="background:${color}">${abbrev}</div>
       <div class="card-body">
-        <div class="card-title">${escHtml(recipe.title)}</div>
+        <div class="card-title">${escHtml(recipe.title)}${scoreBadge}</div>
         ${recipe.time ? `<div class="card-meta">${escHtml(recipe.time)}</div>` : ''}
       </div>
     `;
     return card;
   }
 
-  function openModal(idx) {
+  function openModal(idx, isSearchResult = false) {
     currentIdx = idx;
-    const r = allRecipes[idx];
+    const r = isSearchResult ? searchResults[idx] : allRecipes[idx];
 
     // Toolbar
     const visitHref = r.url ? `href="${r.url}" target="_blank" rel="noopener"` : '';
@@ -762,7 +1075,8 @@
 
     // Content
     const imageHtml = r.image
-      ? `<img class="modal-image" src="${r.image}" alt="${escHtml(r.title)}" onerror="this.style.display='none'">`
+      ? `<img class="modal-image" src="/api/img?url=${encodeURIComponent(r.image)}"
+             alt="${escHtml(r.title)}" onerror="this.style.display='none'">`
       : `<div class="modal-image-placeholder">🍽</div>`;
 
     const ings  = (r.ingredients  || []).map(i => `<li>${escHtml(i)}</li>`).join('');
@@ -852,6 +1166,12 @@
 
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
+  // Wire search input
+  const _si = document.getElementById('search-input');
+  _si.addEventListener('input', onSearchInput);
+  _si.addEventListener('keydown', onSearchKeydown);
+  document.getElementById('search-hint').style.display = 'none';
+
   function escHtml(str) {
     if (!str) return '';
     return String(str)
@@ -860,6 +1180,7 @@
   }
 
   load();
+  pollIndexStatus();
 </script>
 </body>
 </html>
