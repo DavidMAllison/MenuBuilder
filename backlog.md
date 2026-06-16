@@ -102,22 +102,13 @@
 
 *(Thin-pool prompt removed Jun 2026 — 163 active recipes across 30+ cuisines; pool is never thin enough to warrant this. Saturday cron replenishes weekly.)*
 
-### SMS Recipe Display (show_recipe via Keanu)
-- Text a recipe name to Keanu, get back formatted ingredients + steps
-- Uses same JSON-first lookup as `show_recipe.py`
-
-### Local Recipe Browser (Web UI)
-- Simple local Flask server with a search box for browsing and viewing the existing recipe collection
-- Reads from `recipe_metadata.json` for search/filter; renders `.md` files as styled HTML (same as `show_recipe.py`)
-- Zero API cost — no LLM calls needed for browse/view
-- Replaces `show_recipe.py` for desktop use; search box replaces having to know the exact recipe name
-- Filter ideas: cuisine, meal type, health, cook time, last cooked
-
-### RAG for Recipe Collection (Learning/Experiment)
-- Build a local RAG pipeline over the recipe `.md` files for semantic search and experimentation
-- **Stack**: `sentence-transformers` (local embeddings) + ChromaDB (local vector store, Python-native)
-- **Example queries**: "find something similar to Korean Chicken Bulgogi but Italian", "weeknight fish that isn't salmon"
-- **Why not yet**: collection fits in a single context window; `suggest_meals.py` handles structured filtering. Learning project, not a workflow gap.
+### Local Recipe Browser + RAG Search
+**Status**: COMPLETE Jun 16 2026.
+- Local keyword filter (client-side, instant) in Recipe Review UI header search box — filters by title, cuisine, source, ingredients as you type
+- Semantic RAG search on Enter: `sentence-transformers all-MiniLM-L6-v2` + ChromaDB in-memory index over 228 recipes; builds in ~20s at startup
+- Negation filter: "not X", "isn't X", "without X" strips matching titles from results
+- Index status polled via `GET /api/search_status`; hint text shows build progress
+- Works across both New and Full Collection views
 
 ### WeeklyShoppingList.app - Completed-Item Skip Window Too Wide
 **Status**: FIXED Jun 9 2026.
@@ -145,9 +136,13 @@
 - Requires reworking both apps to read JSON instead of txt
 
 ### Recipe Review UI — image backfill for existing collection
-- Existing recipes in `recipe_metadata.json` have no `image` field (only Italian agent captures it at intake)
-- Backfill: for each active recipe with a `source_url`, scrape `og:image` and write to metadata
-- Makes Full Collection view cards useful (currently mostly placeholders)
+**Status**: COMPLETE Jun 16 2026. `backfill_images.py` ran; 140/149 recipes with source_url updated. 78 recipes (ATK + originals) have no source_url and remain without images. Re-run `backfill_images.py --force` after adding new sourced recipes.
+
+### Recipe Review UI — Cuisine/Source UX overhaul
+- Full Collection has 20+ cuisine groups + per-group source legends — too noisy on mobile
+- Source abbreviation badge already on each card; per-group source legend is redundant
+- **Open questions to decide**: (1) keep cuisine grouping or go flat grid + filter pills? (2) filter by cuisine or by source (ATK, Maangchi, etc.)? (3) multi-select or single?
+- Leading option: drop per-group source legend, add a cuisine dropdown/pill to filter bar, keep card badges for source identity
 
 ### Recipe Review UI — remove button in Full Collection view
 - Full Collection view should have a Remove button in the modal toolbar
@@ -155,9 +150,18 @@
 - Requires confirmation step before deleting
 
 ### Recipe Review UI — metadata caching
-- `recipe_review_server.py` loads `recipe_metadata.json` on every `/api/recipes` request
-- Cache in memory with a file-modified-time check; only re-read when file changes
-- Not needed at current scale but will matter when recipe pool grows
+**Status**: COMPLETE Jun 16 2026. `_load_metadata()` / `_save_metadata()` in `recipe_review_server.py`. mtime-keyed cache; only re-reads from disk when file changes. All five read sites + two write sites converted.
+
+### Recipe Review UI — Autonomous Data-Quality Agent
+- An agent that scans agent result files (`/tmp/*_agent_results_{uid}.json`) and `recipe_metadata.json` for common classification issues and resolves them without needing user input
+- **Issues to detect and fix autonomously**:
+  - Missing `cuisine` field → infer from source domain or recipe title
+  - `cuisine` values that don't match canonical list (`suggest_meals.py` `CUISINE_FAMILY_MAP`) → normalize
+  - Missing or empty `source` field → infer from `url`
+  - `meal_type` mismatch (recipe time > 60 min but tagged `weeknight`) → reclassify
+  - `needs_review: true` entries that have complete data → clear flag after spot-check
+- **Trigger**: run after `fill_menu_ideas.py` completes, or on-demand via `/fillmenuideas`
+- **Design**: read → classify issues by type → apply high-confidence fixes (domain-based cuisine, source label) → surface low-confidence issues (Haiku classification needed) for batch Haiku call → write back to JSON → report summary
 
 ### Meal Costing (Long-Term)
 - Once price history accumulates, cost recipes using `ingredients` array + price-per-unit averages from `price_history.json`
