@@ -4,6 +4,9 @@ mexican_agent.py -- Find Mexican recipes using Claude as the agent.
 
 Sources:
   - patijinich.com (Pati Jinich)
+  - mexicoinmykitchen.com (Mely Martinez)
+  - rickbayless.com (Rick Bayless)
+  - Cooking con Claudia (YouTube)
 
 Usage:
   mexican "find recipes from Oaxaca"
@@ -18,6 +21,7 @@ import json
 import os
 import re
 import sys
+import time as time_mod
 from pathlib import Path
 
 import httpx
@@ -35,6 +39,10 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
 
 RESULTS_PATH = Path(f"/tmp/mexican_agent_results_{os.getuid()}.json")
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+
+_MIMK_CACHE = Path(f"/tmp/mimk_recipe_urls_{os.getuid()}.json")
+_MIMK_TTL = 86400  # 24 hours
+_MIMK_SKIP = re.compile(r"(-recipes/|-ideas/|/what-are-|cocktail|cookbook|introducing|/dia-de|holiday-recipe|birthday|recipes-with-)")
 
 client = anthropic.Anthropic()
 
@@ -163,6 +171,37 @@ def fetch_claudia(url: str) -> dict:
         "category": "",
         "image": info.get("thumbnail", ""),
     }
+
+
+def _load_mimk_urls() -> list[str]:
+    """Load Mexico in My Kitchen recipe URLs from cache or sitemap."""
+    if _MIMK_CACHE.exists() and time_mod.time() - _MIMK_CACHE.stat().st_mtime < _MIMK_TTL:
+        return json.loads(_MIMK_CACHE.read_text(encoding="utf-8"))
+    try:
+        with httpx.Client(timeout=30, follow_redirects=True) as http:
+            r = http.get("https://www.mexicoinmykitchen.com/post-sitemap.xml", headers=HEADERS)
+            r.raise_for_status()
+    except Exception:
+        return []
+    urls = re.findall(r"<loc>(https://www\.mexicoinmykitchen\.com/[^<]+)</loc>", r.text)
+    recipe_urls = [u for u in urls if not _MIMK_SKIP.search(u)]
+    _MIMK_CACHE.write_text(json.dumps(recipe_urls), encoding="utf-8")
+    return recipe_urls
+
+
+def search_mexicoinmykitchen(query: str, max_results: int = 10) -> list[dict]:
+    """Search mexicoinmykitchen.com via sitemap keyword matching on URL slugs."""
+    urls = _load_mimk_urls()
+    terms = query.lower().split()
+    results = []
+    for url in urls:
+        slug = url.rstrip("/").split("/")[-1].replace("-", " ")
+        if all(t in slug for t in terms):
+            title = slug.replace(" recipe", "").replace(" mexican", "").title()
+            results.append({"title": title, "url": url})
+            if len(results) >= max_results:
+                break
+    return results
 
 
 def search_rickbayless(query: str, max_results: int = 20) -> list[dict]:
@@ -377,10 +416,19 @@ def fetch_recipe(url: str) -> dict:
 
             instructions = []
             for step in item.get("recipeInstructions", []):
-                if isinstance(step, dict):
-                    instructions.append(step.get("text", "").strip())
-                elif isinstance(step, str):
+                if isinstance(step, str):
                     instructions.append(step.strip())
+                elif isinstance(step, dict):
+                    if step.get("@type") == "HowToSection":
+                        for substep in step.get("itemListElement", []):
+                            if isinstance(substep, dict):
+                                text = substep.get("text", "").strip()
+                                if text:
+                                    instructions.append(text)
+                    else:
+                        text = step.get("text", "").strip()
+                        if text:
+                            instructions.append(text)
 
             return {
                 "url": url,
@@ -441,6 +489,8 @@ def _source_label(url: str) -> str:
         return "Pati Jinich"
     if "rickbayless.com" in url:
         return "Rick Bayless"
+    if "mexicoinmykitchen.com" in url:
+        return "Mexico in My Kitchen"
     if "youtube.com" in url or "youtu.be" in url:
         return "Cooking con Claudia"
     return url
@@ -477,6 +527,22 @@ TOOLS = [
             "properties": {
                 "query": {"type": "string", "description": "Search term (dish name or ingredient)"},
                 "max_results": {"type": "integer", "description": "Max results to return (default 8)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_mexicoinmykitchen",
+        "description": (
+            "Search mexicoinmykitchen.com (Mely Martinez) for authentic Mexican home-cooking recipes. "
+            "Keyword-matches against URL slugs — use specific dish or ingredient names, not cooking techniques. "
+            "Returns recipe titles and URLs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Dish name or main ingredient (e.g. 'carnitas', 'chile relleno', 'tomatillo')"},
+                "max_results": {"type": "integer", "description": "Max results (default 10)"},
             },
             "required": ["query"],
         },
@@ -519,6 +585,7 @@ SYSTEM = """You are a Mexican recipe finder. Your job is to search for recipes a
 Available sources:
 - patijinich.com (Pati Jinich) — use search_patijinich
 - rickbayless.com (Rick Bayless) — use search_rickbayless
+- mexicoinmykitchen.com (Mely Martinez) — use search_mexicoinmykitchen; authentic home-cooking, wide dish variety
 - Cooking con Claudia (YouTube) — use search_claudia; ingredients from description, instructions link to video
 
 Rules:
@@ -574,6 +641,11 @@ def run_agent(user_request: str) -> list[dict]:
             if name == "search_patijinich":
                 print(f"  [Pati Jinich] Searching: {inp['query']!r}")
                 result = search_patijinich(inp["query"], inp.get("max_results", 20))
+                print(f"  Found {len(result)} result(s)")
+
+            elif name == "search_mexicoinmykitchen":
+                print(f"  [Mexico in My Kitchen] Searching: {inp['query']!r}")
+                result = search_mexicoinmykitchen(inp["query"], inp.get("max_results", 10))
                 print(f"  Found {len(result)} result(s)")
 
             elif name == "search_claudia":
