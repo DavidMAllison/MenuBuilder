@@ -306,6 +306,15 @@ def _fetch_patijinich_wprm(url: str) -> dict:
     if not ingredients and not instructions:
         return {"error": "No WPRM recipe content found on print page", "url": url}
 
+    # og:image lives on the main recipe page, not the print URL
+    image = ""
+    try:
+        with httpx.Client(timeout=10, follow_redirects=True) as http:
+            main_resp = http.get(url, headers=HEADERS)
+        image = _og_image(BeautifulSoup(main_resp.text, "html.parser"))
+    except Exception:
+        pass
+
     return {
         "url": url,
         "title": title,
@@ -318,7 +327,7 @@ def _fetch_patijinich_wprm(url: str) -> dict:
         "instructions": instructions,
         "cuisine": "Mexican",
         "category": "",
-        "image": _og_image(soup),
+        "image": image,
     }
 
 
@@ -337,7 +346,8 @@ def fetch_recipe(url: str) -> dict:
     try:
         with httpx.Client(timeout=20, follow_redirects=True) as http:
             resp = http.get(url, headers=HEADERS)
-            resp.raise_for_status()
+        if not resp.text:
+            return {"error": "empty response", "url": url}
     except Exception as e:
         return {"error": str(e), "url": url}
 
