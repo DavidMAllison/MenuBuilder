@@ -148,7 +148,7 @@
 - **If fetch fails**: do NOT add a partial entry. Leave the file in the inbox and ask the user to paste the recipe content.
 
 ### Two paths into recipe_metadata.json
-- **Agent pipeline** (`fill_menu_ideas.py`): automated. Runs cuisine agents → fetches full recipe data → writes directly to `recipe_metadata.json` as `status: "active"` with `ingredients_raw`, `instructions`, `url`, and a `.md` file. Low-quality auto-generated content gets `needs_review: true`. Skips any recipe the agent couldn't fully fetch. No manual step.
+- **Agent pipeline** (`fill_menu_ideas.py`): automated. Runs cuisine agents → fetches full recipe data → writes results to `/tmp/*_agent_results_{uid}.json` only. Does NOT write to `recipe_metadata.json` or create `.md` files. The Recipe Review UI (`/New` view) is the gate — user reviews cards and clicks **Add to Collection**, which triggers Haiku classification and writes the entry.
 - **Human inbox** (`recipeideas/` folder): always manual. User reviews → confirms → fetch URL → write complete entry to JSON + create `.md` → delete inbox file.
 
 ### JSON invariant — no naked entries
