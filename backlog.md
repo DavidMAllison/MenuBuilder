@@ -36,10 +36,12 @@
 - Saturday 6 PM nudge if no reply
 - sms-assistant: `set_lunch_pick` + `log_lunch_feedback` wired in `tools.py` + system prompt updated
 
-### Lunch Calendar Event (Nice to Have)
-- After `set_lunch_pick` is called, create one iCloud calendar event "Ashley's Lunch: [recipe]" recurring Sun–Fri
-- Could be a small `lunch_calendar.py` AppleScript wrapper or an addition to WeeklyMealCalendar.app
-- Not blocking anything — for reference visibility only
+### Lunch Calendar Event
+**Status**: COMPLETE Jun 17 2026.
+- `WeeklyMealCalendar.app` creates "Ashley's Lunch: [recipe]" events at noon (12–1 PM) for Sun–Fri of the current plan week
+- Reads `/Users/Shared/cooking/lunch_state.json`; skips if no pick is set
+- Deletes any existing noon events with "Ashley's Lunch" prefix before recreating (safe to re-run)
+- Saturday is excluded; only future dates are processed
 
 ### ATK / America's Test Kitchen
 **Status**: COMPLETE Jun 9 2026. `atk_agent.py` + `sync_atk_recipes` MCP tool.
@@ -54,8 +56,15 @@
 
 ### Recipe Site MCP Servers
 - ATK: DONE (Jun 9 2026 — `sync_atk_recipes` MCP tool)
-- Serious Eats: blocked by Cloudflare (403 on both httpx and headless Playwright as of Jun 2026)
+- Serious Eats: DONE Jun 17 2026. Search page is Cloudflare-blocked; sitemap + httpx recipe pages are accessible. sites_agent.py uses sitemap keyword search → httpx fetch. No Playwright needed.
 - Other sites: add to `sites_agent.py` registry as needed
+
+### YouTube Chef Extraction (Future)
+- Kenji Lopez-Alt uses YouTube as his primary recipe channel; Serious Eats is the secondary archive
+- Goal: given a chef's YouTube channel, extract recipe content from video descriptions or auto-captions
+- Design: channel ID → video list → per-video description parse → ingredient/instruction extraction
+- Kenji's channel: look up at implementation time; do not hardcode URL here
+- Blocking issue: recipe fidelity from captions is lower than ld+json; need a quality filter
 
 ### PDF-to-Markdown Migration
 **Status**: Complete. All PDFs converted to .md (Jun 2026).
@@ -81,6 +90,14 @@
 - **ATK / America's Test Kitchen** — DONE Jun 9 2026. `atk_agent.py` + `sync_atk_recipes` MCP tool. Playwright auth, httpx fetches, 3 collections.
 - **Chetna Makan YouTube** (nice to have): attach YouTube video link to recipes fetched from chetnamakan.co.uk. Channel: `UC1VkNUPA6ieOuwXmk4SSJZw`.
 - Goal: full recipe discovery pipeline — any source accessible via agent, no manual URL fetching
+
+### Mediterranean Agent (`mediterranean_agent.py`)
+- **Sources**:
+  - `olivetomato.com` — Mediterranean diet focused; search via `?s=` or sitemap. URL: https://www.olivetomato.com/mediterranean-diet-recipes/
+  - `themediterraneandish.com` — broad Mediterranean coverage (Greek, Lebanese, Turkish, North African). URL: https://www.themediterraneandish.com/
+- **ATK Mediterranean book** — *The Complete Mediterranean Cookbook* is available on archive.org: https://archive.org/details/completemediterr0000unse/page/n7/mode/1up. Need to figure out how to read/extract recipes from archive.org viewer (page-by-page image or OCR text). Could use vision extraction via Claude or check if plain-text version is accessible. Worth doing — full cookbook = 500 curated recipes.
+- **Add to `fill_menu_ideas.py`**: new `"mediterranean"` agent entry in `QUERY_POOLS` and agent dispatch
+- **Attribution**: `olivetomato.com` → "Olive Tomato", `themediterraneandish.com` → "The Mediterranean Dish", ATK book → "America's Test Kitchen"
 
 ### Cuisine Agents — Increase Recipe Yield Per Run
 - Agents currently return a small number of results per topic query (often 3–5 per source)
@@ -154,6 +171,16 @@
 
 ### Recipe Review UI — image backfill for existing collection
 **Status**: COMPLETE Jun 16 2026. `backfill_images.py` ran; 140/149 recipes with source_url updated. 78 recipes (ATK + originals) have no source_url and remain without images. Re-run `backfill_images.py --force` after adding new sourced recipes.
+
+### Recipe Review UI — Agent trigger on /New page
+- Small panel on /New to run `fill_menu_ideas.py` directly from the browser
+- UI: topic input (optional) + agent multi-select (default: all) + Run button
+- Implementation: `POST /api/fill_ideas` spawns subprocess in background, returns immediately; UI shows "Agents running — refresh /New in a few minutes" (fire-and-forget, no polling needed)
+- Future: polling + auto-refresh if the wait UX feels too rough
+
+### Recipe Review UI — More prominent loading indicator
+- Current "Loading..." text in the subtitle area is too subtle — easy to miss, especially on slow loads or when agents are running
+- Replace with a full-width banner or centered spinner overlay so it's obvious the page is working
 
 ### Recipe Review UI — Cuisine/Source UX overhaul
 - Full Collection has 20+ cuisine groups + per-group source legends — too noisy on mobile

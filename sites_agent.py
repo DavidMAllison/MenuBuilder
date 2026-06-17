@@ -3,26 +3,32 @@
 sites_agent.py -- Find recipes from cross-cuisine recipe sites.
 
 Current sites:
-  - Serious Eats (seriouseats.com)
+  - Serious Eats (seriouseats.com) — sitemap-based search; no Cloudflare issues
 
-Adding a new site: add one entry to SITES. No other code changes needed
-for sites with standard ld+json schema. Add a custom parser only if the
-site has no ld+json.
+Search strategy: Serious Eats' search page is Cloudflare-protected, but the
+sitemap (sitemap_1.xml) and individual recipe pages are accessible via plain
+httpx. This agent downloads the sitemap once per day, caches recipe URLs to
+/tmp, and does keyword matching on URL slugs. Recipe pages are fetched via
+httpx for ld+json extraction.
+
+Adding a new site: add one entry to SITES. Use search_strategy="sitemap" if
+the site's search page is blocked but the sitemap is accessible. Otherwise
+use access="httpx" for a direct search-page approach, or access="playwright"
+for sites that require a real browser.
 
 Usage:
   sites "find a braised short rib recipe"
   sites "find a weeknight pasta from Serious Eats"
   sites "find an Indian dish"
 
-Specify a site by name to restrict to that source. Otherwise all sites
-are searched. Results written to /tmp/sites_agent_results.json.
+Results written to /tmp/sites_agent_results_{uid}.json.
 """
 
 import json
 import os
 import re
 import sys
-import time
+import time as time_mod
 from pathlib import Path
 from typing import List, Optional
 
@@ -39,7 +45,8 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
                 break
 
 RESULTS_PATH = Path(f"/tmp/sites_agent_results_{os.getuid()}.json")
-HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
+SITEMAP_TTL = 86400  # 24 hours
 
 client = anthropic.Anthropic()
 
@@ -68,29 +75,74 @@ def _ld_image(item: dict) -> str:
 # standard ld+json sites.
 #
 # Fields:
-#   name          display name shown in results and used to match user requests
-#   domain        used to route fetch calls to the right method
-#   search_url    {query} is replaced with the URL-encoded search term
-#   access        "playwright" for sites that block httpx; "httpx" otherwise
-#   result_filter URL substring that identifies recipe pages vs articles/guides
-#   search_wait   seconds to wait after page load for JS-rendered results (playwright only)
+#   name            display name shown in results and used to match user requests
+#   domain          used to route fetch calls to the right method
+#   access          "httpx" or "playwright" (playwright only for sites that block httpx)
+#   search_strategy "sitemap" to search via cached sitemap; "httpx" for direct search page
+#   sitemap_url     required when search_strategy == "sitemap"
+#   result_filter   URL substring that identifies recipe pages vs articles/guides
 # ---------------------------------------------------------------------------
 SITES = [
     {
         "name": "Serious Eats",
         "domain": "seriouseats.com",
-        "search_url": "https://www.seriouseats.com/search?q={query}",
-        "access": "playwright",
-        "result_filter": "-recipe",
-        "search_wait": 3,
-        # NOTE: appending ?print= gives a clean printer-friendly layout good for
-        # manual copy-paste. Cloudflare still blocks both httpx and headless
-        # Playwright (as of Jun 2026) — even the print URL. Use for manual only.
+        "access": "httpx",
+        "search_strategy": "sitemap",
+        "sitemap_url": "https://www.seriouseats.com/sitemap_1.xml",
+        "result_filter": r"-recipe-\d+$",
+        # Search page (seriouseats.com/search?q=) is Cloudflare-protected but
+        # the sitemap and individual recipe pages are accessible via plain httpx.
     },
 ]
 
 # Shared Playwright page — set at the start of run_agent, used by all tool calls
 _pw_page = None
+
+
+# ---------------------------------------------------------------------------
+# Sitemap-based search
+# ---------------------------------------------------------------------------
+
+def _sitemap_cache_path(domain: str) -> Path:
+    return Path(f"/tmp/{domain.replace('.', '_')}_recipe_urls_{os.getuid()}.json")
+
+
+def _load_sitemap_recipes(site: dict) -> List[str]:
+    cache = _sitemap_cache_path(site["domain"])
+    if cache.exists():
+        age = time_mod.time() - cache.stat().st_mtime
+        if age < SITEMAP_TTL:
+            return json.loads(cache.read_text(encoding="utf-8"))
+
+    print(f"  Downloading sitemap for {site['name']}...")
+    with httpx.Client(timeout=30, follow_redirects=True) as http:
+        r = http.get(site["sitemap_url"], headers=HEADERS)
+        r.raise_for_status()
+
+    pattern = site.get("result_filter", r"-recipe")
+    urls = re.findall(r"<loc>(https://[^<]+)</loc>", r.text)
+    recipe_urls = [u for u in urls if re.search(pattern, u)]
+    cache.write_text(json.dumps(recipe_urls), encoding="utf-8")
+    print(f"  Cached {len(recipe_urls)} recipe URLs")
+    return recipe_urls
+
+
+def _search_sitemap(site: dict, query: str, max_results: int) -> List[dict]:
+    recipe_urls = _load_sitemap_recipes(site)
+    terms = query.lower().split()
+    results = []
+    for url in recipe_urls:
+        slug = url.rstrip("/").split("/")[-1]
+        # Strip trailing numeric ID and "-recipe" suffix for clean title
+        name_part = re.sub(r"-\d+$", "", slug)
+        name_part = re.sub(r"-recipe$", "", name_part)
+        slug_text = name_part.replace("-", " ")
+        if all(t in slug_text for t in terms):
+            title = slug_text.title()
+            results.append({"title": title, "url": url})
+            if len(results) >= max_results:
+                break
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +154,7 @@ def _search_playwright(site: dict, query: str, max_results: int) -> List[dict]:
     search_url = site["search_url"].replace("{query}", query.replace(" ", "+"))
     try:
         _pw_page.goto(search_url)
-        time.sleep(site.get("search_wait", 2))
+        time_mod.sleep(site.get("search_wait", 2))
         result_filter = site.get("result_filter", "")
         links = _pw_page.evaluate(f'''() => {{
             const main = document.querySelector('main') || document.body;
@@ -163,7 +215,10 @@ def search_sites(query: str, site_name: Optional[str] = None, max_results: int =
 
     all_results = []
     for site in targets:
-        if site["access"] == "playwright":
+        strategy = site.get("search_strategy", site["access"])
+        if strategy == "sitemap":
+            results = _search_sitemap(site, query, max_results)
+        elif site["access"] == "playwright":
             results = _search_playwright(site, query, max_results)
         else:
             results = _search_httpx(site, query, max_results)

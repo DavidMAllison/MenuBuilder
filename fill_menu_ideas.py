@@ -203,17 +203,56 @@ QUERY_POOLS = {
         "caponata siciliana",     # vegetarian
     ],
     "sites": [
-        "pork shoulder",
+        # Beef
         "braised short ribs",
-        "salmon",
-        "lamb",
-        "vegetarian chili",       # vegetarian
-        "shakshuka",              # vegetarian
-        "roast chicken",
-        "Thai curry",
-        "risotto",
-        "grilled fish",
+        "smash burger",
+        "pot roast",
+        "beef stew",
+        "brisket",
+        "meatballs",
+        "steak",
+        # Pork
+        "pork shoulder",
         "pork belly",
+        "pork chops",
+        "spare ribs",
+        # Chicken
+        "roast chicken",
+        "fried chicken",
+        "braised chicken thighs",
+        "chicken wings",
+        # Lamb
+        "lamb chops",
+        "braised lamb shoulder",
+        # Fish
+        "salmon",
+        "halibut",
+        "cod",
+        "sea bass",
+        "tuna steak",
+        # Seafood
+        "shrimp",
+        "scallops",
+        "mussels",
+        "clams",
+        # Vegetarian
+        "shakshuka",              # vegetarian
+        "vegetarian chili",       # vegetarian
+        "risotto",                # vegetarian
+        "mushroom pasta",         # vegetarian
+        "lentil soup",            # vegetarian
+        "roasted eggplant",       # vegetarian
+        "grain bowl",             # vegetarian
+        # Soups & stews
+        "French onion soup",      # vegetarian
+        "chowder",
+        "ramen",
+        # Cross-cuisine
+        "Thai curry",
+        "tacos",
+        "enchiladas",
+        "fried rice",
+        "grilled fish",
     ],
 }
 

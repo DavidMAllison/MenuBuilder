@@ -225,6 +225,13 @@ def _normalize_title(title: str) -> str:
     return " ".join(w for w in t.split() if w not in _TITLE_STOP)
 
 
+def _clean_source_name(source: str) -> str:
+    """Strip URL suffix from agent source labels: 'Serious Eats - https://...' → 'Serious Eats'."""
+    if " - http" in source:
+        return source.split(" - http")[0].strip()
+    return source
+
+
 def _existing_sets() -> tuple[set, set]:
     """Return (existing_urls, existing_norm_titles) from active recipes only."""
     try:
@@ -286,17 +293,23 @@ def recipes():
     files = sorted(glob.glob(f"/tmp/*_agent_results_{UID}.json"))
     candidates = []
     seen_urls: set = set()
+    seen_titles: set = set()
     for path in files:
         try:
             for r in json.loads(Path(path).read_text(encoding="utf-8")):
                 url = (r.get("url", "") or "").rstrip("/")
+                norm_title = _normalize_title(r.get("title", ""))
                 if url and url in seen_urls:
+                    continue
+                if norm_title and norm_title in seen_titles:
                     continue
                 if url and url in dismissed:
                     continue
                 if url and url in hidden:
                     continue
                 seen_urls.add(url)
+                if norm_title:
+                    seen_titles.add(norm_title)
                 candidates.append(r)
         except Exception:
             pass
@@ -316,6 +329,7 @@ def recipes():
         )
         annotated.append({
             **r,
+            "source":        _clean_source_name(r.get("source", "")),
             "in_collection": in_collection,
             "meal_type":     _infer_meal_type(r),
             "health":        health_map.get(r.get("title", ""), r.get("health", "Moderate")),
@@ -472,6 +486,52 @@ def this_week():
         "week_end":   plan.get("week_end", ""),
         "balance":    plan.get("balance", {}),
         "meals":      meals,
+    })
+
+
+@app.route("/api/lunch_pick")
+@login_required
+def lunch_pick_api():
+    """Return Ashley's current weekly lunch pick with recipe detail."""
+    lunch_state_file = Path("/Users/Shared/cooking/lunch_state.json")
+    if not lunch_state_file.exists():
+        return jsonify({"status": "none"})
+    try:
+        state = json.loads(lunch_state_file.read_text())
+    except Exception:
+        return jsonify({"status": "none"})
+
+    if state.get("status") != "selected" or not state.get("current_pick"):
+        return jsonify({"status": "none"})
+
+    name = state["current_pick"]
+    url  = state.get("url", "")
+
+    metadata = _load_metadata().get("recipes", {})
+    meta = metadata.get(name, {})
+    if not meta:
+        name_lower = name.lower()
+        for k, v in metadata.items():
+            if k.lower() == name_lower:
+                meta = v
+                break
+
+    ingredients = meta.get("ingredients_raw", []) or [
+        f"{i.get('quantity','')} {i.get('unit','')} {i.get('name','')}".strip()
+        for i in (meta.get("ingredients") or [])
+        if isinstance(i, dict)
+    ]
+
+    return jsonify({
+        "status":       "selected",
+        "name":         name,
+        "url":          url,
+        "health":       meta.get("health", ""),
+        "time":         meta.get("time", ""),
+        "image":        meta.get("image", ""),
+        "source":       meta.get("source", ""),
+        "ingredients":  ingredients,
+        "instructions": meta.get("instructions", []),
     })
 
 
