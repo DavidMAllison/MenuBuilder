@@ -226,19 +226,37 @@ def _normalize_title(title: str) -> str:
 
 
 def _existing_sets() -> tuple[set, set]:
-    """Return (existing_urls, existing_norm_titles) from recipe_metadata.json."""
+    """Return (existing_urls, existing_norm_titles) from active recipes only."""
     try:
         data = _load_metadata()
         recipes = data.get("recipes", {})
         urls = {
             (v.get("source_url", "") or v.get("url", "")).rstrip("/")
             for v in recipes.values()
-            if v.get("source_url") or v.get("url")
+            if (v.get("source_url") or v.get("url")) and v.get("status") == "active"
         }
-        norm_titles = {_normalize_title(v.get("title", k)) for k, v in recipes.items()}
+        norm_titles = {
+            _normalize_title(v.get("title", k))
+            for k, v in recipes.items()
+            if v.get("status") == "active"
+        }
         return urls, norm_titles
     except Exception:
         return set(), set()
+
+
+def _hidden_urls() -> set:
+    """Return source_url set for retired/disliked entries — used to filter New view."""
+    try:
+        data = _load_metadata()
+        return {
+            (v.get("source_url", "") or v.get("url", "")).rstrip("/")
+            for v in data.get("recipes", {}).values()
+            if v.get("status") in ("retired", "disliked")
+            and (v.get("source_url") or v.get("url"))
+        }
+    except Exception:
+        return set()
 
 
 @app.route("/")
@@ -263,6 +281,8 @@ def recipes():
         except Exception:
             pass
 
+    hidden = _hidden_urls()
+
     files = sorted(glob.glob(f"/tmp/*_agent_results_{UID}.json"))
     candidates = []
     seen_urls: set = set()
@@ -273,6 +293,8 @@ def recipes():
                 if url and url in seen_urls:
                     continue
                 if url and url in dismissed:
+                    continue
+                if url and url in hidden:
                     continue
                 seen_urls.add(url)
                 candidates.append(r)
@@ -490,35 +512,51 @@ def collection():
 @app.route("/api/remove", methods=["POST"])
 @login_required
 def remove_recipe():
-    """Test utility — remove a recipe from the collection by URL or title."""
-    body = request.get_json()
-    url   = (body.get("url", "") or "").rstrip("/")
+    """Remove a recipe from the collection.
+
+    Never-tried (times_cooked == 0): hard delete — entry removed, .md deleted.
+    Previously cooked (times_cooked > 0): soft delete — status set to "retired",
+    .md deleted, entry kept so the cook history and metadata are preserved.
+    """
+    body  = request.get_json()
     title = (body.get("title", "") or "").strip()
+
+    if not title:
+        return jsonify({"error": "title required"}), 400
 
     metadata = _load_metadata()
     recipes  = metadata["recipes"]
 
-    key_to_remove = None
-    for k, v in recipes.items():
-        entry_url = (v.get("source_url", "") or v.get("url", "")).rstrip("/")
-        if (url and entry_url == url) or (title and v.get("title", "").strip() == title):
-            key_to_remove = k
-            break
-
-    if not key_to_remove:
+    # Dict key is canonical; fall back to matching the title field for legacy entries
+    if title not in recipes:
+        title = next(
+            (k for k, v in recipes.items() if (v.get("title") or "").strip() == title),
+            None,
+        )
+    if not title:
         return jsonify({"error": "not found"}), 404
 
-    entry = recipes.pop(key_to_remove)
+    entry = recipes[title]
+    times_cooked = entry.get("times_cooked", 0)
 
-    # Delete .md file if it exists
+    # Delete .md file in either case — it's no longer in rotation
     md_path = RECIPES_DIR / entry.get("filename", "")
     if md_path.exists():
         md_path.unlink()
 
-    metadata["recipes"] = recipes
+    if times_cooked == 0:
+        # No cook history worth keeping — hard delete
+        recipes.pop(title)
+        outcome = "deleted"
+    else:
+        # Keep entry for history; hide from all UI views
+        entry["status"] = "retired"
+        outcome = "retired"
+
+    metadata["last_updated"] = date.today().isoformat()
     _save_metadata(metadata)
 
-    return jsonify({"removed": entry.get("title", key_to_remove)})
+    return jsonify({"outcome": outcome, "title": title, "times_cooked": times_cooked})
 
 
 @app.route("/api/dismiss", methods=["POST"])

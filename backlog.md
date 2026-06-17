@@ -66,10 +66,8 @@
 - No verbatim ATK boilerplate found in previously-PDF recipes
 - Non-ATK sources: not yet checked
 
-### ATK Recipe Attribution ⬅ IN PROGRESS
-- 33 ATK recipes missing "Adapted from" footer with source URL
-- `needatklinks.md` in project root — fill in ATK URLs, then hand back to Claude to apply
-- Once complete: add `*Adapted from [America's Test Kitchen](url)*` footer to each .md file
+### ATK Recipe Attribution
+**Status**: COMPLETE Jun 17 2026. All ATK recipes have `source_url` in metadata and `*Adapted from [America's Test Kitchen](url)*` footer in `.md` files.
 
 ### Recipe Agents for All MenuBuilder Sources
 - **Cuisine agents** (source-specific): Mexican (done), Asian/East+Southeast (done — Japanese, Korean, Thai, Vietnamese, Chinese), Indian (done — Jun 2026, its own agent separate from Asian), Italian, etc.
@@ -83,6 +81,21 @@
 - **ATK / America's Test Kitchen** — DONE Jun 9 2026. `atk_agent.py` + `sync_atk_recipes` MCP tool. Playwright auth, httpx fetches, 3 collections.
 - **Chetna Makan YouTube** (nice to have): attach YouTube video link to recipes fetched from chetnamakan.co.uk. Channel: `UC1VkNUPA6ieOuwXmk4SSJZw`.
 - Goal: full recipe discovery pipeline — any source accessible via agent, no manual URL fetching
+
+### Cuisine Agents — Increase Recipe Yield Per Run
+- Agents currently return a small number of results per topic query (often 3–5 per source)
+- Goal: each agent run should surface more candidates so the /New view is richer
+- Approach: broaden search queries, increase `max_results` per source, run multiple topic queries per agent
+- Design principle: volume is good — user decides what to add; Haiku health classification runs on all of them either way
+- Priority: medium — run on next agent overhaul
+
+### Recipe Review UI — Cost-Friendly Indicator
+- Add a `budget_friendly` classification to complement the existing health pill on every card
+- **Display**: small pill or icon on cards in /New and Full Collection views — e.g. "💲 Budget" vs no tag (normal) vs a "$$" marker for pricier recipes
+- **Classification at intake**: Haiku call alongside `classify_health()` — infer from protein type and ingredient list (beans/lentils/chicken thigh/eggs/pork = budget; salmon/beef tenderloin/lamb/shrimp/scallops = pricier)
+- **Schema**: `budget_friendly: true | false` field on each recipe entry
+- **Backfill**: `backfill_budget.py` script to classify existing collection
+- **Note**: this is ingredient-based heuristic only — real cost data waits until Sep 2026 when price_history has enough coverage (see Meal Costing item)
 
 ### Cuisine Agents — Idea Pool Replenishment (between cycles)
 - **DONE Jun 8 2026**: renamed to `fill_menu_ideas.py`; skill `/fillmenuideas`; plist updated to `com.menubuilder.fillmenuideas`; README, CLAUDE.md, backlog updated.
@@ -149,9 +162,13 @@
 - Leading option: drop per-group source legend, add a cuisine dropdown/pill to filter bar, keep card badges for source identity
 
 ### Recipe Review UI — remove button in Full Collection view
-- Full Collection view should have a Remove button in the modal toolbar
-- Removes recipe from `recipe_metadata.json`, deletes `.md` file from Dropbox, deletes from GitHub Pages repo
-- Requires confirmation step before deleting
+**Status**: COMPLETE Jun 17 2026.
+- Remove button (red trash icon) in Full Collection modal toolbar
+- Never-tried (`times_cooked == 0`): hard delete — entry removed from metadata, `.md` deleted
+- Previously cooked (`times_cooked > 0`): soft delete — `status: "retired"`, `.md` deleted, entry kept for cook history
+- `retired` and `disliked` entries hidden from all UI views (New, Full Collection)
+- New view also filters out retired/disliked by `source_url` so agent results that match are silently hidden
+- Confirmation prompt shows appropriate message based on cook count
 
 ### Recipe Review UI — metadata caching
 **Status**: COMPLETE Jun 16 2026. `_load_metadata()` / `_save_metadata()` in `recipe_review_server.py`. mtime-keyed cache; only re-reads from disk when file changes. All five read sites + two write sites converted.

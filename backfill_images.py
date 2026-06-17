@@ -31,7 +31,8 @@ def _fetch_og_image(url: str) -> str:
     try:
         with httpx.Client(timeout=15, follow_redirects=True) as http:
             resp = http.get(url, headers=HEADERS)
-            resp.raise_for_status()
+        if not resp.text:
+            return ""
         soup = BeautifulSoup(resp.text, "html.parser")
         tag = soup.find("meta", property="og:image")
         return (tag.get("content", "") if tag else "") or ""
