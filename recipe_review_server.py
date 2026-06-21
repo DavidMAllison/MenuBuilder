@@ -37,6 +37,7 @@ app = Flask(__name__, static_folder="recipe_review")
 
 _CONFIG_PATH = Path(__file__).parent / "config.json"
 _CONFIG = json.loads(_CONFIG_PATH.read_text())
+_GH_PAGES_BASE = _CONFIG.get("github_pages_base_url", "").rstrip("/")
 app.secret_key = _CONFIG.get("flask_secret_key", "dev-key-change-me")
 app.permanent_session_lifetime = timedelta(days=30)
 
@@ -327,9 +328,13 @@ def recipes():
             (bool(url)  and url  in existing_urls) or
             (bool(norm) and norm in existing_norm)
         )
+        cuisine = r.get("cuisine", "") or ""
+        if isinstance(cuisine, list):
+            cuisine = ", ".join(cuisine)
         annotated.append({
             **r,
             "source":        _clean_source_name(r.get("source", "")),
+            "cuisine":       cuisine,
             "in_collection": in_collection,
             "meal_type":     _infer_meal_type(r),
             "health":        health_map.get(r.get("title", ""), r.get("health", "Moderate")),
@@ -545,11 +550,15 @@ def collection():
         for key, v in recipes.items():
             if v.get("status") != "active":
                 continue
+            fname = v.get("filename", "")
+            gh_url = f"{_GH_PAGES_BASE}/{fname[:-3]}" if fname and _GH_PAGES_BASE else ""
             result.append({
                 "title":        v.get("title", key),
                 "cuisine":      v.get("cuisine", ""),
                 "source":       v.get("source", ""),
-                "url":          v.get("source_url", "") or v.get("url", ""),
+                "recipe_url":   gh_url,
+                "source_url":   v.get("source_url", ""),
+                "url":          gh_url or v.get("source_url", "") or v.get("url", ""),
                 "time":         v.get("time", ""),
                 "yield":        v.get("servings", ""),
                 "health":       v.get("health", ""),
@@ -725,7 +734,10 @@ def proxy_image():
         return send_file(cache_path)
 
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        })
         with urllib.request.urlopen(req, timeout=8) as resp:
             data = resp.read()
             content_type = resp.headers.get("Content-Type", "image/jpeg")
