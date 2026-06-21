@@ -63,6 +63,10 @@ LUNCH_STATE_FILE = Path("/Users/Shared/cooking/lunch_state.json")
 
 PARTNER_HANDLE = _CONFIG.get("partner_handle", "")          # Ashley
 ADMIN_HANDLE = _CONFIG.get("admin_handle", "")              # David (optional in config)
+
+# Ensure files written by this process (davidallison or allisonbot) are group-writable
+# so the other user can update them (meal swaps, plan updates, etc.).
+os.umask(0o000)
 GITHUB_BASE_URL = _CONFIG.get("github_pages_base_url", "")
 DROPBOX_BASE_URL = _CONFIG.get("dropbox_recipe_base_url", "")
 
@@ -453,6 +457,7 @@ RECENCY_WEEKS = 3
 QUICK_THRESHOLD = 35
 HIATUS_PROTEINS = ["salmon"]
 KNOWN_CUISINES: set[str] = {k.lower() for k in _CUISINE_FAMILY_MAP}
+KNOWN_FAMILIES: set[str] = {v.lower() for v in _CUISINE_FAMILY_MAP.values()}
 
 
 def _register_cuisine(cuisine: str) -> None:
@@ -494,6 +499,12 @@ _SOURCE_CUISINE_ALIASES: list[tuple[str, str]] = [
     ("chetna makan",              "Indian"),
     ("chetna",                    "Indian"),
     ("kannamma cooks",            "Indian"),
+    ("mediterranean dish",        "Mediterranean"),
+    ("themediterraneandish",      "Mediterranean"),
+    ("my greek dish",             "Greek"),
+    ("mygreekdish",               "Greek"),
+    ("feasting at home",          "Mediterranean"),
+    ("feastingathome",            "Mediterranean"),
     ("giallozafferano",           "Italian"),
     ("cucchiaio",                 "Italian"),
     ("memorie di angelina",       "Italian"),
@@ -523,8 +534,8 @@ def _normalize_cuisine_direction(direction: str) -> tuple[str, Optional[str]]:
             note = f"Recognized '{direction}' as {cuisine} cuisine."
             return (cuisine, note)
 
-    # Check if it already contains a known cuisine keyword
-    for kc in KNOWN_CUISINES:
+    # Check if it already contains a known cuisine or family keyword
+    for kc in KNOWN_CUISINES | KNOWN_FAMILIES:
         if kc in d_lower:
             return (direction.strip(), None)
 
@@ -871,22 +882,65 @@ def _load_candidates(quick_days: list) -> list:
     return sorted(candidates, key=lambda c: c["score"])
 
 
+def _direction_matches_cuisine(cuisine: str, direction_lower: str) -> bool:
+    """Return True if direction names this cuisine directly or by family."""
+    if cuisine.lower() in direction_lower:
+        return True
+    fam = _CUISINE_FAMILY_MAP.get(cuisine, "")
+    return bool(fam) and fam.lower() in direction_lower
+
+
+def _parse_cuisine_slots(direction: str) -> dict:
+    """Parse 'one Asian, one Mexican' → {'Asian': 1, 'Mexican': 1}.
+    Keys are family names. Matches both specific cuisines and family names."""
+    if not direction:
+        return {}
+    d_lower = direction.lower()
+    slots: dict = {}
+
+    def _set_slot(family: str, count: int) -> None:
+        slots[family] = min(slots.get(family, count), count)
+
+    # Specific cuisines → key by their family
+    for cuisine, family in _CUISINE_FAMILY_MAP.items():
+        c_lower = cuisine.lower()
+        if re.search(rf"\bone\s+{re.escape(c_lower)}\b", d_lower):
+            _set_slot(family, 1)
+        else:
+            m = re.search(rf"\b(\d+)\s+{re.escape(c_lower)}\b", d_lower)
+            if m:
+                _set_slot(family, int(m.group(1)))
+
+    # Family names directly (e.g. "one Asian")
+    for family in set(_CUISINE_FAMILY_MAP.values()):
+        f_lower = family.lower()
+        if re.search(rf"\bone\s+{re.escape(f_lower)}\b", d_lower):
+            _set_slot(family, 1)
+        else:
+            m = re.search(rf"\b(\d+)\s+{re.escape(f_lower)}\b", d_lower)
+            if m:
+                _set_slot(family, int(m.group(1)))
+
+    return slots
+
+
 def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optional[str]) -> dict:
     pool = list(candidates)
 
     if cuisine_direction and cuisine_direction.lower() not in ("what we've got", ""):
         c_lower = cuisine_direction.lower()
-        pool.sort(key=lambda c: (0 if c.get("cuisine", "").lower() in c_lower else 1, c["score"]))
+        pool.sort(key=lambda c: (0 if _direction_matches_cuisine(c.get("cuisine", ""), c_lower) else 1, c["score"]))
 
-    # Include idea recipes matching cuisine direction
+    # Include never-tried recipes matching cuisine direction
     recipes = _load_metadata()
     if cuisine_direction and cuisine_direction.lower() not in ("what we've got", ""):
         c_lower = cuisine_direction.lower()
         for name, meta in recipes.items():
+            cuisine_val = meta.get("cuisine_type", meta.get("cuisine", ""))
             if (
                 meta.get("times_cooked", 0) == 0
                 and meta.get("status") not in ("disliked", "ignored")
-                and meta.get("cuisine_type", meta.get("cuisine", "")).lower() in c_lower
+                and _direction_matches_cuisine(cuisine_val, c_lower)
                 and not any(c["name"] == name for c in pool)
             ):
                 pool.insert(0, {
@@ -901,9 +955,11 @@ def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optiona
                     "score": -100,
                 })
 
+    cuisine_slots = _parse_cuisine_slots(cuisine_direction or "")
     quick_set = {d.lower() for d in quick_days}
     selected: dict = {}
     used_proteins: set = set()
+    cuisine_family_counts: dict = {}
     indulgent_count = 0
 
     def _pick(days_subset, require_quick=False, require_weekend=False):
@@ -924,8 +980,14 @@ def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optiona
                 protein = c["protein"]
                 if protein in used_proteins and len(pool) > len(days_subset) * 2:
                     continue
+                # Enforce per-cuisine slots when direction explicitly quantifies them
+                fam = _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", ""))
+                slot_cap = cuisine_slots.get(fam)
+                if slot_cap is not None and cuisine_family_counts.get(fam, 0) >= slot_cap and len(pool) > len(days_subset) * 2:
+                    continue
                 selected[day] = c["name"]
                 used_proteins.add(protein)
+                cuisine_family_counts[fam] = cuisine_family_counts.get(fam, 0) + 1
                 if c.get("health") == "Indulgent":
                     indulgent_count += 1
                 break
@@ -1636,6 +1698,8 @@ def _do_finalize(activity: dict) -> dict:
     WEEKLYPLAN_DIR.mkdir(exist_ok=True)
     plan_path.write_text(json.dumps(plan_data, indent=2, ensure_ascii=False))
     shopping_path.write_text(_build_shopping_csv(selected, week_start))
+    os.chmod(plan_path, 0o666)
+    os.chmod(shopping_path, 0o666)
 
     # Launch apps
     subprocess.Popen(["open", "/Applications/WeeklyShoppingList.app"])
@@ -1706,7 +1770,7 @@ def start_menu_workflow() -> dict:
 
     meals = _merge_feedback(_parse_last_plan())
 
-    # Cross-reference recipe_metadata: skip feedback for meals already logged this cycle
+    # Cross-reference recipe_metadata: add times_cooked and skip feedback for recently logged meals
     try:
         meta_path = Path("/Users/Shared/cooking/recipe_metadata.json")
         if meta_path.exists():
@@ -1714,17 +1778,11 @@ def start_menu_workflow() -> dict:
             recipes = meta.get("recipes", meta) if isinstance(meta, dict) else meta
             cutoff = (date.today() - timedelta(days=10)).isoformat()
             for meal in meals:
-                if meal.get("sms_feedback"):
-                    continue  # already has feedback from feedback_current.json
-                key = meal["name"].lower()
-                match = next(
-                    (r for name, r in recipes.items()
-                     if name.lower() == key
-                     and r.get("last_cooked_date", "") >= cutoff),
-                    None,
-                )
-                if match:
-                    meal["sms_feedback"] = "already logged"
+                rkey = _find_recipe_key(meal["name"], recipes)
+                if rkey:
+                    meal["times_cooked"] = recipes[rkey].get("times_cooked", 0)
+                    if not meal.get("sms_feedback") and recipes[rkey].get("last_cooked_date", "") >= cutoff:
+                        meal["sms_feedback"] = "already logged"
     except Exception:
         pass
 
@@ -2027,6 +2085,16 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
     outgoing = selected.get(day)
     filter_notes = []
 
+    all_recipes = _load_metadata()
+
+    if not replacement:
+        # Check if reason names a specific recipe (e.g. "swap to Pasta e Ceci")
+        name_m = re.search(r'\bto\s+(.{4,})', reason.lower())
+        if name_m:
+            rkey = _find_recipe_key(name_m.group(1).strip().rstrip(" .,"), all_recipes)
+            if rkey:
+                replacement = rkey
+
     if not replacement:
         # Exclude every recipe already in the plan (including outgoing — we want something different)
         currently_selected = set(selected.values())
@@ -2034,7 +2102,6 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
         eligible = [c for c in candidates if c["name"] not in currently_selected]
 
         reason_lower = reason.lower()
-        all_recipes = _load_metadata()
 
         # Inject idea recipes — prepend if reason signals "new" or "idea", else append
         want_idea = any(kw in reason_lower for kw in ("idea", "new", "something different", "haven't tried"))
@@ -2071,9 +2138,9 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 filter_notes.append(f"No {reason_protein.lower()} recipes available in the pool right now")
 
         # 2. Cuisine filter from reason (tight), else fall back to cuisine_direction
-        reason_cuisine = next((c for c in KNOWN_CUISINES if c in reason_lower), None)
+        reason_cuisine = next((c for c in KNOWN_CUISINES | KNOWN_FAMILIES if c in reason_lower), None)
         if reason_cuisine:
-            cuisine_filtered = [c for c in eligible if reason_cuisine in c.get("cuisine", "").lower()]
+            cuisine_filtered = [c for c in eligible if _direction_matches_cuisine(c.get("cuisine", ""), reason_cuisine)]
             if cuisine_filtered:
                 eligible = cuisine_filtered
             else:
@@ -2082,7 +2149,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             cuisine_dir = cuisine_direction or activity.get("cuisine_direction", "")
             if cuisine_dir and cuisine_dir.lower() not in ("what we've got", ""):
                 c_lower = cuisine_dir.lower()
-                cuisine_match = [c for c in eligible if c.get("cuisine", "").lower() in c_lower]
+                cuisine_match = [c for c in eligible if _direction_matches_cuisine(c.get("cuisine", ""), c_lower)]
                 if cuisine_match:
                     eligible = cuisine_match + [c for c in eligible if c not in cuisine_match]
 
@@ -2110,7 +2177,32 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             if non_overloaded:
                 eligible = non_overloaded
 
-        # 5. Cook-time filter — weeknight days default to quick meals
+        # 5. Cuisine slot balance — don't exceed direction-specified quota on a swap
+        swap_cuisine_slots = _parse_cuisine_slots(activity.get("cuisine_direction", ""))
+        if swap_cuisine_slots:
+            current_fam_counts: dict = {}
+            for d, name in selected.items():
+                if d == day:
+                    continue
+                rkey = _find_recipe_key(name, all_recipes)
+                if rkey:
+                    rfam = _CUISINE_FAMILY_MAP.get(
+                        all_recipes[rkey].get("cuisine_type", all_recipes[rkey].get("cuisine", "")), ""
+                    )
+                    if rfam:
+                        current_fam_counts[rfam] = current_fam_counts.get(rfam, 0) + 1
+            balanced = [
+                c for c in eligible
+                if current_fam_counts.get(
+                    _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", "")), 0
+                ) < swap_cuisine_slots.get(
+                    _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", "")), 99
+                )
+            ]
+            if balanced:
+                eligible = balanced
+
+        # 6. Cook-time filter — weeknight days default to quick meals
         weeknight_days = {"Mon", "Tue", "Wed", "Thu", "Fri"}
         if day in weeknight_days:
             quick_eligible = [c for c in eligible if c.get("minutes", 999) <= QUICK_THRESHOLD
@@ -2118,7 +2210,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             if quick_eligible:
                 eligible = quick_eligible
 
-        # 6. Inventory boost — sort by inventory match, preserving existing order otherwise
+        # 7. Inventory boost — sort by inventory match, preserving existing order otherwise
         inventory = _load_inventory_keywords()
         if inventory:
             def _swap_score(c):
@@ -2129,7 +2221,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 return _inventory_boost(c["name"], ing, inventory)
             eligible.sort(key=_swap_score)
 
-        # 7. meal_type match (weekend vs weeknight) — soft filter, only if pool survives
+        # 8. meal_type match (weekend vs weeknight) — soft filter, only if pool survives
         if outgoing:
             key = _find_recipe_key(outgoing, all_recipes)
             if key:
@@ -2762,6 +2854,7 @@ def update_plan_meal(day: str, title: str) -> dict:
 
     try:
         plan_file.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        os.chmod(plan_file, 0o666)
     except Exception as e:
         return {"success": False, "day": day, "title": title, "error": str(e)}
 
