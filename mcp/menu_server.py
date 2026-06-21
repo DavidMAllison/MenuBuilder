@@ -180,6 +180,12 @@ def _find_recipe_key(name: str, recipes: dict) -> Optional[str]:
         words = {w for w in key.lower().split() if len(w) > 4}
         if len(words) >= 2 and sum(1 for w in words if w in name_lower) >= 2:
             return key
+    # Substring match: plan title may be a shortened form of the full metadata key
+    # (e.g. "Pasta e Ceci" stored as "Pasta e ceci (Pasta and Chickpeas)")
+    if len(name_lower) > 8:
+        for key in recipes:
+            if name_lower in key.lower() or key.lower().startswith(name_lower):
+                return key
     return None
 
 
@@ -374,6 +380,13 @@ _PLAN_LINE_RE = re.compile(
 _SKIP_FEEDBACK_KEYWORDS = frozenset([
     "takeout", "eating out", "restaurant", "leftovers", "leftover",
     "friends", "no cooking", "out to dinner", "pizza delivery",
+    "going out to eat", "going out",
+])
+
+# Signals in Ashley's reply that mean a day has no dinner to cook
+_OUT_SIGNALS = frozenset([
+    "going out", "eating out", "out to eat", "out to dinner",
+    "dine out", "dining out", "no dinner", "no cooking",
 ])
 
 
@@ -1117,9 +1130,11 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
             day = (swap.get("day") or "").strip()
             to_meal = (swap.get("to") or "").strip()
             if day and to_meal and day in new_selected:
-                if to_meal.lower() not in candidate_set:
+                to_lower = to_meal.lower()
+                is_placeholder = any(kw in to_lower for kw in _SKIP_FEEDBACK_KEYWORDS)
+                if not is_placeholder and to_lower not in candidate_set:
                     return None
-                new_selected[day] = to_meal
+                new_selected[day] = "Going Out to Eat" if is_placeholder else to_meal
                 changed = True
         return new_selected if changed else None
     except Exception:
@@ -1340,13 +1355,19 @@ def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> 
 
     meals_info = []
     for day, name in ordered:
+        dt = day_to_date.get(day)
+        date_iso = dt.isoformat() if dt else ""
+        if any(kw in name.lower() for kw in _SKIP_FEEDBACK_KEYWORDS):
+            meals_info.append({
+                "day": day, "date": date_iso, "title": name,
+                "health": "", "time": "", "url": "", "reminder": "Going out to eat — no dinner to cook",
+            })
+            continue
         key = _find_recipe_key(name, recipes)
         meta = recipes.get(key, {}) if key else {}
         health = meta.get("health", "Moderate")
         time_str = meta.get("time", "?")
         url = _recipe_url(name, meta)
-        dt = day_to_date.get(day)
-        date_iso = dt.isoformat() if dt else ""
         meals_info.append({
             "day": day, "date": date_iso, "title": name,
             "health": health, "time": time_str, "url": url, "reminder": "",
@@ -1355,7 +1376,8 @@ def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> 
     health_counts: dict = {}
     for m in meals_info:
         h = m["health"]
-        health_counts[h] = health_counts.get(h, 0) + 1
+        if h:  # skip eating-out/placeholder days
+            health_counts[h] = health_counts.get(h, 0) + 1
 
     week_start_display = week_sunday.strftime("%B %d")
     week_end_display = week_saturday.strftime("%B %d, %Y")
@@ -1363,6 +1385,7 @@ def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> 
     meal_lines = "\n".join(
         f"{m['day']} {m['date']}: {m['title']} ({m['health']}, {m['time']})"
         for m in meals_info
+        if m["health"]  # skip eating-out/placeholder days
     )
 
     reminder_prompt = (
@@ -1398,7 +1421,8 @@ def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> 
         if rm:
             day_reminders[rm.group(1)[:3].title()] = rm.group(2).strip()
     for m in meals_info:
-        m["reminder"] = day_reminders.get(m["day"], "")
+        if not m["reminder"]:  # eating-out days already have reminder set
+            m["reminder"] = day_reminders.get(m["day"], "")
 
     return {
         "week_start": week_sunday.isoformat(),
@@ -2459,6 +2483,36 @@ def handle_ashley_reply(reply: str) -> dict:
             ),
         }
 
+    # ── Eating out / going out ──
+    if any(s in lowered for s in _OUT_SIGNALS):
+        eating_out_day = _extract_day_from_text(reply)
+        if eating_out_day and eating_out_day in selected:
+            new_selected = dict(selected)
+            new_selected[eating_out_day] = "Going Out to Eat"
+            activity["selected_meals"] = new_selected
+            if any(p in lowered for p in APPROVAL_PHRASES):
+                _save_activity(activity)
+                return _do_finalize(activity)
+            day_to_date = _day_date_map(week_start)
+            meals_json = [
+                {"day": f"{day} {day_to_date[day].strftime('%-m/%-d')}", "recipe": new_selected[day]}
+                for day in DAYS_ORDER if day in new_selected
+            ]
+            cmd = [
+                sys.executable, str(MENUBUILDER_DIR / "send_menu_partner.py"),
+                "--meals", json.dumps(meals_json),
+            ]
+            try:
+                subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            except Exception:
+                pass
+            _save_activity(activity)
+            return {
+                **activity,
+                "message": f"Ashley says going out {eating_out_day}. Updated menu re-sent.",
+                "meals_sent": meals_json,
+            }
+
     # ── Approval ──
     if any(lowered == p or lowered.startswith(p + " ") for p in APPROVAL_PHRASES):
         # Check for idea recipes on the menu
@@ -2842,10 +2896,29 @@ def update_plan_meal(day: str, title: str) -> dict:
     except Exception as e:
         return {"success": False, "day": day, "title": title, "error": str(e)}
 
+    recipes = _load_metadata()
+    is_skip = any(kw in title.lower() for kw in _SKIP_FEEDBACK_KEYWORDS)
+    if is_skip:
+        new_url = ""
+        new_time = ""
+        new_health = ""
+        new_reminder = "Going out to eat — no dinner to cook"
+    else:
+        key = _find_recipe_key(title, recipes)
+        meta = recipes.get(key, {}) if key else {}
+        new_url = _recipe_url(title, meta)
+        new_time = meta.get("time", "")
+        new_health = meta.get("health", "")
+        new_reminder = ""
+
     updated = False
     for meal in data.get("meals", []):
         if meal.get("day") == day:
             meal["title"] = title
+            meal["url"] = new_url
+            meal["time"] = new_time
+            meal["health"] = new_health
+            meal["reminder"] = new_reminder
             updated = True
             break
 

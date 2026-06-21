@@ -202,6 +202,24 @@ QUERY_POOLS = {
         "involtini di carne",
         "caponata siciliana",     # vegetarian
     ],
+    "mediterranean": [
+        "Greek lemon chicken",
+        "lamb kleftiko",
+        "moussaka",
+        "chicken tagine",
+        "shakshuka",
+        "kibbeh",
+        "kafta",
+        "Turkish kofta",
+        "spanakopita",
+        "baba ganoush",           # vegetarian
+        "Persian herb frittata",  # vegetarian
+        "muujaddara",             # vegetarian
+        "chermoula fish",
+        "pastitsio",
+        "Greek baked fish",
+        "Lebanese chicken rice",
+    ],
     "sites": [
         # Beef
         "braised short ribs",
@@ -277,6 +295,8 @@ def _run_agent(agent_name: str, topic: str) -> list[dict]:
             from chef_agent import run_agent
         elif agent_name == "italian":
             from italian_agent import run_agent
+        elif agent_name == "mediterranean":
+            from mediterranean_agent import run_agent
         elif agent_name == "sites":
             from sites_agent import run_agent
         else:

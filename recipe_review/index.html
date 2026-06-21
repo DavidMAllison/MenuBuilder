@@ -7,7 +7,15 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    html {
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+
     body {
+      overflow-x: hidden;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #f5f5f5;
       color: #222;
@@ -118,87 +126,112 @@
       margin: 0 auto;
     }
 
-    /* Cuisine sections */
-    .cuisine-group { margin-bottom: 40px; }
-
-    .cuisine-header {
+    /* Filter sheet */
+    .fs-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 200;
       display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 0;
-      border-bottom: 2px solid #e0e0e0;
-      cursor: pointer;
-      user-select: none;
+      align-items: flex-end;
+      justify-content: center;
     }
 
-    .cuisine-header:hover h2 { color: #555; }
-    .cuisine-header h2 { font-size: 17px; font-weight: 700; color: #222; }
-
-    .cuisine-header .count {
-      font-size: 11px;
-      color: #aaa;
-      background: #eee;
-      border-radius: 10px;
-      padding: 2px 8px;
-    }
-
-    .cuisine-header .chevron {
-      margin-left: auto;
-      color: #bbb;
-      font-size: 12px;
-      transition: transform 0.2s ease;
-    }
-
-    .cuisine-group.collapsed .chevron { transform: rotate(-90deg); }
-
-    .cuisine-body {
-      overflow: hidden;
-      transition: max-height 0.25s ease, opacity 0.2s ease;
-      max-height: 4000px;
-      opacity: 1;
-    }
-
-    .cuisine-group.collapsed .cuisine-body { max-height: 0; opacity: 0; }
-
-    /* Source filter chips */
-    .source-chips {
-      display: flex;
-      gap: 6px;
-      margin: 10px 0 12px;
-      flex-wrap: wrap;
-    }
-
-    .source-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 10px 3px 7px;
-      border-radius: 20px;
-      border: 1.5px solid #ddd;
-      font-size: 11px;
-      font-weight: 500;
-      color: #555;
-      cursor: pointer;
-      user-select: none;
-      transition: border-color 0.12s, background 0.12s, color 0.12s;
+    .fs-sheet {
       background: #fff;
+      border-radius: 20px 20px 0 0;
+      width: 100%;
+      max-width: 540px;
+      max-height: 82vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
-    .source-chip:hover {
-      border-color: #bbb;
-      background: #f5f5f5;
+    @media (min-width: 601px) {
+      .fs-overlay { align-items: center; }
+      .fs-sheet { border-radius: 16px; max-height: 72vh; }
     }
 
-    .source-chip.active {
-      color: #fff;
-      border-color: transparent;
-    }
-
-    .source-chip-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
+    .fs-header {
+      display: flex;
+      align-items: center;
+      padding: 14px 20px;
+      border-bottom: 1px solid #f0f0f0;
       flex-shrink: 0;
+      gap: 8px;
+    }
+
+    .fs-title { font-size: 15px; font-weight: 700; flex: 1; }
+
+    .fs-clear-btn {
+      background: none; border: none;
+      font-size: 12px; color: #999;
+      cursor: pointer; padding: 4px 8px; border-radius: 6px;
+    }
+    .fs-clear-btn:hover { background: #f5f5f5; color: #555; }
+
+    .fs-done-btn {
+      background: #2980b9; color: #fff; border: none;
+      font-size: 12px; font-weight: 600;
+      cursor: pointer; padding: 6px 14px; border-radius: 8px;
+    }
+    .fs-done-btn:hover { background: #2471a3; }
+
+    .fs-body { overflow-y: auto; flex: 1; padding: 4px 0 20px; }
+
+    .fs-section {
+      padding: 12px 20px;
+      border-bottom: 1px solid #f5f5f5;
+    }
+    .fs-section:last-child { border-bottom: none; }
+
+    .fs-section-title {
+      font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.6px;
+      color: #bbb; margin-bottom: 9px;
+    }
+
+    .fs-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+
+    .fs-pill {
+      padding: 5px 13px; border-radius: 20px;
+      border: 1.5px solid #ddd;
+      font-size: 12px; font-weight: 500; color: #555;
+      cursor: pointer; background: #fff;
+      transition: border-color 0.12s, background 0.12s, color 0.12s;
+    }
+    .fs-pill:hover { border-color: #bbb; background: #f5f5f5; }
+    .fs-pill.active { background: #2980b9; border-color: transparent; color: #fff; }
+
+    .fs-checkbox-list {
+      max-height: 200px; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 0;
+    }
+
+    .fs-checkbox-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 6px; cursor: pointer;
+      font-size: 13px; color: #333;
+      border-radius: 6px; user-select: none;
+    }
+    .fs-checkbox-row:hover { background: #f8f8f8; }
+
+    .fs-checkbox-row input[type="checkbox"] {
+      width: 15px; height: 15px; cursor: pointer;
+      accent-color: #2980b9; flex-shrink: 0;
+    }
+
+    .fs-source-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%; flex-shrink: 0;
+    }
+
+    .filter-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      background: #2980b9; color: #fff;
+      border-radius: 10px; font-size: 10px; font-weight: 700;
+      padding: 1px 6px; margin-left: 5px; min-width: 18px;
     }
 
     /* Card grid */
@@ -348,6 +381,8 @@
 
     .modal-action.visit-btn { color: #2980b9; }
     .modal-action.visit-btn span { color: #2980b9; }
+    .modal-action.source-btn { color: #7f8c8d; }
+    .modal-action.source-btn span { color: #7f8c8d; }
 
     .modal-close-btn {
       margin-left: auto;
@@ -478,23 +513,52 @@
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    .loading-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 100px 24px;
+      gap: 14px;
+    }
+
+    .loading-ring {
+      width: 44px;
+      height: 44px;
+      border: 3px solid #e8e8e8;
+      border-top-color: #2980b9;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+
+    .loading-state p {
+      font-size: 14px;
+      color: #aaa;
+    }
+
     /* View toggle */
     .view-bar {
       display: flex;
       gap: 6px;
-      padding: 10px 24px;
+      padding: 8px 12px;
       background: #fff;
       border-bottom: 1px solid #e8e8e8;
       position: sticky;
-      top: 49px;
+      top: 0; /* overridden by JS once header height is known */
       z-index: 9;
     }
 
     .view-btn {
+      flex: 1;
+      min-width: 0;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       border: 1.5px solid #ddd;
       background: #fff;
       border-radius: 20px;
-      padding: 5px 14px;
+      padding: 5px 10px;
       font-size: 12px;
       font-weight: 600;
       color: #666;
@@ -508,57 +572,47 @@
       color: #fff;
     }
 
-    /* Filter bar */
-    .filter-bar {
-      padding: 8px 24px;
-      background: #fafafa;
-      border-bottom: 1px solid #e8e8e8;
-      display: flex;
-      gap: 18px;
-      align-items: center;
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-    }
-
-    .filter-group {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-
-    .filter-label {
-      font-size: 10px;
-      font-weight: 700;
-      color: #aaa;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    .filter-pills { display: flex; gap: 4px; }
-
-    .filter-pill {
-      border: 1.5px solid #ddd;
-      background: #fff;
-      border-radius: 14px;
-      padding: 3px 10px;
-      font-size: 11px;
-      font-weight: 600;
-      color: #666;
-      cursor: pointer;
-      transition: all 0.12s;
-      white-space: nowrap;
-    }
-
-    .filter-pill:hover { border-color: #bbb; color: #333; }
-
-    .filter-pill.active {
+    /* Filter button — icon-only, visually distinct from view pills */
+    .filter-toggle {
+      flex: 0 0 38px;
+      width: 38px;
+      height: 34px;
+      padding: 0;
       background: #eaf4fe;
-      border-color: #2980b9;
+      border: 1.5px solid #b3d4f0;
+      border-radius: 20px;
       color: #2980b9;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      transition: all 0.15s;
+      margin-left: 2px;
     }
+
+    .filter-toggle:hover { background: #d6eaf8; }
+
+    .filter-toggle.has-filters {
+      background: #2980b9;
+      border-color: #2980b9;
+      color: #fff;
+    }
+
+    .filter-toggle .filter-badge {
+      position: absolute;
+      top: -5px;
+      right: -5px;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      font-size: 9px;
+      font-weight: 700;
+      border-radius: 10px;
+      line-height: 16px;
+      margin-left: 0;
+    }
+
 
     /* Added card overlay */
     .card.in-collection::after {
@@ -769,9 +823,45 @@
       color: #bbb;
     }
 
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+      margin-left: 12px;
+    }
+
+    #user-greeting { font-size: 13px; color: #888; }
+
+    .sign-out-link {
+      font-size: 13px;
+      color: #555;
+      text-decoration: none;
+      padding: 6px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+
     /* Mobile */
     @media (max-width: 600px) {
-      header { padding: 12px 16px; }
+      /* Two-row header: [title | sign-out] / [search bar full-width] */
+      header {
+        padding: 10px 16px;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .header-title { flex: 1; }
+      .header-actions { display: none; }
+      .search-wrap {
+        order: 3;
+        flex: 1 0 100%;
+        width: 100%;
+        max-width: none;
+        margin-left: 0;
+      }
+      .search-hint { display: none; }
+
       main   { padding: 12px 12px 32px; }
 
       .card-grid {
@@ -807,6 +897,10 @@
       .modal-action { padding: 8px 12px; }
       .modal-close-btn { padding: 8px 12px; }
 
+      .view-bar { padding: 8px 8px; gap: 4px; }
+      .view-btn { padding: 5px 8px; font-size: 11px; }
+      .filter-toggle { flex: 0 0 34px; width: 34px; }
+
       .week-grid {
         grid-template-columns: repeat(4, 1fr);
         padding: 8px 12px 20px;
@@ -839,22 +933,34 @@
     </button>
     <div class="search-hint" id="search-hint">Enter for semantic search</div>
   </div>
-  <div style="display:flex;align-items:center;gap:12px;flex-shrink:0;margin-left:12px">
-    <span id="user-greeting" style="font-size:13px;color:#888"></span>
-    <a href="/logout" style="font-size:13px;color:#555;text-decoration:none;padding:6px 12px;border:1px solid #ddd;border-radius:6px;white-space:nowrap">Sign out</a>
+  <div class="header-actions">
+    <span id="user-greeting"></span>
+    <a href="/logout" class="sign-out-link">Sign out</a>
   </div>
 </header>
 
 <div class="view-bar">
   <button class="view-btn active" onclick="setView('week', this)">This Week</button>
   <button class="view-btn" onclick="setView('new', this)">New</button>
-  <button class="view-btn" onclick="setView('collection', this)">Full Collection</button>
-  <button class="view-btn collapse-toggle" id="collapse-toggle-btn" onclick="toggleAllGroups()" style="margin-left:auto">Collapse all</button>
+  <button class="view-btn" onclick="setView('collection', this)">Collection</button>
+  <button class="filter-toggle" id="filter-btn" onclick="openFilterSheet()" style="display:none" title="Filters">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+    <span class="filter-badge" id="filter-badge" style="display:none">0</span>
+  </button>
 </div>
 
-<div class="filter-bar" id="filter-bar"></div>
-
 <main id="main"></main>
+
+<div class="fs-overlay" id="fs-overlay" style="display:none" onclick="handleFsOverlayClick(event)">
+  <div class="fs-sheet" id="fs-sheet">
+    <div class="fs-header">
+      <span class="fs-title">Filters</span>
+      <button class="fs-clear-btn" onclick="clearAllFilters()">Clear all</button>
+      <button class="fs-done-btn" onclick="closeFilterSheet()">Done</button>
+    </div>
+    <div class="fs-body" id="filter-sheet-body"></div>
+  </div>
+</div>
 
 <div class="modal-overlay" id="modal" onclick="handleOverlayClick(event)">
   <div class="modal" id="modal-inner">
@@ -876,7 +982,7 @@
   let searchIndexReady = false;
   let _localDebounce = null;
 
-  const activeFilters = { health: null, mealType: null, timesCooked: null };
+  const activeFilters = { health: null, mealType: null, timesCooked: null, cuisines: new Set(), sources: new Set() };
 
   // Poll index status in background once page loads
   async function pollIndexStatus() {
@@ -936,8 +1042,7 @@
     }
 
     searchMode = 'semantic';
-    document.getElementById('main').innerHTML =
-      `<div class="building-notice">Searching for "${escHtml(q)}"…</div>`;
+    showLoading(`Searching for "${escHtml(q)}"…`);
     updateSubtitle(0);
 
     try {
@@ -977,37 +1082,117 @@
     });
   }
 
-  function renderFilters() {
-    const groups = [
-      { label: 'Health', key: 'health', pills: [
-        ['All', null], ['Heart-Healthy', 'Heart-Healthy'], ['Moderate', 'Moderate'], ['Indulgent', 'Indulgent']
-      ]},
-      { label: 'Time', key: 'mealType', pills: [
-        ['All', null], ['Weeknight', 'Weeknight'], ['Weekend', 'Weekend']
-      ]},
-    ];
-    if (currentView === 'collection') {
-      groups.push({ label: 'Tried', key: 'timesCooked', pills: [
-        ['All', null], ['Never Tried', 'never'], ['Tried', 'tried']
-      ]});
-    }
-    document.getElementById('filter-bar').innerHTML = groups.map(g => {
-      const pillsHtml = g.pills.map(([label, value]) => {
-        const active = activeFilters[g.key] === value ? ' active' : '';
-        const oc = value === null
-          ? `setFilter('${g.key}', null, this)`
-          : `setFilter('${g.key}', '${value}', this)`;
-        return `<button class="filter-pill${active}" onclick="${oc}">${label}</button>`;
-      }).join('');
-      return `<div class="filter-group"><span class="filter-label">${g.label}</span><div class="filter-pills">${pillsHtml}</div></div>`;
-    }).join('');
+  function updateFilterBadge() {
+    let count = 0;
+    if (activeFilters.health !== null) count++;
+    if (activeFilters.mealType !== null) count++;
+    if (activeFilters.timesCooked !== null) count++;
+    if (activeFilters.cuisines.size > 0) count++;
+    if (activeFilters.sources.size > 0) count++;
+    const badge = document.getElementById('filter-badge');
+    if (!badge) return;
+    badge.textContent = count;
+    badge.style.display = count > 0 ? '' : 'none';
+    const btn = document.getElementById('filter-btn');
+    if (btn) btn.classList.toggle('has-filters', count > 0);
   }
 
-  function setFilter(key, value, btn) {
-    activeFilters[key] = value;
-    btn.closest('.filter-pills').querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
+  function openFilterSheet() {
+    if (!allRecipes.length) return;
+    renderFilterSheet();
+    document.getElementById('fs-overlay').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeFilterSheet() {
+    document.getElementById('fs-overlay').style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  function handleFsOverlayClick(e) {
+    if (e.target === document.getElementById('fs-overlay')) closeFilterSheet();
+  }
+
+  function clearAllFilters() {
+    activeFilters.health = null;
+    activeFilters.mealType = null;
+    activeFilters.timesCooked = null;
+    activeFilters.cuisines = new Set();
+    activeFilters.sources = new Set();
+    renderFilterSheet();
+    updateFilterBadge();
     renderGrid();
+  }
+
+  function setSingleFilter(key, val, btn) {
+    activeFilters[key] = val;
+    btn.closest('.fs-pills').querySelectorAll('.fs-pill').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    updateFilterBadge();
+    renderGrid();
+  }
+
+  function toggleSetFilter(key, val, checkbox) {
+    if (checkbox.checked) activeFilters[key].add(val);
+    else activeFilters[key].delete(val);
+    updateFilterBadge();
+    renderGrid();
+  }
+
+  function normCuisine(c) {
+    if (!c) return 'Other';
+    if (Array.isArray(c)) return c.join(', ') || 'Other';
+    return String(c);
+  }
+
+  function renderFilterSheet() {
+    const allCuisines = [...new Set(allRecipes.map(r => normCuisine(r.cuisine)))].sort();
+    const allSources  = [...new Set(allRecipes.map(r => r.source  || 'Unknown'))].sort();
+
+    function pillsHtml(pills, key) {
+      return pills.map(([label, val]) => {
+        const active = activeFilters[key] === val ? ' active' : '';
+        const valStr = val === null ? 'null' : `'${escHtml(val)}'`;
+        return `<button class="fs-pill${active}" onclick="setSingleFilter('${key}',${valStr},this)">${escHtml(label)}</button>`;
+      }).join('');
+    }
+
+    const triedSection = currentView === 'collection' ? `
+      <div class="fs-section">
+        <div class="fs-section-title">Tried</div>
+        <div class="fs-pills">${pillsHtml([['All',null],['Never Tried','never'],['Tried','tried']],'timesCooked')}</div>
+      </div>` : '';
+
+    const cuisineHtml = allCuisines.map(c => {
+      const checked = activeFilters.cuisines.has(c) ? ' checked' : '';
+      return `<label class="fs-checkbox-row"><input type="checkbox"${checked} onchange="toggleSetFilter('cuisines','${escHtml(c)}',this)"> ${escHtml(c)}</label>`;
+    }).join('');
+
+    const sourceHtml = allSources.map(s => {
+      const checked = activeFilters.sources.has(s) ? ' checked' : '';
+      const color = sourceColor(s);
+      return `<label class="fs-checkbox-row"><input type="checkbox"${checked} onchange="toggleSetFilter('sources','${escHtml(s)}',this)"><span class="fs-source-dot" style="background:${color}"></span> ${escHtml(s)}</label>`;
+    }).join('');
+
+    document.getElementById('filter-sheet-body').innerHTML = `
+      <div class="fs-section">
+        <div class="fs-section-title">Health</div>
+        <div class="fs-pills">${pillsHtml([['All',null],['Heart-Healthy','Heart-Healthy'],['Moderate','Moderate'],['Indulgent','Indulgent']],'health')}</div>
+      </div>
+      <div class="fs-section">
+        <div class="fs-section-title">Time</div>
+        <div class="fs-pills">${pillsHtml([['All',null],['Weeknight','Weeknight'],['Weekend','Weekend']],'mealType')}</div>
+      </div>
+      ${triedSection}
+      <div class="fs-section">
+        <div class="fs-section-title">Cuisine</div>
+        <div class="fs-checkbox-list">${cuisineHtml}</div>
+      </div>
+      <div class="fs-section">
+        <div class="fs-section-title">Source</div>
+        <div class="fs-checkbox-list">${sourceHtml}</div>
+      </div>
+    `;
   }
 
   function applyFilters(recipes) {
@@ -1018,6 +1203,8 @@
       }
       if (activeFilters.timesCooked === 'never' && (r.times_cooked || 0) > 0) return false;
       if (activeFilters.timesCooked === 'tried' && (r.times_cooked || 0) === 0) return false;
+      if (activeFilters.cuisines.size > 0 && !activeFilters.cuisines.has(normCuisine(r.cuisine))) return false;
+      if (activeFilters.sources.size > 0 && !activeFilters.sources.has(r.source || 'Unknown')) return false;
       return true;
     });
   }
@@ -1038,6 +1225,7 @@
   }
 
   async function load() {
+    showLoading();
     const endpoint = currentView === 'collection' ? '/api/collection' : '/api/recipes';
     const res = await fetch(endpoint);
     allRecipes = await res.json();
@@ -1061,8 +1249,7 @@
     }
 
     for (const r of allRecipes) sourceColor(r.source || 'Unknown');
-    document.getElementById('collapse-toggle-btn').textContent = 'Collapse all';
-    renderFilters();
+    updateFilterBadge();
     renderGrid();
   }
 
@@ -1089,26 +1276,24 @@
     activeFilters.health = null;
     activeFilters.mealType = null;
     activeFilters.timesCooked = null;
+    activeFilters.cuisines = new Set();
+    activeFilters.sources = new Set();
     document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    document.getElementById('main').innerHTML = '';
-    document.getElementById('subtitle').textContent = 'Loading...';
+    document.getElementById('subtitle').textContent = 'Loading…';
 
-    const collapseBtn = document.getElementById('collapse-toggle-btn');
-    const filterBar   = document.getElementById('filter-bar');
-
+    const filterBtn = document.getElementById('filter-btn');
     if (v === 'week') {
-      collapseBtn.style.display = 'none';
-      filterBar.style.display = 'none';
+      filterBtn.style.display = 'none';
       await loadWeek();
     } else {
-      collapseBtn.style.display = '';
-      filterBar.style.display = '';
+      filterBtn.style.display = '';
       await load();
     }
   }
 
   async function loadWeek() {
+    showLoading();
     const [res, lunchRes] = await Promise.all([
       fetch('/api/this_week'),
       fetch('/api/lunch_pick'),
@@ -1391,10 +1576,9 @@
 
     // Local mode: filter allRecipes by keyword
     let base = allRecipes;
-    if (searchMode === 'local') {
-      base = localFilter(allRecipes);
-    }
-    const visible = applyFilters(base);
+    if (searchMode === 'local') base = localFilter(allRecipes);
+    const visible = applyFilters(base).slice().sort((a, b) =>
+      (a.title || '').localeCompare(b.title || ''));
 
     if (visible.length === 0) {
       main.innerHTML = `<div class="empty-state"><p>No recipes match the active filters.</p></div>`;
@@ -1402,101 +1586,15 @@
       return;
     }
 
-    const cuisineGroups = {};
+    const grid = document.createElement('div');
+    grid.className = 'card-grid';
+    grid.style.padding = '14px 0';
     for (const r of visible) {
-      const c = r.cuisine || 'Other';
-      if (!cuisineGroups[c]) cuisineGroups[c] = [];
-      cuisineGroups[c].push(r);
+      grid.appendChild(buildCard(r, allRecipes.indexOf(r)));
     }
-
-    for (const [cuisine, recipes] of Object.entries(cuisineGroups).sort(([a], [b]) => a.localeCompare(b))) {
-      const sources = [...new Set(recipes.map(r => r.source || 'Unknown'))];
-      const groupId = `group-${slugify(cuisine)}`;
-
-      // Only render chips when there are multiple sources
-      const chipsHtml = sources.length > 1
-        ? `<div class="source-chips" data-group="${groupId}">` +
-          sources.map(s =>
-            `<div class="source-chip" data-source="${escHtml(s)}" onclick="toggleSourceChip(this,'${groupId}')" style="">` +
-            `<div class="source-chip-dot" style="background:${sourceColor(s)}"></div>` +
-            `${escHtml(s)}</div>`
-          ).join('') +
-          `</div>`
-        : '';
-
-      const section = document.createElement('div');
-      section.className = 'cuisine-group';
-      section.innerHTML = `
-        <div class="cuisine-header" onclick="toggleGroup('${groupId}')">
-          <h2>${escHtml(cuisine)}</h2>
-          <span class="count" id="count-${groupId}">${recipes.length}</span>
-          <span class="chevron">▼</span>
-        </div>
-        <div class="cuisine-body" id="${groupId}">
-          ${chipsHtml}
-          <div class="card-grid"></div>
-        </div>
-      `;
-      main.appendChild(section);
-
-      const grid = section.querySelector('.card-grid');
-      for (const r of recipes) {
-        const card = buildCard(r, allRecipes.indexOf(r));
-        card.dataset.source = r.source || 'Unknown';
-        grid.appendChild(card);
-      }
-    }
+    main.appendChild(grid);
     updateSubtitle(visible.length);
   }
-
-  function toggleGroup(groupId) {
-    document.getElementById(groupId).closest('.cuisine-group').classList.toggle('collapsed');
-  }
-
-  function toggleSourceChip(chip, groupId) {
-    const src = chip.dataset.source;
-    const color = sourceColor(src);
-    const body = document.getElementById(groupId);
-    const chips = body.querySelectorAll('.source-chip');
-
-    // Toggle active state on chip
-    if (chip.classList.contains('active')) {
-      chip.classList.remove('active');
-      chip.style.background = '';
-    } else {
-      chip.classList.add('active');
-      chip.style.background = color;
-    }
-
-    // Collect active sources for this group
-    const active = [...chips]
-      .filter(c => c.classList.contains('active'))
-      .map(c => c.dataset.source);
-
-    // Show/hide cards
-    const cards = body.querySelectorAll('.card-grid .card');
-    let visible = 0;
-    for (const card of cards) {
-      const show = active.length === 0 || active.includes(card.dataset.source);
-      card.style.display = show ? '' : 'none';
-      if (show) visible++;
-    }
-
-    // Update count badge
-    const total = cards.length;
-    const countEl = document.getElementById(`count-${groupId}`);
-    if (countEl) countEl.textContent = active.length === 0 ? total : `${visible}/${total}`;
-  }
-
-  function toggleAllGroups() {
-    const btn = document.getElementById('collapse-toggle-btn');
-    const groups = document.querySelectorAll('.cuisine-group');
-    const anyExpanded = [...groups].some(g => !g.classList.contains('collapsed'));
-    groups.forEach(g => g.classList.toggle('collapsed', anyExpanded));
-    btn.textContent = anyExpanded ? 'Expand all' : 'Collapse all';
-  }
-
-  function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]/g, '-'); }
 
   function buildCard(recipe, idx, isSearchResult = false) {
     const card = document.createElement('div');
@@ -1562,15 +1660,35 @@
            </button>`
         : ''
       }
-      ${r.url
-        ? `<a class="modal-action visit-btn" ${visitHref} title="Visit original site">
-             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-               <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-             </svg>
-             <span>Visit</span>
-           </a>`
-        : ''}
+      ${currentView === 'collection'
+        ? `${r.recipe_url
+            ? `<a class="modal-action visit-btn" href="${r.recipe_url}" target="_blank" rel="noopener" title="Open recipe">
+                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                   <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                 </svg>
+                 <span>Recipe</span>
+               </a>`
+            : ''}
+           ${r.source_url
+            ? `<a class="modal-action source-btn" href="${r.source_url}" target="_blank" rel="noopener" title="View original source">
+                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                   <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                 </svg>
+                 <span>Source</span>
+               </a>`
+            : ''}`
+        : `${r.url
+            ? `<a class="modal-action visit-btn" href="${r.url}" target="_blank" rel="noopener" title="Visit original site">
+                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                   <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                 </svg>
+                 <span>Visit</span>
+               </a>`
+            : ''}`
+      }
       <button class="modal-close-btn" onclick="closeModal()" title="Close">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -1715,13 +1833,26 @@
   }
 
 
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      if (document.getElementById('fs-overlay').style.display !== 'none') closeFilterSheet();
+      else closeModal();
+    }
+  });
 
   // Wire search input
   const _si = document.getElementById('search-input');
   _si.addEventListener('input', onSearchInput);
   _si.addEventListener('keydown', onSearchKeydown);
   document.getElementById('search-hint').style.display = 'none';
+
+  function showLoading(msg = 'Loading…') {
+    document.getElementById('main').innerHTML = `
+      <div class="loading-state">
+        <div class="loading-ring"></div>
+        <p>${escHtml(msg)}</p>
+      </div>`;
+  }
 
   function escHtml(str) {
     if (!str) return '';
@@ -1738,15 +1869,12 @@
       document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
       savedBtn.classList.add('active');
     }
-    const collapseBtn = document.getElementById('collapse-toggle-btn');
-    const filterBar   = document.getElementById('filter-bar');
+    const filterBtn = document.getElementById('filter-btn');
     if (currentView === 'week') {
-      collapseBtn.style.display = 'none';
-      filterBar.style.display = 'none';
+      filterBtn.style.display = 'none';
       loadWeek();
     } else {
-      collapseBtn.style.display = '';
-      filterBar.style.display = '';
+      filterBtn.style.display = '';
       load();
     }
   }
@@ -1754,6 +1882,15 @@
   fetch('/api/me').then(r => r.json()).then(data => {
     if (data.name) document.getElementById('user-greeting').textContent = `Hi, ${data.name}`;
   });
+
+  function updateViewBarTop() {
+    const h = document.querySelector('header');
+    const vb = document.querySelector('.view-bar');
+    if (h && vb) vb.style.top = h.offsetHeight + 'px';
+  }
+  window.addEventListener('resize', updateViewBarTop);
+  window.addEventListener('load', updateViewBarTop);
+  updateViewBarTop();
 </script>
 </body>
 </html>

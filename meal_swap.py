@@ -18,6 +18,7 @@ Usage:
 import argparse
 import csv
 import json
+import os
 import re
 import subprocess
 import sys
@@ -274,6 +275,7 @@ def _update_meal_plan_json(plan_path: Path, day_str: str, outgoing: str,
             meal["url"] = url
             break
     plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    os.chmod(plan_path, 0o666)
 
 
 def _update_shopping_csv(csv_path: Path, outgoing: str,
@@ -295,6 +297,7 @@ def _update_shopping_csv(csv_path: Path, outgoing: str,
     writer.writeheader()
     writer.writerows(kept)
     csv_path.write_text(out.getvalue())
+    os.chmod(csv_path, 0o666)
 
 
 def _log_swap_to_feedback(outgoing: str, incoming: str, target_date: date) -> None:
@@ -324,6 +327,7 @@ def _recompute_balance(plan_path: Path) -> None:
             counts[h] = counts.get(h, 0) + 1
     data["balance"] = counts
     plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    os.chmod(plan_path, 0o666)
 
 
 def _suggest_start_time(time_str: str) -> str:
@@ -355,6 +359,7 @@ def _update_reminder_line(plan_path: Path, day_str: str, incoming: str, time_str
             meal["reminder"] = new_reminder
             break
     plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    os.chmod(plan_path, 0o666)
 
 
 # ---------------------------------------------------------------------------

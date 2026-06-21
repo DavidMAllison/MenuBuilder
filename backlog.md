@@ -70,10 +70,7 @@
 **Status**: Complete. All PDFs converted to .md (Jun 2026).
 
 ### Recipe Verbatim Scan
-**Status**: ATK .md files complete Jun 2026. 15 recipes rewritten, 6 formatting bugs fixed, 2 duplicates removed.
-- PDF filenames in metadata: fixed Jun 9 2026 (18 stale `.pdf` → `.md` references updated)
-- No verbatim ATK boilerplate found in previously-PDF recipes
-- Non-ATK sources: not yet checked
+**Status**: COMPLETE Jun 20 2026. ATK done previously; 55 non-ATK recipes rewritten via Haiku batch. All instructions are now reworded adaptations, not verbatim copies.
 
 ### ATK Recipe Attribution
 **Status**: COMPLETE Jun 17 2026. All ATK recipes have `source_url` in metadata and `*Adapted from [America's Test Kitchen](url)*` footer in `.md` files.
@@ -92,12 +89,8 @@
 - Goal: full recipe discovery pipeline — any source accessible via agent, no manual URL fetching
 
 ### Mediterranean Agent (`mediterranean_agent.py`)
-- **Sources**:
-  - `olivetomato.com` — Mediterranean diet focused; search via `?s=` or sitemap. URL: https://www.olivetomato.com/mediterranean-diet-recipes/
-  - `themediterraneandish.com` — broad Mediterranean coverage (Greek, Lebanese, Turkish, North African). URL: https://www.themediterraneandish.com/
-- **ATK Mediterranean book** — *The Complete Mediterranean Cookbook* is available on archive.org: https://archive.org/details/completemediterr0000unse/page/n7/mode/1up. Need to figure out how to read/extract recipes from archive.org viewer (page-by-page image or OCR text). Could use vision extraction via Claude or check if plain-text version is accessible. Worth doing — full cookbook = 500 curated recipes.
-- **Add to `fill_menu_ideas.py`**: new `"mediterranean"` agent entry in `QUERY_POOLS` and agent dispatch
-- **Attribution**: `olivetomato.com` → "Olive Tomato", `themediterraneandish.com` → "The Mediterranean Dish", ATK book → "America's Test Kitchen"
+**Status**: COMPLETE Jun 2026.
+- Sources: olivetomato.com + themediterraneandish.com; wired into `fill_menu_ideas.py`
 
 ### Cuisine Agents — Increase Recipe Yield Per Run
 - Agents currently return a small number of results per topic query (often 3–5 per source)
@@ -148,17 +141,13 @@
 - **File**: `/Applications/WeeklyShoppingList.app/Contents/Resources/Scripts/main.scpt`; source backup at `/tmp/WeeklyShoppingList_backup.applescript`
 
 ### WeeklyShoppingList.app - Grouped Reminders by Category
-- **Known limitation**: iOS Reminders auto-groups items only when added via iOS UI — AppleScript bypasses NLP categorization entirely. No API path available.
-- **Current workaround**: On iPhone, toggle list type Standard → save → Groceries → save. Triggers auto-grouping.
-- **macOS 16 (Tahoe) Jun 2026**: No change — SDEF confirms `list` class still exposes no list-type property. Revisit on future major releases.
+**Status**: COMPLETE Jun 20 2026. Works fine in practice.
 
 ### WeeklyMealCalendar.app Improvements
 - Handle edge cases: recipes with no cook time, multi-component meals
 
 ### Meal Swap Handling
-- Support swapping a planned meal mid-week
-- Involves: updating the meal plan txt, updating the calendar event via WeeklyMealCalendar.app, logging the uncooked meal so it's not counted at Sunday feedback
-- Calendar update flow needs design: WeeklyMealCalendar.app rewrites all events on each run
+**Status**: COMPLETE Jun 20 2026. Swap via Keanu SMS; plan JSON updated; visible in Recipe Review UI.
 
 ### Consolidate Meal Plan to JSON Format
 **Status**: COMPLETE Jun 16 2026.
@@ -179,14 +168,21 @@
 - Future: polling + auto-refresh if the wait UX feels too rough
 
 ### Recipe Review UI — More prominent loading indicator
-- Current "Loading..." text in the subtitle area is too subtle — easy to miss, especially on slow loads or when agents are running
-- Replace with a full-width banner or centered spinner overlay so it's obvious the page is working
+**Status**: COMPLETE Jun 20 2026.
 
 ### Recipe Review UI — Cuisine/Source UX overhaul
-- Full Collection has 20+ cuisine groups + per-group source legends — too noisy on mobile
-- Source abbreviation badge already on each card; per-group source legend is redundant
-- **Open questions to decide**: (1) keep cuisine grouping or go flat grid + filter pills? (2) filter by cuisine or by source (ATK, Maangchi, etc.)? (3) multi-select or single?
-- Leading option: drop per-group source legend, add a cuisine dropdown/pill to filter bar, keep card badges for source identity
+**Status**: COMPLETE Jun 20 2026.
+- Flat grid (alphabetical) replaces cuisine section grouping
+- Filters button in view bar opens a bottom sheet with: Health, Time, Tried, Cuisine (multi-select), Source (multi-select)
+- Active filter count badge on Filters button; sheet applies filters in real-time; Clear all resets everything
+- Filters button hidden on This Week view; shown on New and Full Collection
+
+### Recipe Review UI — dual links in Collection modal (Recipe + Source)
+**Status**: COMPLETE Jun 21 2026.
+- Collection modal toolbar now shows "Recipe" → GitHub Pages URL + "Source" → original site (when present)
+- Original/ATK recipes with no `source_url` show only the "Recipe" link
+- `/api/collection` returns `recipe_url` (from `filename`) and `source_url` as separate fields
+- New view unaffected (single "Visit" link to source URL for unreviewed recipes)
 
 ### Recipe Review UI — remove button in Full Collection view
 **Status**: COMPLETE Jun 17 2026.
@@ -210,6 +206,20 @@
   - `needs_review: true` entries that have complete data → clear flag after spot-check
 - **Trigger**: run after `fill_menu_ideas.py` completes, or on-demand via `/fillmenuideas`
 - **Design**: read → classify issues by type → apply high-confidence fixes (domain-based cuisine, source label) → surface low-confidence issues (Haiku classification needed) for batch Haiku call → write back to JSON → report summary
+
+### SMS Recipe Image Submission
+- Text a photo of a dinner to Keanu → image stored as the recipe's `image` field in `recipe_metadata.json`
+- Covers two cases: (1) custom/original meals with no source URL and therefore no og:image; (2) sourced recipes where the site doesn't publish a usable image
+- **Flow**: photo → Keanu → fuzzy-match against current week's plan or ask "which recipe is this?" → `process_recipe_image` MCP tool already exists for adding new recipes; extend it (or add a sibling tool) to update `image` only on an existing entry
+- **Trigger phrase**: "photo of [meal]" or Keanu detects an image attachment with no URL in the message
+- **Fallback**: if match is ambiguous, Keanu replies with top 2–3 candidates to confirm
+
+### Condiment Handling in Cleanup Agent and Shopping List
+- `condiments.json` stores rubs, sauces, salsas, etc. — currently outside the cleanup and shopping pipelines
+- **Cleanup agent**: add a `--check-condiments` pass that checks condiments for missing images and dead source URLs, same as recipes
+- **Shopping list**: condiment ingredients (e.g. spice rubs for a recipe) are currently not deducted from the condiments inventory when building the shopping CSV — decide whether to include them or note them as "pantry items" separately
+- **Inventory**: condiment stock not tracked in `inventory.json`; a text a photo to Keanu flow (above) could extend to condiment jars too
+- **Design decision needed**: should condiments be first-class citizens in `recipe_metadata.json` (with a `type: condiment` field) or remain a separate file?
 
 ### Meal Costing (Long-Term)
 - Once price history accumulates, cost recipes using `ingredients` array + price-per-unit averages from `price_history.json`
