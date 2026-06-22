@@ -1349,7 +1349,8 @@ def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> 
 
     recipes = _load_metadata()
     day_to_date = _day_date_map(week_start)
-    ordered = [(day, selected[day]) for day in DAYS_ORDER if day in selected]
+    # Strip suggest_meals display annotations before writing to plan
+    ordered = [(day, re.sub(r'\s*\[[^\]]+\]', '', selected[day]).strip()) for day in DAYS_ORDER if day in selected]
 
     week_sunday = week_start - timedelta(days=1)
     week_saturday = week_start + timedelta(days=5)
@@ -2911,6 +2912,9 @@ def update_plan_meal(day: str, title: str) -> dict:
         new_time = meta.get("time", "")
         new_health = meta.get("health", "")
         new_reminder = ""
+
+    # Strip suggest_meals display annotations ([LOW], [IN STOCK], [GARDEN: x], etc.)
+    title = re.sub(r'\s*\[[^\]]+\]', '', title).strip()
 
     updated = False
     for meal in data.get("meals", []):
