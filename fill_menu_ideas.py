@@ -405,6 +405,56 @@ def classify_health(recipes: list[dict]) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Kid-friendly classification
+# ---------------------------------------------------------------------------
+
+_KID_PROMPT = """Classify each recipe as kid_friendly: true or false.
+
+A recipe is kid_friendly if it features familiar, mild flavors that most kids will eat
+(chicken, pasta, rice, noodles, tacos, burgers, mild stir-fry, plain proteins) AND does not
+rely on strong heat, aggressive spice, very pungent sauces, or unusual textures as the main
+flavor profile. Bonus if a kid's portion can be pulled before saucing.
+
+Not kid_friendly: very spicy dishes, strong fish-sauce-forward recipes, unusual offal/organ meats,
+highly acidic or bitter profiles, dishes where the spice is inseparable from the base.
+
+Recipes:
+{recipes}
+
+Reply with a JSON array only — no prose:
+[{{"title": "...", "kid_friendly": true}}, ...]"""
+
+
+def classify_kid_friendly(recipes: list[dict]) -> dict[str, bool]:
+    """Batch classify kid-friendliness. Returns {title: bool}."""
+    if not recipes:
+        return {}
+
+    recipe_lines = []
+    for r in recipes:
+        ingr_preview = ", ".join(r.get("ingredients", [])[:6])
+        recipe_lines.append(f'- {r["title"]} | Ingredients: {ingr_preview}')
+
+    prompt = _KID_PROMPT.format(recipes="\n".join(recipe_lines))
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        m = re.search(r"\[.*\]", text, re.DOTALL)
+        if m:
+            classified = json.loads(m.group())
+            return {item["title"]: bool(item.get("kid_friendly")) for item in classified}
+    except Exception as e:
+        print(f"  [!] Kid-friendly classification error: {e}")
+
+    return {}
+
+
+# ---------------------------------------------------------------------------
 # Prep classification — delegated to prep_utils
 # ---------------------------------------------------------------------------
 

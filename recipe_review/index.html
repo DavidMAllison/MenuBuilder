@@ -982,7 +982,7 @@
   let searchIndexReady = false;
   let _localDebounce = null;
 
-  const activeFilters = { health: null, mealType: null, timesCooked: null, cuisines: new Set(), sources: new Set() };
+  const activeFilters = { health: null, mealType: null, timesCooked: null, kidFriendly: null, cuisines: new Set(), sources: new Set() };
 
   // Poll index status in background once page loads
   async function pollIndexStatus() {
@@ -1087,6 +1087,7 @@
     if (activeFilters.health !== null) count++;
     if (activeFilters.mealType !== null) count++;
     if (activeFilters.timesCooked !== null) count++;
+    if (activeFilters.kidFriendly !== null) count++;
     if (activeFilters.cuisines.size > 0) count++;
     if (activeFilters.sources.size > 0) count++;
     const badge = document.getElementById('filter-badge');
@@ -1117,6 +1118,7 @@
     activeFilters.health = null;
     activeFilters.mealType = null;
     activeFilters.timesCooked = null;
+    activeFilters.kidFriendly = null;
     activeFilters.cuisines = new Set();
     activeFilters.sources = new Set();
     renderFilterSheet();
@@ -1183,6 +1185,10 @@
         <div class="fs-section-title">Time</div>
         <div class="fs-pills">${pillsHtml([['All',null],['Weeknight','Weeknight'],['Weekend','Weekend']],'mealType')}</div>
       </div>
+      <div class="fs-section">
+        <div class="fs-section-title">Kids</div>
+        <div class="fs-pills">${pillsHtml([['All',null],['Kid Friendly','true']],'kidFriendly')}</div>
+      </div>
       ${triedSection}
       <div class="fs-section">
         <div class="fs-section-title">Cuisine</div>
@@ -1201,6 +1207,7 @@
       if (activeFilters.mealType !== null) {
         if ((r.meal_type || '').toLowerCase() !== activeFilters.mealType.toLowerCase()) return false;
       }
+      if (activeFilters.kidFriendly === 'true' && !r.kid_friendly) return false;
       if (activeFilters.timesCooked === 'never' && (r.times_cooked || 0) > 0) return false;
       if (activeFilters.timesCooked === 'tried' && (r.times_cooked || 0) === 0) return false;
       if (activeFilters.cuisines.size > 0 && !activeFilters.cuisines.has(normCuisine(r.cuisine))) return false;
@@ -1276,6 +1283,7 @@
     activeFilters.health = null;
     activeFilters.mealType = null;
     activeFilters.timesCooked = null;
+    activeFilters.kidFriendly = null;
     activeFilters.cuisines = new Set();
     activeFilters.sources = new Set();
     document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));

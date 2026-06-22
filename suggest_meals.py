@@ -326,7 +326,7 @@ def load_candidates(quick_nights=False):
             'method': r.get('cooking_method', ''),
             'weeknight_effort': r.get('weeknight_effort', ''),
             'adult_score': compute_adult_score(feedback),
-            'kid_friendly': compute_kid_friendly(feedback),
+            'kid_approved': bool(r.get('kid_approved')) or bool(compute_kid_friendly(feedback)),
             'inv_broad': broad_match,
             'inv_specific': specific_matches,
             'inv_pantry': pantry_matches,
@@ -359,7 +359,7 @@ def score(c):
             s += 15   # adults didn't like it -- deprioritize
         elif adult_score >= 0.9:
             s -= 6    # family hit -- bring back sooner
-    if c.get('kid_friendly'):
+    if c.get('kid_approved'):
         s -= 3
     # Inventory: lean toward recipes using what's on hand
     # Capped lower than health bonus so freezer contents don't override health goals
@@ -390,7 +390,7 @@ def print_group(title, items, limit=6):
         garden_tag = f' [GARDEN: {garden[0]}]' if garden else ''
         grill_tag = ' [GRILL]' if c['is_grill'] else ''
         new_tag = ' [NEW]' if c['times_cooked'] == 0 else ''
-        kid_tag = ' [KID-FRIENDLY]' if c.get('kid_friendly') else ''
+        kid_tag = ' [KID ✓]' if c.get('kid_approved') else ''
         adult_score = c.get('adult_score')
         score_tag = f' [ADULT:{adult_score:.0%}]' if adult_score is not None else ''
         if c.get('inv_specific'):
