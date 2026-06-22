@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import urllib.request
@@ -27,7 +28,7 @@ from werkzeug.security import check_password_hash
 # fill_menu_ideas is in the same directory — import its intake helpers
 sys.path.insert(0, str(Path(__file__).parent))
 from fill_menu_ideas import (  # noqa: E402
-    classify_health, classify_effort, parse_ingredients_structured,
+    classify_health, classify_effort, classify_kid_friendly, parse_ingredients_structured,
     _build_recipe_md, _title_to_filename, _infer_cooking_method,
     _infer_meal_type, _quality_check, _register_cuisine, RECIPES_DIR,
 )
@@ -38,6 +39,8 @@ app = Flask(__name__, static_folder="recipe_review")
 _CONFIG_PATH = Path(__file__).parent / "config.json"
 _CONFIG = json.loads(_CONFIG_PATH.read_text())
 _GH_PAGES_BASE = _CONFIG.get("github_pages_base_url", "").rstrip("/")
+_GH_REPO_DIR = Path(__file__).parent.parent / "menubuilder-recipes"
+_GENERATE_SCRIPT = Path(__file__).parent / "generate_github_pages_data.py"
 app.secret_key = _CONFIG.get("flask_secret_key", "dev-key-change-me")
 app.permanent_session_lifetime = timedelta(days=30)
 
@@ -89,6 +92,10 @@ IMG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 # Health classification cache — keyed by mtime fingerprint of /tmp agent files
 _health_cache: dict = {}
 _health_cache_key: str = ""
+
+# Kid-friendly classification cache
+_kid_cache: dict = {}
+_kid_cache_key: str = ""
 
 # Metadata cache — invalidated when recipe_metadata.json mtime changes
 _metadata_cache = None
@@ -213,6 +220,19 @@ def _health_cache_lookup(candidates: list) -> dict:
         _health_cache = {}
     return _health_cache
 
+
+def _kid_cache_lookup(candidates: list) -> dict:
+    global _kid_cache, _kid_cache_key
+    key = _tmp_fingerprint()
+    if key and key == _kid_cache_key:
+        return _kid_cache
+    try:
+        _kid_cache = classify_kid_friendly(candidates)
+        _kid_cache_key = key
+    except Exception:
+        _kid_cache = {}
+    return _kid_cache
+
 _TITLE_STOP = {
     "easy", "simple", "quick", "best", "classic", "authentic", "homemade",
     "traditional", "perfect", "crispy", "tender", "juicy", "creamy", "spicy",
@@ -319,6 +339,7 @@ def recipes():
 
     existing_urls, existing_norm = _existing_sets()
     health_map = _health_cache_lookup(candidates)
+    kid_map = _kid_cache_lookup(candidates)
 
     annotated = []
     for r in candidates:
@@ -338,9 +359,52 @@ def recipes():
             "in_collection": in_collection,
             "meal_type":     _infer_meal_type(r),
             "health":        health_map.get(r.get("title", ""), r.get("health", "Moderate")),
+            "kid_friendly":  kid_map.get(r.get("title", ""), False),
         })
 
     return jsonify(annotated)
+
+
+def _sync_recipe_to_github(filename: str) -> None:
+    """Copy recipe .md to menubuilder-recipes repo, regenerate data, and push.
+
+    Runs in a background thread — errors are logged but do not surface to the caller.
+    """
+    import shutil
+    try:
+        src = RECIPES_DIR / filename
+        dst = _GH_REPO_DIR / filename
+        if not src.exists():
+            print(f"[github-sync] source not found: {src}", flush=True)
+            return
+        shutil.copy2(src, dst)
+
+        # Regenerate GitHub Pages data
+        result = subprocess.run(
+            [sys.executable, str(_GENERATE_SCRIPT)],
+            capture_output=True, text=True, cwd=str(_GH_REPO_DIR)
+        )
+        if result.returncode != 0:
+            print(f"[github-sync] generate script failed: {result.stderr}", flush=True)
+
+        # Commit and push
+        subprocess.run(["git", "add", filename, "_data/recipes.json"],
+                       cwd=str(_GH_REPO_DIR), capture_output=True)
+        commit = subprocess.run(
+            ["git", "commit", "-m", f"feat: add {filename} via Review UI"],
+            cwd=str(_GH_REPO_DIR), capture_output=True, text=True
+        )
+        if commit.returncode == 0:
+            push = subprocess.run(["git", "push"], cwd=str(_GH_REPO_DIR),
+                                   capture_output=True, text=True)
+            if push.returncode != 0:
+                print(f"[github-sync] push failed: {push.stderr}", flush=True)
+            else:
+                print(f"[github-sync] pushed {filename}", flush=True)
+        else:
+            print(f"[github-sync] nothing to commit for {filename}", flush=True)
+    except Exception as e:
+        print(f"[github-sync] error: {e}", flush=True)
 
 
 @app.route("/api/add", methods=["POST"])
@@ -407,6 +471,7 @@ def add_recipe():
                                recipe.get("instructions", []),
                            ),
         "image":           recipe.get("image", ""),
+        "kid_approved":    False,
     }
 
     # Write .md file
@@ -422,6 +487,10 @@ def add_recipe():
     metadata["recipes"][title] = entry
     metadata["last_updated"] = date.today().isoformat()
     _save_metadata(metadata)
+
+    # Push to GitHub Pages in background
+    t = threading.Thread(target=_sync_recipe_to_github, args=(entry["filename"],), daemon=True)
+    t.start()
 
     return jsonify({"success": True, "title": title, "health": entry["health"]})
 
@@ -565,6 +634,7 @@ def collection():
                 "meal_type":    v.get("meal_type", ""),
                 "times_cooked": v.get("times_cooked", 0),
                 "image":        v.get("image", ""),
+                "kid_friendly": bool(v.get("kid_approved")),
                 "ingredients":  v.get("ingredients_raw") or [
                     f"{i.get('quantity','')} {i.get('unit','')} {i.get('name','')}".strip()
                     for i in (v.get("ingredients") or []) if isinstance(i, dict)

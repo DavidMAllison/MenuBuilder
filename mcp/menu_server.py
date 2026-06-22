@@ -816,7 +816,7 @@ def _candidate_score(c: dict) -> float:
             s += 15
         elif adult_score >= 0.9:
             s -= 6
-    if c.get("kid_friendly"):
+    if c.get("kid_approved"):
         s -= 3
     if c.get("inv_specific"):
         s -= 7
@@ -862,6 +862,7 @@ def _load_candidates(quick_days: list) -> list:
         if kids:
             liked = sum(1 for f in kids if f.get("sentiment") == "liked")
             kid_friendly = liked > len(kids) / 2
+        kid_approved = bool(r.get("kid_approved")) or bool(kid_friendly)
 
         inv_broad, inv_specific, inv_pantry = _inventory_match(
             name, r.get("ingredients", []), inventory
@@ -884,7 +885,7 @@ def _load_candidates(quick_days: list) -> list:
             "method": r.get("cooking_method", ""),
             "weeknight_effort": r.get("weeknight_effort", ""),
             "adult_score": adult_score,
-            "kid_friendly": kid_friendly,
+            "kid_approved": kid_approved,
             "inv_broad": inv_broad,
             "inv_specific": inv_specific,
             "inv_pantry": inv_pantry,
