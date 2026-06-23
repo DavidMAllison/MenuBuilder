@@ -47,7 +47,7 @@
     .search-wrap svg.search-icon {
       position: absolute;
       left: 11px;
-      top: 50%;
+      top: 18px;
       transform: translateY(-50%);
       color: #bbb;
       pointer-events: none;
@@ -73,7 +73,7 @@
     #search-clear {
       position: absolute;
       right: 10px;
-      top: 50%;
+      top: 18px;
       transform: translateY(-50%);
       background: none;
       border: none;
@@ -330,6 +330,9 @@
     #modal-content {
       overflow-y: auto;
       flex: 1;
+      min-height: 0;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
     }
 
     /* Modal toolbar — always visible, never scrolls */
@@ -976,13 +979,14 @@
   let weekMeals = [];
   let lunchPick  = null;
   let currentIdx = null;
+  let _savedScrollY = 0;
   let currentView = localStorage.getItem('menubuilder_view') || 'week';
   let searchMode = null;   // null = off, 'local' = live filter, 'semantic' = results
   let searchResults = [];  // semantic results
   let searchIndexReady = false;
   let _localDebounce = null;
 
-  const activeFilters = { health: null, mealType: null, timesCooked: null, kidFriendly: null, cuisines: new Set(), sources: new Set() };
+  const activeFilters = { health: null, mealType: null, timesCooked: null, kidFriendly: null, cuisines: new Set(), sources: new Set(), recordTypes: new Set(['dinner']) };
 
   // Poll index status in background once page loads
   async function pollIndexStatus() {
@@ -1090,6 +1094,8 @@
     if (activeFilters.kidFriendly !== null) count++;
     if (activeFilters.cuisines.size > 0) count++;
     if (activeFilters.sources.size > 0) count++;
+    const isDefaultTypes = activeFilters.recordTypes.size === 1 && activeFilters.recordTypes.has('dinner');
+    if (!isDefaultTypes) count++;
     const badge = document.getElementById('filter-badge');
     if (!badge) return;
     badge.textContent = count;
@@ -1121,6 +1127,7 @@
     activeFilters.kidFriendly = null;
     activeFilters.cuisines = new Set();
     activeFilters.sources = new Set();
+    activeFilters.recordTypes = new Set(['dinner']);
     renderFilterSheet();
     updateFilterBadge();
     renderGrid();
@@ -1176,7 +1183,17 @@
       return `<label class="fs-checkbox-row"><input type="checkbox"${checked} onchange="toggleSetFilter('sources','${escHtml(s)}',this)"><span class="fs-source-dot" style="background:${color}"></span> ${escHtml(s)}</label>`;
     }).join('');
 
+    const typeHtml = ['dinner', 'lunch', 'condiment'].map(t => {
+      const checked = activeFilters.recordTypes.has(t) ? ' checked' : '';
+      const label = t.charAt(0).toUpperCase() + t.slice(1);
+      return `<label class="fs-checkbox-row"><input type="checkbox"${checked} onchange="toggleSetFilter('recordTypes','${t}',this)"> ${label}</label>`;
+    }).join('');
+
     document.getElementById('filter-sheet-body').innerHTML = `
+      <div class="fs-section">
+        <div class="fs-section-title">Type</div>
+        <div class="fs-checkbox-list">${typeHtml}</div>
+      </div>
       <div class="fs-section">
         <div class="fs-section-title">Health</div>
         <div class="fs-pills">${pillsHtml([['All',null],['Heart-Healthy','Heart-Healthy'],['Moderate','Moderate'],['Indulgent','Indulgent']],'health')}</div>
@@ -1203,6 +1220,7 @@
 
   function applyFilters(recipes) {
     return recipes.filter(r => {
+      if (activeFilters.recordTypes.size > 0 && !activeFilters.recordTypes.has(r.record_type || 'dinner')) return false;
       if (activeFilters.health !== null && r.health !== activeFilters.health) return false;
       if (activeFilters.mealType !== null) {
         if ((r.meal_type || '').toLowerCase() !== activeFilters.mealType.toLowerCase()) return false;
@@ -1286,6 +1304,7 @@
     activeFilters.kidFriendly = null;
     activeFilters.cuisines = new Set();
     activeFilters.sources = new Set();
+    activeFilters.recordTypes = new Set(['dinner']);
     document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('subtitle').textContent = 'Loading…';
@@ -1331,6 +1350,26 @@
     Sun: '#c0392b', Mon: '#2980b9', Tue: '#27ae60',
     Wed: '#8e44ad', Thu: '#d35400', Fri: '#16a085', Sat: '#2c3e50',
   };
+
+  function isYouTubeUrl(url) {
+    return url && (url.includes('youtube.com/watch') || url.includes('youtu.be/'));
+  }
+
+  function visitBtn(url, label, extraClass = '') {
+    if (!url) return '';
+    const isYT = isYouTubeUrl(url);
+    const icon = isYT
+      ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+           <polygon points="5 3 19 12 5 21 5 3"/>
+         </svg>`
+      : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+           <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+         </svg>`;
+    const text = isYT ? 'Watch' : label;
+    const title = isYT ? 'Watch on YouTube' : `Open ${label.toLowerCase()}`;
+    return `<a class="modal-action visit-btn${extraClass ? ' ' + extraClass : ''}" href="${url}" target="_blank" rel="noopener" title="${title}">${icon}<span>${text}</span></a>`;
+  }
 
   function healthPillClass(health) {
     const h = (health || '').toLowerCase();
@@ -1437,17 +1476,8 @@
     if (!lunchPick || lunchPick.status !== 'selected') return;
     const lp = lunchPick;
 
-    const visitHref = lp.url ? `href="${lp.url}" target="_blank" rel="noopener"` : '';
     document.getElementById('modal-toolbar').innerHTML = `
-      ${lp.url
-        ? `<a class="modal-action visit-btn" ${visitHref} title="Open recipe">
-             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-               <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-             </svg>
-             <span>Recipe</span>
-           </a>`
-        : ''}
+      ${visitBtn(lp.url, 'Recipe')}
       <button class="modal-close-btn" onclick="closeModal()" title="Close">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -1463,7 +1493,7 @@
 
     const pClass = healthPillClass(lp.health);
     const ings   = (lp.ingredients  || []).map(i => `<li>${escHtml(i)}</li>`).join('');
-    const steps  = (lp.instructions || []).map(s => `<li>${escHtml(s)}</li>`).join('');
+    const steps  = (lp.instructions || []).map(s => `<li>${linkifyStep(s)}</li>`).join('');
 
     document.getElementById('modal-content').innerHTML = `
       ${imageHtml}
@@ -1483,24 +1513,19 @@
     `;
 
     document.getElementById('modal').classList.add('open');
+    _savedScrollY = window.scrollY;
     document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${_savedScrollY}px`;
+    document.body.style.width = '100%';
   }
 
   function openWeekModal(idx) {
     const m = weekMeals[idx];
     currentIdx = idx;
 
-    const visitHref = m.url ? `href="${m.url}" target="_blank" rel="noopener"` : '';
     document.getElementById('modal-toolbar').innerHTML = `
-      ${m.url
-        ? `<a class="modal-action visit-btn" ${visitHref} title="Open recipe">
-             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-               <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-             </svg>
-             <span>Recipe</span>
-           </a>`
-        : ''}
+      ${visitBtn(m.url, 'Recipe')}
       <button class="modal-close-btn" onclick="closeModal()" title="Close">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -1517,7 +1542,7 @@
     const color    = _DAY_COLORS[m.day] || '#555';
     const pClass   = healthPillClass(m.health);
     const ings     = (m.ingredients  || []).map(i => `<li>${escHtml(i)}</li>`).join('');
-    const steps    = (m.instructions || []).map(s => `<li>${escHtml(s)}</li>`).join('');
+    const steps    = (m.instructions || []).map(s => `<li>${linkifyStep(s)}</li>`).join('');
 
     let dateDisplay = '';
     if (m.date) {
@@ -1548,7 +1573,11 @@
     `;
 
     document.getElementById('modal').classList.add('open');
+    _savedScrollY = window.scrollY;
     document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${_savedScrollY}px`;
+    document.body.style.width = '100%';
   }
 
   function renderGrid() {
@@ -1657,7 +1686,7 @@
              </svg>
              <span>Remove</span>
            </button>`
-        : currentView === 'collection'
+        : currentView === 'collection' && r.record_type !== 'condiment'
         ? `<button class="modal-action remove-btn" onclick="removeFromCollection(${idx})" title="Remove from collection">
              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
@@ -1669,33 +1698,8 @@
         : ''
       }
       ${currentView === 'collection'
-        ? `${r.recipe_url
-            ? `<a class="modal-action visit-btn" href="${r.recipe_url}" target="_blank" rel="noopener" title="Open recipe">
-                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                   <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                 </svg>
-                 <span>Recipe</span>
-               </a>`
-            : ''}
-           ${r.source_url
-            ? `<a class="modal-action source-btn" href="${r.source_url}" target="_blank" rel="noopener" title="View original source">
-                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                   <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                 </svg>
-                 <span>Source</span>
-               </a>`
-            : ''}`
-        : `${r.url
-            ? `<a class="modal-action visit-btn" href="${r.url}" target="_blank" rel="noopener" title="Visit original site">
-                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                   <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                 </svg>
-                 <span>Visit</span>
-               </a>`
-            : ''}`
+        ? `${visitBtn(r.recipe_url, 'Recipe')}${visitBtn(r.source_url, 'Source', 'source-btn')}${r.video_url && r.video_url !== r.source_url ? visitBtn(r.video_url, 'Watch') : ''}`
+        : `${visitBtn(r.url, 'Visit')}${r.video_url && r.video_url !== r.url ? visitBtn(r.video_url, 'Watch') : ''}`
       }
       <button class="modal-close-btn" onclick="closeModal()" title="Close">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1712,10 +1716,12 @@
       : `<div class="modal-image-placeholder">🍽</div>`;
 
     const ings  = (r.ingredients  || []).map(i => `<li>${escHtml(i)}</li>`).join('');
-    const steps = (r.instructions || []).map(s => `<li>${escHtml(s)}</li>`).join('');
-    const timesCookedLabel = (r.times_cooked || 0) === 0 ? 'Never tried' : `Tried ${r.times_cooked}\xd7`;
+    const steps = (r.instructions || []).map(s => `<li>${linkifyStep(s)}</li>`).join('');
+    const isCondiment = r.record_type === 'condiment';
+    const timesCookedLabel = isCondiment ? '' : ((r.times_cooked || 0) === 0 ? 'Never tried' : `Tried ${r.times_cooked}\xd7`);
     const yieldVal = Array.isArray(r.yield) ? r.yield.sort((a,b) => a.length - b.length)[0] : r.yield;
-    const meta  = [r.time, yieldVal ? `Serves ${yieldVal}` : '', timesCookedLabel].filter(Boolean).join(' · ');
+    const condimentTypeLabel = isCondiment && r.condiment_type ? r.condiment_type.charAt(0).toUpperCase() + r.condiment_type.slice(1) : '';
+    const meta  = [condimentTypeLabel, r.time, yieldVal ? `Serves ${yieldVal}` : '', timesCookedLabel].filter(Boolean).join(' · ');
 
     document.getElementById('modal-content').innerHTML = `
       ${imageHtml}
@@ -1729,12 +1735,21 @@
     `;
 
     document.getElementById('modal').classList.add('open');
+    document.getElementById('modal-content').scrollTop = 0;
+    _savedScrollY = window.scrollY;
     document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${_savedScrollY}px`;
+    document.body.style.width = '100%';
   }
 
   function closeModal() {
     document.getElementById('modal').classList.remove('open');
     document.body.style.overflow = '';
+    document.body.style.position = '';
+    document.body.style.top = '';
+    document.body.style.width = '';
+    window.scrollTo(0, _savedScrollY);
     currentIdx = null;
   }
 
@@ -1860,6 +1875,12 @@
         <div class="loading-ring"></div>
         <p>${escHtml(msg)}</p>
       </div>`;
+  }
+
+  function linkifyStep(str) {
+    const escaped = escHtml(str);
+    return escaped.replace(/(https?:\/\/[^\s<]+)/g,
+      '<a href="$1" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">$1</a>');
   }
 
   function escHtml(str) {

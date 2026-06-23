@@ -62,6 +62,28 @@ def _ld_image(item: dict) -> str:
     return ""
 
 
+def _extract_video_url(item: dict) -> str:
+    video = item.get("video")
+    if not video:
+        return ""
+    if isinstance(video, list):
+        video = video[0] if video else None
+    if not video:
+        return ""
+    if isinstance(video, str):
+        url = video
+    elif isinstance(video, dict):
+        url = video.get("contentUrl") or video.get("embedUrl") or video.get("url") or ""
+    else:
+        return ""
+    if not url:
+        return ""
+    m = re.match(r"https?://(?:www\.)?youtube\.com/embed/([A-Za-z0-9_-]+)", url)
+    if m:
+        return f"https://www.youtube.com/watch?v={m.group(1)}"
+    return url
+
+
 # ---------------------------------------------------------------------------
 # Just One Cookbook -- Japanese (justonecookbook.com)
 # WP REST API search; ld+json on recipe pages
@@ -287,9 +309,20 @@ def fetch_recipe(url: str) -> dict:
             instructions = []
             for step in item.get("recipeInstructions", []):
                 if isinstance(step, dict):
-                    text = step.get("text", "").strip()
-                    if text:
-                        instructions.append(text)
+                    step_type = step.get("@type", "")
+                    if step_type == "HowToSection":
+                        # Flatten section → iterate its itemListElement sub-steps
+                        for sub in step.get("itemListElement", []):
+                            if isinstance(sub, dict):
+                                text = sub.get("text", "").strip()
+                                if text:
+                                    instructions.append(text)
+                            elif isinstance(sub, str) and sub.strip():
+                                instructions.append(sub.strip())
+                    else:
+                        text = step.get("text", "").strip()
+                        if text:
+                            instructions.append(text)
                 elif isinstance(step, str) and step.strip():
                     instructions.append(step.strip())
 
@@ -304,12 +337,13 @@ def fetch_recipe(url: str) -> dict:
                 "prep_time": item.get("prepTime", ""),
                 "cook_time": item.get("cookTime", ""),
                 "total_time": item.get("totalTime", ""),
-                "yield": str(item.get("recipeYield", "")),
+                "yield": _parse_yield(item.get("recipeYield", "")),
                 "ingredients": item.get("recipeIngredient", []),
                 "instructions": instructions,
                 "cuisine": cuisine,
                 "category": item.get("recipeCategory", ""),
                 "image": _ld_image(item) or _og_image(soup),
+                "video_url": _extract_video_url(item),
             }
 
     title_el = soup.find("h1")
@@ -324,6 +358,14 @@ def fetch_recipe(url: str) -> dict:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _parse_yield(raw) -> str:
+    """Normalize recipeYield to a clean string — handles str, int, and list."""
+    if isinstance(raw, list):
+        # Take the last element — it's usually the most descriptive ("52 Pieces" vs "52")
+        raw = raw[-1] if raw else ""
+    return str(raw).strip()
+
 
 def _iso_to_minutes(iso: str) -> int:
     """Parse ISO 8601 duration (PT1H30M or P0DT1H30M0S) to minutes."""

@@ -59,13 +59,6 @@
 - Serious Eats: DONE Jun 17 2026. Search page is Cloudflare-blocked; sitemap + httpx recipe pages are accessible. sites_agent.py uses sitemap keyword search → httpx fetch. No Playwright needed.
 - Other sites: add to `sites_agent.py` registry as needed
 
-### YouTube Chef Extraction (Future)
-- Kenji Lopez-Alt uses YouTube as his primary recipe channel; Serious Eats is the secondary archive
-- Goal: given a chef's YouTube channel, extract recipe content from video descriptions or auto-captions
-- Design: channel ID → video list → per-video description parse → ingredient/instruction extraction
-- Kenji's channel: look up at implementation time; do not hardcode URL here
-- Blocking issue: recipe fidelity from captions is lower than ld+json; need a quality filter
-
 ### PDF-to-Markdown Migration
 **Status**: Complete. All PDFs converted to .md (Jun 2026).
 
@@ -83,7 +76,7 @@
 - **archanaskitchen.com** — FIXED Jun 8 2026. URL pattern changed to `/recipe/slug` (old flat `/slug` pattern returns 404). Search via sitemap (~6779 recipe URLs); Hindi/Tamil duplicate variants filtered. ld+json works cleanly for both ingredients and instructions.
 - **Chef agent** (`chef_agent.py`) — done: Alton Brown, Deb Perelman (Smitten Kitchen), Chetna Makan. Symlinked as `~/.local/bin/chef`. Results to `/tmp/chef_agent_results.json`.
 - **Sites agent** (`sites_agent.py`) — BUILT. Serious Eats live via Playwright (bypasses 403). Symlinked as `~/.local/bin/sites`. Registry-based: add a new site = one dict entry in SITES.
-- **Kenji Lopez-Alt** — blocked: seriouseats.com returns 403. Need alternate source (his Substack, YouTube, or wait for Serious Eats solution).
+- **Cooking con Claudia (YouTube)** — DONE Jun 22 2026. YouTube Data API v3 (not yt_dlp); `search_claudia` + `fetch_claudia` in `mexican_agent.py`. Parses both ingredients and instructions from video description (English + Spanish headers). API key in `config.json` as `youtube_api_key`.
 - **ATK / America's Test Kitchen** — DONE Jun 9 2026. `atk_agent.py` + `sync_atk_recipes` MCP tool. Playwright auth, httpx fetches, 3 collections.
 - **Chetna Makan YouTube** (nice to have): attach YouTube video link to recipes fetched from chetnamakan.co.uk. Channel: `UC1VkNUPA6ieOuwXmk4SSJZw`.
 - Goal: full recipe discovery pipeline — any source accessible via agent, no manual URL fetching
@@ -91,13 +84,6 @@
 ### Mediterranean Agent (`mediterranean_agent.py`)
 **Status**: COMPLETE Jun 2026.
 - Sources: olivetomato.com + themediterraneandish.com; wired into `fill_menu_ideas.py`
-
-### Cuisine Agents — Increase Recipe Yield Per Run
-- Agents currently return a small number of results per topic query (often 3–5 per source)
-- Goal: each agent run should surface more candidates so the /New view is richer
-- Approach: broaden search queries, increase `max_results` per source, run multiple topic queries per agent
-- Design principle: volume is good — user decides what to add; Haiku health classification runs on all of them either way
-- Priority: medium — run on next agent overhaul
 
 ### Recipe Review UI — Cost-Friendly Indicator
 - Add a `budget_friendly` classification to complement the existing health pill on every card
@@ -144,7 +130,8 @@
 **Status**: COMPLETE Jun 20 2026. Works fine in practice.
 
 ### WeeklyMealCalendar.app Improvements
-- Handle edge cases: recipes with no cook time, multi-component meals
+**Status**: COMPLETE Jun 22 2026.
+- Fixed: `as_escape(None)` crash when `url`, `recipe`, or other fields are JSON `null` — coerced all string fields to `""` in `parse_meal_plan`. No cook time already had a 60-min fallback; multi-component titles work as-is.
 
 ### Meal Swap Handling
 **Status**: COMPLETE Jun 20 2026. Swap via Keanu SMS; plan JSON updated; visible in Recipe Review UI.
@@ -197,29 +184,24 @@
 **Status**: COMPLETE Jun 16 2026. `_load_metadata()` / `_save_metadata()` in `recipe_review_server.py`. mtime-keyed cache; only re-reads from disk when file changes. All five read sites + two write sites converted.
 
 ### Recipe Review UI — Autonomous Data-Quality Agent
-- An agent that scans agent result files (`/tmp/*_agent_results_{uid}.json`) and `recipe_metadata.json` for common classification issues and resolves them without needing user input
-- **Issues to detect and fix autonomously**:
-  - Missing `cuisine` field → infer from source domain or recipe title
-  - `cuisine` values that don't match canonical list (`suggest_meals.py` `CUISINE_FAMILY_MAP`) → normalize
-  - Missing or empty `source` field → infer from `url`
-  - `meal_type` mismatch (recipe time > 60 min but tagged `weeknight`) → reclassify
-  - `needs_review: true` entries that have complete data → clear flag after spot-check
-- **Trigger**: run after `fill_menu_ideas.py` completes, or on-demand via `/fillmenuideas`
-- **Design**: read → classify issues by type → apply high-confidence fixes (domain-based cuisine, source label) → surface low-confidence issues (Haiku classification needed) for batch Haiku call → write back to JSON → report summary
+**Status**: COMPLETE Jun 22 2026.
+- `--fix-metadata` flag added to `cleanup_agent.py`: auto-fixes cuisine normalization (variant → canonical), source inference from domain, meal_type mismatches (time > 60 min + Weeknight → Weekend, skips slow_cooker), and needs_review clearing when instructions pass quality check
+- All fixes are auto-applied with no user review required
+- `fill_menu_ideas.py` runs `cleanup_agent.py --fix-metadata --fix-classify --apply` at completion as a post-run sweep
+- On-demand: `python3 cleanup_agent.py --fix-metadata`
 
 ### SMS Recipe Image Submission
-- Text a photo of a dinner to Keanu → image stored as the recipe's `image` field in `recipe_metadata.json`
-- Covers two cases: (1) custom/original meals with no source URL and therefore no og:image; (2) sourced recipes where the site doesn't publish a usable image
-- **Flow**: photo → Keanu → fuzzy-match against current week's plan or ask "which recipe is this?" → `process_recipe_image` MCP tool already exists for adding new recipes; extend it (or add a sibling tool) to update `image` only on an existing entry
-- **Trigger phrase**: "photo of [meal]" or Keanu detects an image attachment with no URL in the message
-- **Fallback**: if match is ambiguous, Keanu replies with top 2–3 candidates to confirm
+**Status**: COMPLETE Jun 22 2026. Pending live test tonight.
+- Caption "photo of [meal name]" → Keanu routes to `_run_set_recipe_image` in `server.py` (Path -1, before recipe-idea path)
+- New MCP tool `set_recipe_image(recipe_name, image_b64, mime_type)` in `menu_server.py`: fuzzy-match → save to `~/Dropbox/LLMContext/cooking/recipe_images/{slug}.jpg` → update `image` field in metadata
+- Review server `/api/img` proxy extended to serve local file paths (absolute paths on disk)
+- Ambiguous match returns top 3 candidates; user can retry with exact name
 
 ### Condiment Handling in Cleanup Agent and Shopping List
-- `condiments.json` stores rubs, sauces, salsas, etc. — currently outside the cleanup and shopping pipelines
+**Status**: PARTIAL — UI complete Jun 23 2026. Remaining items:
 - **Cleanup agent**: add a `--check-condiments` pass that checks condiments for missing images and dead source URLs, same as recipes
-- **Shopping list**: condiment ingredients (e.g. spice rubs for a recipe) are currently not deducted from the condiments inventory when building the shopping CSV — decide whether to include them or note them as "pantry items" separately
-- **Inventory**: condiment stock not tracked in `inventory.json`; a text a photo to Keanu flow (above) could extend to condiment jars too
-- **Design decision needed**: should condiments be first-class citizens in `recipe_metadata.json` (with a `type: condiment` field) or remain a separate file?
+- **Shopping list**: recipes that reference a condiment (e.g. BBQ sauce, enchilada sauce) don't yet pull condiment ingredients into the shopping CSV — needs `condiment_deps` field on recipe entries
+- **Inventory**: condiment stock not tracked in `inventory.json`
 
 ### Meal Costing (Long-Term)
 - Once price history accumulates, cost recipes using `ingredients` array + price-per-unit averages from `price_history.json`
