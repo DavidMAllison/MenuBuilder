@@ -63,7 +63,7 @@ generate_github_pages_data.py # Generate _data/recipes.json for GitHub Pages —
 migrate_plan_to_json.py       # One-shot (re-runnable) migration of mealplan_*.txt → mealplan_*.json
 recipe_review_server.py       # Local recipe review web UI server (port 5051) — Flask, session auth, metadata cache, RAG search
 recipe_review/
-  index.html                  # Recipe review UI — This Week grid, Full Collection, New Recipes views; semantic search
+  index.html                  # Recipe review UI — This Week grid, Full Collection, New Recipes views; semantic search; Type filter (Dinner/Lunch/Condiment)
   login.html                  # Login page for recipe review UI
 eval_mexican_agent.py         # Eval harness for mexican_agent
 eval_chef_agent.py            # Eval harness for chef_agent

@@ -85,7 +85,8 @@ def logout():
 
 UID = os.getuid()
 DISMISSED_FILE = Path(f"/tmp/dismissed_{UID}.json")
-METADATA_PATH = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
+METADATA_PATH    = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
+CONDIMENTS_PATH  = Path.home() / "Dropbox/LLMContext/cooking/condiments.json"
 IMG_CACHE_DIR = Path.home() / ".cache" / "recipe_images"
 IMG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -471,6 +472,7 @@ def add_recipe():
                                recipe.get("instructions", []),
                            ),
         "image":           recipe.get("image", ""),
+        "video_url":       recipe.get("video_url", ""),
         "kid_approved":    False,
     }
 
@@ -619,6 +621,7 @@ def collection():
         for key, v in recipes.items():
             if v.get("status") != "active":
                 continue
+            is_lunch = v.get("lunch_suitable") or (v.get("meal_type") or "").lower() == "lunch"
             fname = v.get("filename", "")
             gh_url = f"{_GH_PAGES_BASE}/{fname[:-3]}" if fname and _GH_PAGES_BASE else ""
             result.append({
@@ -634,14 +637,51 @@ def collection():
                 "meal_type":    v.get("meal_type", ""),
                 "times_cooked": v.get("times_cooked", 0),
                 "image":        v.get("image", ""),
+                "video_url":    v.get("video_url", ""),
                 "kid_friendly": bool(v.get("kid_approved")),
                 "ingredients":  v.get("ingredients_raw") or [
                     f"{i.get('quantity','')} {i.get('unit','')} {i.get('name','')}".strip()
                     for i in (v.get("ingredients") or []) if isinstance(i, dict)
                 ],
-                "instructions": v.get("instructions", []),
-                "in_collection": True,
+                "instructions":   v.get("instructions", []),
+                "record_type":    "lunch" if is_lunch else "dinner",
+                "in_collection":  True,
             })
+
+        # Append condiments from separate condiments.json
+        if CONDIMENTS_PATH.exists():
+            try:
+                cdata = json.loads(CONDIMENTS_PATH.read_text())
+                for name, c in cdata.items():
+                    ings = [
+                        f"{i.get('quantity','')} {i.get('unit','')} {i.get('name','')}".strip()
+                        for i in (c.get("ingredients") or []) if isinstance(i, dict)
+                    ]
+                    servings = c.get("servings")
+                    result.append({
+                        "title":          c.get("name", name),
+                        "cuisine":        "",
+                        "source":         c.get("source", ""),
+                        "recipe_url":     "",
+                        "source_url":     "",
+                        "url":            "",
+                        "time":           "",
+                        "yield":          str(servings) if servings else "",
+                        "health":         "",
+                        "meal_type":      "",
+                        "times_cooked":   0,
+                        "image":          c.get("image", ""),
+                        "video_url":      "",
+                        "kid_friendly":   False,
+                        "ingredients":    ings,
+                        "instructions":   c.get("instructions", []),
+                        "record_type":    "condiment",
+                        "condiment_type": c.get("type", ""),
+                        "in_collection":  True,
+                    })
+            except Exception:
+                pass
+
         result.sort(key=lambda r: (r["cuisine"], r["title"]))
         return jsonify(result)
     except Exception as e:
@@ -790,7 +830,17 @@ def search_status():
 def proxy_image():
     """Proxy + disk-cache external recipe images. Avoids mobile re-fetching external CDNs."""
     url = request.args.get("url", "").strip()
-    if not url or not url.startswith("http"):
+    if not url:
+        return "", 400
+
+    # Local file saved by set_recipe_image MCP tool (absolute path on disk)
+    if url.startswith("/") and not url.startswith("//"):
+        p = Path(url)
+        if p.exists() and p.is_file():
+            return send_file(p)
+        return "", 404
+
+    if not url.startswith("http"):
         return "", 400
 
     cache_key = hashlib.sha256(url.encode()).hexdigest()

@@ -71,6 +71,31 @@ def search_giallozafferano(query: str, max_results: int = 8) -> list[dict]:
         return [{"error": str(e)}]
 
 
+_CROSS_REF_INSTRUCTIONS = re.compile(
+    r'\bsame (mixture|filling|dough|batter|sauce)\b'
+    r'|\bleftover \w+'
+    r'|\bsee (the|my) .{0,30} recipe\b'
+    r'|\bas described in\b'
+    r'|\bfrom (the|my|this) .{0,20} recipe\b'
+    r'|\bfollow the .{0,30} recipe\b',
+    re.IGNORECASE,
+)
+
+_GZF_STEP_REF = re.compile(
+    r'\s*\(\d{1,2}[-–]\d{1,2}\)'      # ranges: (14-15), (2-3)
+    r'|\s*\(\d{1,2}\)'                  # singles: (1), (9)
+    # Standalone 1-2 digit number after a word, before punctuation or certain followers
+    r'|(?<=\w)\s+\d{1,2}\s*(?=[,;:.])'  # before , ; : .
+    r'|(?<=\w)\s+\d{1,2}\s*$'           # bare trailing at end of string
+    r'|(?<=\w)\s+\d{1,2}(?=\s+(?:and|then|or|but|so|now|also|next|finally|once|when|while|until|as|at|to|the|a|an|in|on|of|for|with|from|your|them|it|this|they|you|let|place|add|pour|cook|remove|stir|cover|serve|bake|grill|heat)\b)',
+)
+
+
+def _strip_gzf_step_refs(text: str) -> str:
+    """Remove GialloZafferano inline photo-step reference numbers from instruction text."""
+    return _GZF_STEP_REF.sub("", text).strip()
+
+
 def fetch_giallozafferano(url: str) -> dict:
     """Fetch a GialloZafferano recipe page and extract ld+json data."""
     try:
@@ -83,6 +108,15 @@ def fetch_giallozafferano(url: str) -> dict:
                     const arr = Array.isArray(d) ? d : (d['@graph'] ? d['@graph'] : [d]);
                     const r = arr.find(x => x && x['@type'] === 'Recipe');
                     if (!r) continue;
+                    const vidF = r.video;
+                    let videoUrl = '';
+                    if (vidF) {
+                        const v = Array.isArray(vidF) ? vidF[0] : vidF;
+                        if (typeof v === 'string') videoUrl = v;
+                        else if (v) videoUrl = v.contentUrl || v.embedUrl || v.url || '';
+                        const ytM = videoUrl.match(/youtube\.com\/embed\/([A-Za-z0-9_-]+)/);
+                        if (ytM) videoUrl = 'https://www.youtube.com/watch?v=' + ytM[1];
+                    }
                     return {
                         name: r.name || '',
                         totalTime: r.totalTime || r.cookTime || '',
@@ -92,6 +126,7 @@ def fetch_giallozafferano(url: str) -> dict:
                             typeof s === 'string' ? s : (s.text || '')),
                         recipeCuisine: r.recipeCuisine || 'Italian',
                         image: r.image ? (Array.isArray(r.image) ? r.image[0] : (typeof r.image === 'object' ? r.image.url : r.image)) : (document.querySelector('meta[property="og:image"]')?.content || ''),
+                        video_url: videoUrl,
                     };
                 } catch(e) {}
             }
@@ -104,7 +139,7 @@ def fetch_giallozafferano(url: str) -> dict:
         return {"error": "No ld+json Recipe schema found", "url": url}
 
     ingredients = [html_lib.unescape(i).strip() for i in data.get("recipeIngredient", []) if i]
-    instructions = [s.strip() for s in data.get("recipeInstructions", []) if s and len(s.strip()) > 10]
+    instructions = [_strip_gzf_step_refs(s) for s in data.get("recipeInstructions", []) if s and len(s.strip()) > 10]
 
     if not ingredients or not instructions:
         return {"error": "Incomplete recipe data in ld+json", "url": url}
@@ -118,6 +153,7 @@ def fetch_giallozafferano(url: str) -> dict:
         "instructions": instructions,
         "cuisine": data.get("recipeCuisine", "Italian"),
         "image": data.get("image", ""),
+        "video_url": data.get("video_url", ""),
     }
 
 
@@ -223,6 +259,41 @@ def search_memoriediangelina(query: str, max_results: int = 8) -> list[dict]:
     return results
 
 
+def _parse_wprm_ingredients(soup: BeautifulSoup) -> list[str]:
+    """Extract WPRM ingredients, preserving group headers (e.g. 'Optional')."""
+    ingredients = []
+
+    def _parse_li(li) -> str | None:
+        parts = []
+        amt  = li.select_one(".wprm-recipe-ingredient-amount")
+        unit = li.select_one(".wprm-recipe-ingredient-unit")
+        name = li.select_one(".wprm-recipe-ingredient-name")
+        note = li.select_one(".wprm-recipe-ingredient-notes")
+        if amt:  parts.append(amt.text.strip())
+        if unit: parts.append(unit.text.strip())
+        if name: parts.append(name.text.strip())
+        if note: parts.append(f"({note.text.strip()})")
+        return " ".join(parts) if parts else None
+
+    groups = soup.select(".wprm-recipe-ingredient-group")
+    if groups:
+        for group in groups:
+            header = group.select_one(".wprm-recipe-ingredient-group-name")
+            if header and header.text.strip():
+                ingredients.append(f"[{header.text.strip()}]")
+            for li in group.select(".wprm-recipe-ingredient"):
+                line = _parse_li(li)
+                if line:
+                    ingredients.append(line)
+    else:
+        for li in soup.select(".wprm-recipe-ingredient"):
+            line = _parse_li(li)
+            if line:
+                ingredients.append(line)
+
+    return ingredients
+
+
 def fetch_memoriediangelina(url: str) -> dict:
     """Fetch a memoriediangelina.com recipe using WPRM HTML selectors."""
     try:
@@ -237,19 +308,7 @@ def fetch_memoriediangelina(url: str) -> dict:
     if not name_el:
         return {"error": "No WPRM recipe found on this page", "url": url}
 
-    ingredients = []
-    for li in soup.select(".wprm-recipe-ingredient"):
-        parts = []
-        amt  = li.select_one(".wprm-recipe-ingredient-amount")
-        unit = li.select_one(".wprm-recipe-ingredient-unit")
-        name = li.select_one(".wprm-recipe-ingredient-name")
-        note = li.select_one(".wprm-recipe-ingredient-notes")
-        if amt:  parts.append(amt.text.strip())
-        if unit: parts.append(unit.text.strip())
-        if name: parts.append(name.text.strip())
-        if note: parts.append(f"({note.text.strip()})")
-        if parts:
-            ingredients.append(" ".join(parts))
+    ingredients = _parse_wprm_ingredients(soup)
 
     instructions = [
         el.get_text(strip=True)
@@ -259,6 +318,11 @@ def fetch_memoriediangelina(url: str) -> dict:
 
     if not ingredients or not instructions:
         return {"error": "WPRM selectors returned empty content", "url": url}
+
+    # Reject recipes that reference other recipes rather than standing alone
+    combined = " ".join(instructions).lower()
+    if _CROSS_REF_INSTRUCTIONS.search(combined):
+        return {"error": "Recipe references other recipes and is not self-contained", "url": url}
 
     time_mins = soup.select_one(".wprm-recipe-total_time-minutes")
     time_str = f"{time_mins.text.strip()} minutes" if time_mins else ""
@@ -335,6 +399,56 @@ def _translate_cucchiaio_batch(recipes: list[dict]) -> None:
         orig["ingredients"] = trans.get("ingredients", orig["ingredients"])
         orig["instructions"] = trans.get("instructions", orig["instructions"])
         orig.pop("language", None)
+
+
+def _convert_measurements_batch(recipes: list[dict]) -> None:
+    """Convert metric measurements to US equivalents via Haiku. Modifies in-place.
+
+    Handles dual-unit strings (e.g. '200 g 7 oz') by stripping the metric prefix,
+    and converts metric-only values (g→oz/lbs, ml→cups/tbsp/tsp, kg→lbs).
+    """
+    if not recipes:
+        return
+
+    metric_pat = re.compile(r"\b\d+(?:[.,]\d+)?\s*(?:g|ml|kg|l|cl)\b", re.IGNORECASE)
+    to_convert = [r for r in recipes if any(
+        metric_pat.search(ing) for ing in r.get("ingredients", []) if not ing.startswith("[")
+    )]
+    if not to_convert:
+        return
+
+    blocks = []
+    for i, r in enumerate(to_convert):
+        blocks.append(f"RECIPE {i + 1}: {r.get('title', '')}")
+        blocks.append("Ingredients: " + " | ".join(r.get("ingredients", [])))
+        blocks.append("")
+
+    prompt = (
+        "Convert all metric measurements in the following recipe ingredients to US measurements. "
+        "If an ingredient already has both metric and US (e.g. '200 g 7 oz'), remove the metric part and keep only the US value. "
+        "If it only has metric, convert it (g→oz or lbs, ml→cups/tbsp/tsp, kg→lbs). "
+        "Group header lines like '[Optional]' must be kept exactly as-is. "
+        "Keep all other text exactly as-is. "
+        "Return a JSON array with one object per recipe in the same order:\n"
+        '[{"ingredients": ["..."]}]\n\n'
+        + "\n".join(blocks)
+    )
+
+    haiku = anthropic.Anthropic()
+    resp = haiku.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=2048,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = re.sub(r"```(?:json)?\s*", "", resp.content[0].text.strip()).strip().rstrip("`")
+    m = re.search(r"\[.*\]", text, re.DOTALL)
+    if not m:
+        print("  [measurement conversion] Could not parse Haiku response — keeping original measurements")
+        return
+
+    converted = json.loads(m.group())
+    for orig, conv in zip(to_convert, converted):
+        orig["ingredients"] = conv.get("ingredients", orig["ingredients"])
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +574,8 @@ def run_agent(user_request: str) -> list[dict]:
     print(f"\nSearching: {user_request}\n")
 
     found_recipes: list[dict] = []
-    cucchiaio_results: list[dict] = []  # track for batch translation
+    cucchiaio_results: list[dict] = []       # track for batch translation
+    memoriediangelina_results: list[dict] = []  # track for measurement conversion
 
     def _run_loop() -> None:
         while True:
@@ -540,6 +655,7 @@ def run_agent(user_request: str) -> list[dict]:
                         print(f"  Got: {result.get('title', '?')}" + (f" ({result.get('time', '')})" if result.get("time") else ""))
                         if result.get("ingredients") and result.get("instructions"):
                             found_recipes.append(result)
+                            memoriediangelina_results.append(result)
 
                 else:
                     result = {"error": f"Unknown tool: {name}"}
@@ -562,10 +678,16 @@ def run_agent(user_request: str) -> list[dict]:
             browser.close()
             _pw_page = None
 
-    # Translate cucchiaio.it content from Italian to English
+    # Translate cucchiaio.it content from Italian to English, then normalize measurements
     if cucchiaio_results:
         print(f"\nTranslating {len(cucchiaio_results)} Cucchiaio d'Argento recipe(s) via Haiku...")
         _translate_cucchiaio_batch(cucchiaio_results)
+        _convert_measurements_batch(cucchiaio_results)
+
+    # Convert metric measurements in Memorie di Angelina recipes
+    if memoriediangelina_results:
+        print(f"Converting measurements in {len(memoriediangelina_results)} Memorie di Angelina recipe(s)...")
+        _convert_measurements_batch(memoriediangelina_results)
 
     existing = []
     if RESULTS_PATH.exists():
