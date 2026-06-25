@@ -151,6 +151,9 @@
 - **Agent pipeline** (`fill_menu_ideas.py`): automated. Runs cuisine agents → fetches full recipe data → writes results to `/tmp/*_agent_results_{uid}.json` only. Does NOT write to `recipe_metadata.json` or create `.md` files. The Recipe Review UI (`/New` view) is the gate — user reviews cards and clicks **Add to Collection**, which triggers Haiku classification and writes the entry.
 - **Human inbox** (`recipeideas/` folder): always manual. User reviews → confirms → fetch URL → write complete entry to JSON + create `.md` → delete inbox file.
 
+### Recipe Source Patterns
+When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** in the project root. It defines five patterns (website, website+video, YouTube-description, YouTube-transcript, paywalled) with a decision tree, extraction technique for each, and routing rules for multi-source agents. All new sources must map to one of these patterns and use the shared `yt_utils.py` helpers for YouTube content.
+
 ### JSON invariant — no naked entries
 **Every entry in `recipe_metadata.json` must have `ingredients_raw` and `instructions` populated.** No title-only or URL-only stubs. If an entry can't be written with full data, it doesn't get written at all — it stays in the inbox or is skipped by the agent. This rule applies at write time for all new entries going forward.
 

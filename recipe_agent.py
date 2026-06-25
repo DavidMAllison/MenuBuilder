@@ -209,6 +209,9 @@ Routing rules:
 
 Never call the same tool twice. After all tools return, print a short summary: title, source, and cook time for each result."""
 
+_CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
+_CACHED_TOOLS = [*TOOLS[:-1], {**TOOLS[-1], "cache_control": {"type": "ephemeral"}}]
+
 
 def _get_runner(tool_name: str):
     if tool_name == "search_mexican_agent":
@@ -240,8 +243,8 @@ def run_agent(user_request: str) -> List[dict]:
         response = client.messages.create(
             model="claude-opus-4-7",
             max_tokens=4096,
-            system=SYSTEM,
-            tools=TOOLS,
+            system=_CACHED_SYSTEM,
+            tools=_CACHED_TOOLS,
             messages=messages,
         )
 

@@ -11,10 +11,12 @@ A personal meal planning system built around real family constraints — health 
 - **Feedback loop**: Tracks which meals the family liked, surfaces family-favorite signals in future candidate scoring
 - **SMS assistant**: Companion WhatsApp bot for querying recipes, meal plans, and inventory from a phone (separate project)
 - **Recipe discovery agents**: Automated agents that source new recipe ideas from regional cuisine sites and named chefs. All agents are accessed through a single orchestrator (`recipe_agent.py` / `recipe` CLI).
-  - **Mexican** — Pati Jinich, Rick Bayless, Cooking Con Claudia
-  - **Chef** — Alton Brown, Smitten Kitchen (Deb Perelman), Chetna Makan
+  - **Mexican** — Pati Jinich, Rick Bayless, Cooking Con Claudia, De Mi Rancho a Tu Cocina (Doña Ángela)
+  - **Chef** — Alton Brown, Smitten Kitchen (Deb Perelman), Chetna Makan, J. Kenji López-Alt (YouTube)
   - **Asian** — Just One Cookbook (Japanese), Maangchi (Korean), Hot Thai Kitchen (Thai), Viet World Kitchen (Vietnamese), Woks of Life (Chinese)
-  - **Indian** — Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan, Kannamma Cooks (South Indian/Tamil)
+  - **Indian** — Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan, Kannamma Cooks (South Indian/Tamil), Ranveer Brar, Archana's Kitchen
+  - **Italian** — Giallo Zafferano, Cucchiaio d'Argento, Memorie di Angelina (Frank Fariello)
+  - **Mediterranean** — The Mediterranean Dish (Suzy Kazan), My Greek Dish, Feasting at Home
   - **Sites** — Serious Eats (Playwright-based to bypass Cloudflare)
   - **ATK** (`atk_agent.py`) — America's Test Kitchen via saved favorites collections. Playwright for paywall auth, httpx + cookies for fetches. Pulls "Try Out", "Sunday Dinner", "Dinners" collections; falls back to top-rated. Accessible as `sync_atk_recipes` MCP tool or `python3 atk_agent.py`.
 - **Sunday auto-generation**: launchd cron fires at 9 AM every Sunday, kicks off a guided SMS workflow — collects last-week feedback, schedule changes, and cuisine preferences before proposing candidates
@@ -48,8 +50,12 @@ recipe_agent.py               # Recipe search orchestrator — single entry poin
 mexican_agent.py              # Mexican recipe sources (Pati Jinich, Rick Bayless, Cooking con Claudia)
 asian_agent.py                # Asian recipe sources (JOC, Maangchi, Hot Thai Kitchen, Viet World Kitchen, Woks of Life)
 indian_agent.py               # Indian recipe sources (Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan, Kannamma Cooks)
-chef_agent.py                 # Chef recipe sources (Alton Brown, Smitten Kitchen, Chetna Makan)
+chef_agent.py                 # Chef recipe sources (Alton Brown, Smitten Kitchen, Chetna Makan, Kenji López-Alt)
+italian_agent.py              # Italian recipe sources (Giallo Zafferano, Cucchiaio, Memorie di Angelina)
+mediterranean_agent.py        # Mediterranean recipe sources (Mediterranean Dish, My Greek Dish, Feasting at Home)
 sites_agent.py                # Cross-cuisine sites (Serious Eats) via Playwright
+yt_utils.py                   # Shared YouTube helpers — fetch_transcript(), enrich_recipe_from_transcript(); used by chef_agent and mexican_agent
+recipe_source_patterns.md     # Decision tree for adding new recipe sources — five patterns (website, website+video, YT-description, YT-transcript, paywalled) with extraction technique and routing rules
 atk_agent.py                  # America's Test Kitchen — syncs saved ATK collections into recipe_metadata.json (paywall auth via Playwright, httpx for fetches)
 fill_menu_ideas.py            # Run all agents in parallel and add new results to recipe_metadata.json as status="active"
 prep_utils.py                 # Shared prep classification — prompt, classify_prep(), parse_md_instructions(); used by fill_menu_ideas and menu_server

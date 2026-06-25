@@ -21,6 +21,7 @@ import json
 import os
 import random
 import re
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
@@ -34,9 +35,10 @@ import anthropic
 # Config
 # ---------------------------------------------------------------------------
 
-METADATA_PATH = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
-RECIPES_DIR   = Path.home() / "Dropbox/LLMContext/cooking/recipes"
-MENUBUILDER   = Path(__file__).parent
+METADATA_PATH   = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
+CONDIMENTS_PATH = Path.home() / "Dropbox/LLMContext/cooking/condiments.json"
+RECIPES_DIR     = Path.home() / "Dropbox/LLMContext/cooking/recipes"
+MENUBUILDER     = Path(__file__).parent
 
 _CONFIG_PATH = MENUBUILDER / "config.json"
 _CUISINE_FAMILY_MAP: dict[str, str] = json.loads(_CONFIG_PATH.read_text()).get("cuisine_family_map", {})
@@ -562,6 +564,40 @@ def _is_condiment(title: str) -> bool:
     return not any(anchor in title_lower for anchor in _DISH_ANCHORS)
 
 
+def _save_agent_condiment(recipe: dict) -> None:
+    """Write an agent-found condiment to condiments.json if not already present."""
+    title = (recipe.get("title") or "").strip()
+    if not title:
+        return
+    try:
+        data = json.loads(CONDIMENTS_PATH.read_text()) if CONDIMENTS_PATH.exists() else {}
+        if title in data:
+            return  # already have it
+        source_label = recipe.get("source", "")
+        # Extract bare URL from "Source Name - https://..." style labels
+        url = recipe.get("url") or recipe.get("source_url") or ""
+        if not url:
+            import re as _re
+            m = _re.search(r"https?://\S+", source_label)
+            if m:
+                url = m.group(0)
+        data[title] = {
+            "name":        title,
+            "type":        "sauce",
+            "source":      source_label,
+            "source_url":  url,
+            "image":       recipe.get("image", ""),
+            "servings":    recipe.get("yield", ""),
+            "ingredients": recipe.get("ingredients", []),
+            "instructions": recipe.get("instructions", []),
+            "notes":       "",
+        }
+        CONDIMENTS_PATH.write_text(json.dumps(data, indent=2))
+        print(f"  [condiment] Added to condiments.json: {title}")
+    except Exception as e:
+        print(f"  [condiment] Failed to save {title}: {e}")
+
+
 def _title_to_filename(title: str) -> str:
     """Convert a recipe title to a filename slug."""
     slug = re.sub(r"[^\w\s-]", "", title)
@@ -737,7 +773,8 @@ def main():
             skipped.append(r.get("title", "?") + " (no ingredients/instructions)")
             continue
         if _is_condiment(r.get("title", "")):
-            skipped.append(r.get("title", "?") + " (condiment, not a meal)")
+            _save_agent_condiment(r)
+            skipped.append(r.get("title", "?") + " (condiment → condiments.json)")
             continue
 
         new_recipes.append(r)
@@ -757,13 +794,19 @@ def main():
 
     if not new_recipes:
         print("\nNothing new in the queue.")
-        return
+    else:
+        print(f"\nNew recipes available in Review UI (/New view):")
+        for r in new_recipes:
+            print(f"  + {r.get('title','?')} ({r.get('source','?')})")
+        print(f"\nAgents wrote results to /tmp — open the Recipe Review UI and use Add to Collection.")
 
-    print(f"\nNew recipes available in Review UI (/New view):")
-    for r in new_recipes:
-        print(f"  + {r.get('title','?')} ({r.get('source','?')})")
-
-    print(f"\nAgents wrote results to /tmp — open the Recipe Review UI and use Add to Collection.")
+    # Post-run metadata cleanup — fix cuisine/source/meal_type + classify missing health/time
+    print("\n--- Post-run cleanup ---")
+    _cleanup = MENUBUILDER / "cleanup_agent.py"
+    cmd = [sys.executable, str(_cleanup), "--fix-metadata", "--fix-classify", "--apply"]
+    if args.dry_run:
+        cmd.append("--dry-run")
+    subprocess.run(cmd, check=False)
 
 
 if __name__ == "__main__":

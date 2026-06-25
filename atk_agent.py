@@ -287,6 +287,20 @@ def _fetch_recipe(http, url):
             # Keywords for method inference
             keywords = re.findall(r'\w+', item.get("keywords", ""))
 
+            # Video URL
+            video_url = ""
+            vid = item.get("video")
+            if vid:
+                if isinstance(vid, list):
+                    vid = vid[0] if vid else None
+                if isinstance(vid, str):
+                    video_url = vid
+                elif isinstance(vid, dict):
+                    video_url = vid.get("contentUrl") or vid.get("embedUrl") or vid.get("url") or ""
+                m = re.match(r"https?://(?:www\.)?youtube\.com/embed/([A-Za-z0-9_-]+)", video_url)
+                if m:
+                    video_url = f"https://www.youtube.com/watch?v={m.group(1)}"
+
             return {
                 "title":           item.get("name", "").strip(),
                 "url":             url,
@@ -296,6 +310,7 @@ def _fetch_recipe(http, url):
                 "total_min":       total_min,
                 "servings":        servings,
                 "keywords":        keywords,
+                "video_url":       video_url,
             }
     return None
 
@@ -468,7 +483,7 @@ def sync_atk(target=5, dry_run=False, force_login=False, collection_filter=None)
     recipes_dir   = metadata_path.parent / "recipes"
 
     # Build dedup sets
-    known_urls   = {e.get("source_url", "").rstrip("/") for e in recipes.values()}
+    known_urls   = {(e.get("source_url") or "").rstrip("/") for e in recipes.values()}
     known_titles = {t.lower() for t in recipes}
 
     # Auth
@@ -610,6 +625,7 @@ def sync_atk(target=5, dry_run=False, force_login=False, collection_filter=None)
             "needs_review":          needs_review,
             "prep_components":       [],
             "prep_notes":            "",
+            "video_url":             recipe.get("video_url", ""),
         }
         added.append(title)
         h = cls.get("health", "?")

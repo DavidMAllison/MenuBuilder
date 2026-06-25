@@ -20,7 +20,7 @@
 - `suggest_meals.py` shows `[LOW]` / `[MEDIUM]` / `[HIGH]` tags on every candidate
 - `--quick` header now reads "Busy nights (prefer LOW/MED effort)" instead of a minute threshold
 - `backfill_weeknight_effort.py` is re-runnable for new recipes
-- **Feedback path (future)**: when user reports "that was harder than expected," update `weeknight_effort` via SMS/Keanu
+- **Feedback path**: COMPLETE Jun 24 2026 — SMS reports "that was harder than expected" → Keanu updates `weeknight_effort` for that recipe
 
 ### Cooking Notes Into Recipe Files
 **Status**: COMPLETE Jun 15 2026. All 8 recipes with actionable notes have `## Notes` sections in their `.md` files. Add notes to new recipes as you cook them — no bulk process needed.
@@ -69,7 +69,7 @@
 **Status**: COMPLETE Jun 17 2026. All ATK recipes have `source_url` in metadata and `*Adapted from [America's Test Kitchen](url)*` footer in `.md` files.
 
 ### Recipe Agents for All MenuBuilder Sources
-- **Cuisine agents** (source-specific): Mexican (done), Asian/East+Southeast (done — Japanese, Korean, Thai, Vietnamese, Chinese), Indian (done — Jun 2026, its own agent separate from Asian), Italian, etc.
+- **Cuisine agents** (source-specific): Mexican (done), Asian/East+Southeast (done — Japanese, Korean, Thai, Vietnamese, Chinese), Indian (done — Jun 2026, its own agent separate from Asian), Italian (done), Mediterranean (done), etc.
 - **Indian agent** (`indian_agent.py`) — BUILT Jun 2026. Sources: Indian Healthy Recipes, Hebbars Kitchen, Chetna Makan (two HTML patterns handled), Kannamma Cooks (South Indian), Ranveer Brar, Archana's Kitchen. Symlinked as `~/.local/bin/indian`. Results to `/tmp/indian_agent_results_{uid}.json`.
 - **indianhealthyrecipes.com instructions** — FIXED Jun 8 2026. Root cause: IHR uses `HowToSection` grouping in ld+json (not flat `HowToStep`); code now handles nested `itemListElement`. WPRM HTML fallback added as safety net. `html.unescape()` added for entity cleaning.
 - **ranveerbrar.com** — FIXED Jun 8 2026. Search via sitemap (~1576 URLs across two sitemap files). ld+json ingredients are category labels — replaced with HTML extraction from `ingredients_cont_wrap` div. Hindi translations stripped from ingredients and title.
@@ -78,20 +78,13 @@
 - **Sites agent** (`sites_agent.py`) — BUILT. Serious Eats live via Playwright (bypasses 403). Symlinked as `~/.local/bin/sites`. Registry-based: add a new site = one dict entry in SITES.
 - **Cooking con Claudia (YouTube)** — DONE Jun 22 2026. YouTube Data API v3 (not yt_dlp); `search_claudia` + `fetch_claudia` in `mexican_agent.py`. Parses both ingredients and instructions from video description (English + Spanish headers). API key in `config.json` as `youtube_api_key`.
 - **ATK / America's Test Kitchen** — DONE Jun 9 2026. `atk_agent.py` + `sync_atk_recipes` MCP tool. Playwright auth, httpx fetches, 3 collections.
-- **Chetna Makan YouTube** (nice to have): attach YouTube video link to recipes fetched from chetnamakan.co.uk. Channel: `UC1VkNUPA6ieOuwXmk4SSJZw`.
+- **Chetna Makan YouTube** — COMPLETE Jun 24 2026. `_search_chetna_youtube(title)` in `chef_agent.py` queries her channel (`UC1VkNUPA6ieOuwXmk4SSJZw`) via YouTube Data API v3. Called automatically in `_fetch_chetnamakan()`; result stored as `video_url` in the recipe dict (already handled by `add_recipe`). Single-word match threshold accounts for Hindi spelling variants (gobhi/gobi, palak/saag).
 - Goal: full recipe discovery pipeline — any source accessible via agent, no manual URL fetching
 
 ### Mediterranean Agent (`mediterranean_agent.py`)
 **Status**: COMPLETE Jun 2026.
 - Sources: olivetomato.com + themediterraneandish.com; wired into `fill_menu_ideas.py`
 
-### Recipe Review UI — Cost-Friendly Indicator
-- Add a `budget_friendly` classification to complement the existing health pill on every card
-- **Display**: small pill or icon on cards in /New and Full Collection views — e.g. "💲 Budget" vs no tag (normal) vs a "$$" marker for pricier recipes
-- **Classification at intake**: Haiku call alongside `classify_health()` — infer from protein type and ingredient list (beans/lentils/chicken thigh/eggs/pork = budget; salmon/beef tenderloin/lamb/shrimp/scallops = pricier)
-- **Schema**: `budget_friendly: true | false` field on each recipe entry
-- **Backfill**: `backfill_budget.py` script to classify existing collection
-- **Note**: this is ingredient-based heuristic only — real cost data waits until Sep 2026 when price_history has enough coverage (see Meal Costing item)
 
 ### Cuisine Agents — Idea Pool Replenishment (between cycles)
 - **DONE Jun 8 2026**: renamed to `fill_menu_ideas.py`; skill `/fillmenuideas`; plist updated to `com.menubuilder.fillmenuideas`; README, CLAUDE.md, backlog updated.
@@ -149,10 +142,11 @@
 **Status**: COMPLETE Jun 16 2026. `backfill_images.py` ran; 140/149 recipes with source_url updated. 78 recipes (ATK + originals) have no source_url and remain without images. Re-run `backfill_images.py --force` after adding new sourced recipes.
 
 ### Recipe Review UI — Agent trigger on /New page
-- Small panel on /New to run `fill_menu_ideas.py` directly from the browser
-- UI: topic input (optional) + agent multi-select (default: all) + Run button
-- Implementation: `POST /api/fill_ideas` spawns subprocess in background, returns immediately; UI shows "Agents running — refresh /New in a few minutes" (fire-and-forget, no polling needed)
-- Future: polling + auto-refresh if the wait UX feels too rough
+**Status**: COMPLETE Jun 24 2026.
+- Lightning bolt icon button in view-bar (New view only); on mobile "This Week" collapses to calendar icon to preserve space
+- Bottom sheet: agent chips (All / Mexican / Asian / Indian / Chef / Italian / Mediterranean / Sites, multi-select) + optional topic input + Run button
+- `POST /api/fill_ideas` + `GET /api/fill_ideas_status` in `recipe_review_server.py`; threading.Lock prevents concurrent runs
+- Run button greys out to "Running…" during execution; polls every 10s; auto-reloads New view cards on completion
 
 ### Recipe Review UI — More prominent loading indicator
 **Status**: COMPLETE Jun 20 2026.
@@ -198,10 +192,13 @@
 - Ambiguous match returns top 3 candidates; user can retry with exact name
 
 ### Condiment Handling in Cleanup Agent and Shopping List
-**Status**: PARTIAL — UI complete Jun 23 2026. Remaining items:
-- **Cleanup agent**: add a `--check-condiments` pass that checks condiments for missing images and dead source URLs, same as recipes
-- **Shopping list**: recipes that reference a condiment (e.g. BBQ sauce, enchilada sauce) don't yet pull condiment ingredients into the shopping CSV — needs `condiment_deps` field on recipe entries
-- **Inventory**: condiment stock not tracked in `inventory.json`
+**Status**: COMPLETE Jun 24 2026.
+- `condiment_deps: [...]` field written to 12 recipes in `recipe_metadata.json` (enchiladas, BBQ, taco recipes)
+- `_build_shopping_csv` in `menu_server.py` pulls condiment ingredients via `_condiment_ingredients()` when present — notes field shows "Condiment Name (for Recipe)"
+- `condiments.json` schema updated with `source_url` and `image` fields; home recipes carry empty URL
+- `_save_agent_condiment()` in `fill_menu_ideas.py` writes agent-found condiments to `condiments.json` (with source_url) instead of discarding them
+- `cleanup_agent.py --check-condiments` checks source_url liveness and missing images across all condiments
+- Inventory tracking deferred — lower priority
 
 ### Meal Costing (Long-Term)
 - Once price history accumulates, cost recipes using `ingredients` array + price-per-unit averages from `price_history.json`

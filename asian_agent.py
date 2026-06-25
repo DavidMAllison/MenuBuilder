@@ -566,6 +566,9 @@ Rules:
 - For general/ambiguous queries: search 2-3 sources using dish terms that would naturally appear in each cuisine.
 - At the end, print a brief plain-text summary of what you found."""
 
+_CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
+_CACHED_TOOLS = [*TOOLS[:-1], {**TOOLS[-1], "cache_control": {"type": "ephemeral"}}]
+
 
 def run_agent(user_request: str) -> list[dict]:
     messages = [{"role": "user", "content": user_request}]
@@ -578,8 +581,8 @@ def run_agent(user_request: str) -> list[dict]:
             model="claude-opus-4-7",
             max_tokens=4096,
             thinking={"type": "adaptive"},
-            system=SYSTEM,
-            tools=TOOLS,
+            system=_CACHED_SYSTEM,
+            tools=_CACHED_TOOLS,
             messages=messages,
         )
 

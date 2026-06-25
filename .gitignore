@@ -29,3 +29,15 @@ __pycache__/
 
 # MCP runtime state
 menu_activity.json
+
+# Agent runtime state and logs
+agent_rotation_state.json
+cleanup_classify_preview.json
+cleanup_report.json
+cleanup_state.json
+*.log
+
+# Screenshots and local images
+*.jpeg
+*.jpg
+*.png
