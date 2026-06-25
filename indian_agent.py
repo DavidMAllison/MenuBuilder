@@ -64,6 +64,28 @@ def _ld_image(item: dict) -> str:
     return ""
 
 
+def _extract_video_url(item: dict) -> str:
+    video = item.get("video")
+    if not video:
+        return ""
+    if isinstance(video, list):
+        video = video[0] if video else None
+    if not video:
+        return ""
+    if isinstance(video, str):
+        url = video
+    elif isinstance(video, dict):
+        url = video.get("contentUrl") or video.get("embedUrl") or video.get("url") or ""
+    else:
+        return ""
+    if not url:
+        return ""
+    m = re.match(r"https?://(?:www\.)?youtube\.com/embed/([A-Za-z0-9_-]+)", url)
+    if m:
+        return f"https://www.youtube.com/watch?v={m.group(1)}"
+    return url
+
+
 # ---------------------------------------------------------------------------
 # Indian Healthy Recipes -- North/South Indian (indianhealthyrecipes.com)
 # WordPress ?s= search; ld+json on recipe pages
@@ -529,6 +551,7 @@ def fetch_recipe(url: str) -> dict:
                 "cuisine": cuisine or "Indian",
                 "category": item.get("recipeCategory", ""),
                 "image": _ld_image(item) or _og_image(soup),
+                "video_url": _extract_video_url(item),
             }
 
             # Ranveer Brar: replace ld+json category-label ingredients with
@@ -561,6 +584,47 @@ def fetch_recipe(url: str) -> dict:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _convert_measurements_batch(recipes: list[dict]) -> None:
+    """Convert metric measurements to US equivalents via Haiku. Modifies in-place."""
+    if not recipes:
+        return
+    metric_pat = re.compile(r"\b\d+(?:[.,]\d+)?\s*(?:g|gms?|ml|kg|l|cl)\b", re.IGNORECASE)
+    to_convert = [r for r in recipes if any(
+        metric_pat.search(ing) for ing in r.get("ingredients", []) if not ing.startswith("[")
+    )]
+    if not to_convert:
+        return
+    blocks = []
+    for i, r in enumerate(to_convert):
+        blocks.append(f"RECIPE {i + 1}: {r.get('title', '')}")
+        blocks.append("Ingredients: " + " | ".join(r.get("ingredients", [])))
+        blocks.append("")
+    prompt = (
+        "Convert all metric measurements in the following recipe ingredients to US measurements. "
+        "If an ingredient already has both metric and US (e.g. '200 g 7 oz'), remove the metric part and keep only the US value. "
+        "If it only has metric, convert it (g/gms/gm→oz or lbs, ml→cups/tbsp/tsp, kg→lbs). "
+        "Group header lines like '[For the Marinade]' must be kept exactly as-is. "
+        "Keep all other text exactly as-is. "
+        "Return a JSON array with one object per recipe in the same order:\n"
+        '[{"ingredients": ["..."]}]\n\n'
+        + "\n".join(blocks)
+    )
+    haiku = anthropic.Anthropic()
+    resp = haiku.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=2048,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = re.sub(r"```(?:json)?\s*", "", resp.content[0].text.strip()).strip().rstrip("`")
+    m = re.search(r"\[.*\]", text, re.DOTALL)
+    if not m:
+        print("  [measurement conversion] Could not parse Haiku response — keeping original measurements")
+        return
+    converted = json.loads(m.group())
+    for orig, conv in zip(to_convert, converted):
+        orig["ingredients"] = conv.get("ingredients", orig["ingredients"])
+
 
 def _iso_to_minutes(iso: str) -> int:
     """Parse ISO 8601 duration (PT1H30M or P0DT1H30M0S) to minutes."""
@@ -782,20 +846,24 @@ Rules:
 - For general/ambiguous queries: search 2-3 sources using dish terms natural to each source.
 - At the end, print a brief plain-text summary of what you found."""
 
+_CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
+_CACHED_TOOLS = [*TOOLS[:-1], {**TOOLS[-1], "cache_control": {"type": "ephemeral"}}]
+
 
 def run_agent(user_request: str) -> list[dict]:
     messages = [{"role": "user", "content": user_request}]
     print(f"\nSearching: {user_request}\n")
 
     found_recipes = []
+    metric_source_recipes: list[dict] = []  # Ranveer Brar + Chetna Makan — metric measurements
 
     while True:
         response = client.messages.create(
             model="claude-opus-4-7",
             max_tokens=4096,
             thinking={"type": "adaptive"},
-            system=SYSTEM,
-            tools=TOOLS,
+            system=_CACHED_SYSTEM,
+            tools=_CACHED_TOOLS,
             messages=messages,
         )
 
@@ -861,6 +929,8 @@ def run_agent(user_request: str) -> list[dict]:
                     if result.get("ingredients") and result.get("instructions"):
                         result["source"] = _source_label(result["url"])
                         found_recipes.append(result)
+                        if any(s in result["url"] for s in ("ranveerbrar.com", "chetnamakan.co.uk")):
+                            metric_source_recipes.append(result)
 
             else:
                 result = {"error": f"Unknown tool: {name}"}
@@ -872,6 +942,10 @@ def run_agent(user_request: str) -> list[dict]:
             })
 
         messages.append({"role": "user", "content": tool_results})
+
+    if metric_source_recipes:
+        print(f"Converting measurements in {len(metric_source_recipes)} Indian recipe(s)...")
+        _convert_measurements_batch(metric_source_recipes)
 
     existing = []
     if RESULTS_PATH.exists():

@@ -575,6 +575,8 @@
       color: #fff;
     }
 
+    .week-icon { display: none; }
+
     /* Filter button — icon-only, visually distinct from view pills */
     .filter-toggle {
       flex: 0 0 38px;
@@ -903,6 +905,8 @@
       .view-bar { padding: 8px 8px; gap: 4px; }
       .view-btn { padding: 5px 8px; font-size: 11px; }
       .filter-toggle { flex: 0 0 34px; width: 34px; }
+      .week-label { display: none; }
+      .week-icon  { display: inline-flex; align-items: center; justify-content: center; }
 
       .week-grid {
         grid-template-columns: repeat(4, 1fr);
@@ -943,12 +947,18 @@
 </header>
 
 <div class="view-bar">
-  <button class="view-btn active" onclick="setView('week', this)">This Week</button>
+  <button class="view-btn active" onclick="setView('week', this)">
+    <span class="week-label">This Week</span>
+    <svg class="week-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+  </button>
   <button class="view-btn" onclick="setView('new', this)">New</button>
   <button class="view-btn" onclick="setView('collection', this)">Collection</button>
   <button class="filter-toggle" id="filter-btn" onclick="openFilterSheet()" style="display:none" title="Filters">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
     <span class="filter-badge" id="filter-badge" style="display:none">0</span>
+  </button>
+  <button class="filter-toggle" id="agent-btn" onclick="openAgentSheet()" style="display:none" title="Run Agents">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
   </button>
 </div>
 
@@ -962,6 +972,16 @@
       <button class="fs-done-btn" onclick="closeFilterSheet()">Done</button>
     </div>
     <div class="fs-body" id="filter-sheet-body"></div>
+  </div>
+</div>
+
+<div class="fs-overlay" id="agent-overlay" style="display:none" onclick="handleAgentOverlayClick(event)">
+  <div class="fs-sheet" id="agent-sheet">
+    <div class="fs-header">
+      <span class="fs-title">Run Agents</span>
+      <button class="fs-done-btn" onclick="closeAgentSheet()">Done</button>
+    </div>
+    <div class="fs-body" id="agent-sheet-body"></div>
   </div>
 </div>
 
@@ -987,6 +1007,22 @@
   let _localDebounce = null;
 
   const activeFilters = { health: null, mealType: null, timesCooked: null, kidFriendly: null, cuisines: new Set(), sources: new Set(), recordTypes: new Set(['dinner']) };
+
+  // Restore filters from localStorage
+  (function() {
+    try {
+      const saved = localStorage.getItem('menubuilder_filters');
+      if (!saved) return;
+      const f = JSON.parse(saved);
+      if (f.health !== undefined) activeFilters.health = f.health;
+      if (f.mealType !== undefined) activeFilters.mealType = f.mealType;
+      if (f.timesCooked !== undefined) activeFilters.timesCooked = f.timesCooked;
+      if (f.kidFriendly !== undefined) activeFilters.kidFriendly = f.kidFriendly;
+      if (Array.isArray(f.cuisines)) activeFilters.cuisines = new Set(f.cuisines);
+      if (Array.isArray(f.sources)) activeFilters.sources = new Set(f.sources);
+      if (Array.isArray(f.recordTypes) && f.recordTypes.length) activeFilters.recordTypes = new Set(f.recordTypes);
+    } catch {}
+  })();
 
   // Poll index status in background once page loads
   async function pollIndexStatus() {
@@ -1102,6 +1138,17 @@
     badge.style.display = count > 0 ? '' : 'none';
     const btn = document.getElementById('filter-btn');
     if (btn) btn.classList.toggle('has-filters', count > 0);
+    try {
+      localStorage.setItem('menubuilder_filters', JSON.stringify({
+        health: activeFilters.health,
+        mealType: activeFilters.mealType,
+        timesCooked: activeFilters.timesCooked,
+        kidFriendly: activeFilters.kidFriendly,
+        cuisines: [...activeFilters.cuisines],
+        sources: [...activeFilters.sources],
+        recordTypes: [...activeFilters.recordTypes],
+      }));
+    } catch {}
   }
 
   function openFilterSheet() {
@@ -1118,6 +1165,106 @@
 
   function handleFsOverlayClick(e) {
     if (e.target === document.getElementById('fs-overlay')) closeFilterSheet();
+  }
+
+  // ── Agent sheet ──────────────────────────────────────────────────────────
+  const _ALL_AGENT_NAMES = ['mexican', 'asian', 'indian', 'chef', 'italian', 'mediterranean', 'sites'];
+  let _selectedAgents = new Set(['all']);
+  let _agentPollTimer = null;
+
+  function openAgentSheet() {
+    renderAgentSheet();
+    document.getElementById('agent-overlay').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeAgentSheet() {
+    document.getElementById('agent-overlay').style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  function handleAgentOverlayClick(e) {
+    if (e.target === document.getElementById('agent-overlay')) closeAgentSheet();
+  }
+
+  function toggleAgentChip(name) {
+    if (name === 'all') {
+      _selectedAgents = new Set(['all']);
+    } else {
+      _selectedAgents.delete('all');
+      if (_selectedAgents.has(name)) _selectedAgents.delete(name);
+      else _selectedAgents.add(name);
+      if (_selectedAgents.size === 0) _selectedAgents = new Set(['all']);
+    }
+    renderAgentSheet();
+  }
+
+  function renderAgentSheet() {
+    const chips = ['all', ..._ALL_AGENT_NAMES].map(name => {
+      const label  = name === 'all' ? 'All' : name.charAt(0).toUpperCase() + name.slice(1);
+      const active = _selectedAgents.has(name) ? ' active' : '';
+      return `<button class="fs-pill${active}" onclick="toggleAgentChip('${name}')">${label}</button>`;
+    }).join('');
+
+    const isRunning  = !!_agentPollTimer;
+    const savedTopic = document.getElementById('agent-topic')?.value || '';
+
+    document.getElementById('agent-sheet-body').innerHTML = `
+      <div class="fs-section">
+        <div class="fs-section-title">Agents</div>
+        <div class="fs-pills">${chips}</div>
+      </div>
+      <div class="fs-section">
+        <div class="fs-section-title">Topic (optional)</div>
+        <input id="agent-topic" type="text" value="${escHtml(savedTopic)}"
+               placeholder="e.g. grilling, fish dinner…"
+               style="width:100%;padding:8px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
+      </div>
+      <div class="fs-section" style="border-bottom:none">
+        <button id="agent-run-btn" onclick="runAgents()" ${isRunning ? 'disabled' : ''}
+                style="width:100%;padding:10px;background:${isRunning ? '#bbb' : '#2980b9'};color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:${isRunning ? 'default' : 'pointer'}">
+          ${isRunning ? 'Running…' : 'Run'}
+        </button>
+        <p style="display:${isRunning ? 'block' : 'none'};margin-top:10px;font-size:12px;color:#888;text-align:center">
+          Agents running — new cards appear in ~2 min.
+        </p>
+      </div>`;
+  }
+
+  async function runAgents() {
+    if (_agentPollTimer) return;
+    const topic  = document.getElementById('agent-topic')?.value?.trim() || '';
+    const agents = _selectedAgents.has('all') ? 'all' : [..._selectedAgents];
+    const statusEl = () => document.querySelector('#agent-sheet-body p');
+    try {
+      const res  = await fetch('/api/fill_ideas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agents, topic }),
+      });
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
+      const data = await res.json();
+      if (data.status === 'started' || data.status === 'already_running') {
+        _agentPollTimer = setInterval(pollAgentsDone, 10000);
+        renderAgentSheet();
+      }
+    } catch (e) {
+      console.error('fill_ideas error', e);
+      const el = statusEl();
+      if (el) { el.style.display = 'block'; el.style.color = '#c0392b'; el.textContent = `Error: ${e.message}`; }
+    }
+  }
+
+  async function pollAgentsDone() {
+    try {
+      const { running } = await (await fetch('/api/fill_ideas_status')).json();
+      if (!running) {
+        clearInterval(_agentPollTimer);
+        _agentPollTimer = null;
+        renderAgentSheet();
+        if (currentView === 'new') await load();
+      }
+    } catch (e) { /* ignore */ }
   }
 
   function clearAllFilters() {
@@ -1310,11 +1457,14 @@
     document.getElementById('subtitle').textContent = 'Loading…';
 
     const filterBtn = document.getElementById('filter-btn');
+    const agentBtn  = document.getElementById('agent-btn');
     if (v === 'week') {
       filterBtn.style.display = 'none';
+      agentBtn.style.display  = 'none';
       await loadWeek();
     } else {
       filterBtn.style.display = '';
+      agentBtn.style.display  = v === 'new' ? '' : 'none';
       await load();
     }
   }
@@ -1472,100 +1622,60 @@
     main.appendChild(lunchWrap);
   }
 
-  function openLunchModal() {
-    if (!lunchPick || lunchPick.status !== 'selected') return;
-    const lp = lunchPick;
-
-    document.getElementById('modal-toolbar').innerHTML = `
-      ${visitBtn(lp.url, 'Recipe')}
-      <button class="modal-close-btn" onclick="closeModal()" title="Close">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-        <span>Close</span>
-      </button>
-    `;
-
-    const imageHtml = lp.image
-      ? `<img class="modal-image" src="/api/img?url=${encodeURIComponent(lp.image)}"
-             alt="${escHtml(lp.name)}" onerror="this.style.display='none'">`
-      : `<div class="modal-image-placeholder">🥗</div>`;
-
-    const pClass = healthPillClass(lp.health);
-    const ings   = (lp.ingredients  || []).map(i => `<li>${escHtml(i)}</li>`).join('');
-    const steps  = (lp.instructions || []).map(s => `<li>${linkifyStep(s)}</li>`).join('');
-
-    document.getElementById('modal-content').innerHTML = `
-      ${imageHtml}
-      <div class="modal-body">
-        <div style="margin-bottom:6px">
-          <span style="background:#7f8c8d;color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700">Lunch</span>
-          <span style="font-size:12px;color:#888;margin-left:8px">This week</span>
-        </div>
-        <div class="modal-title">${escHtml(lp.name)}</div>
-        <div class="modal-meta">
-          ${lp.health ? `<span class="health-pill ${pClass}">${escHtml(lp.health)}</span>` : ''}
-          ${lp.time   ? `<span style="margin-left:8px">${escHtml(lp.time)}</span>` : ''}
-        </div>
-        ${ings  ? `<div class="modal-section-title">Ingredients</div><ul class="modal-ingredients">${ings}</ul>` : ''}
-        ${steps ? `<div class="modal-section-title">Instructions</div><ol class="modal-instructions">${steps}</ol>` : ''}
-      </div>
-    `;
-
-    document.getElementById('modal').classList.add('open');
-    _savedScrollY = window.scrollY;
-    document.body.style.overflow = 'hidden';
-    document.body.style.position = 'fixed';
-    document.body.style.top = `-${_savedScrollY}px`;
-    document.body.style.width = '100%';
+  function _closeBtnHtml() {
+    return `<button class="modal-close-btn" onclick="closeModal()" title="Close">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+      <span>Close</span>
+    </button>`;
   }
 
-  function openWeekModal(idx) {
-    const m = weekMeals[idx];
-    currentIdx = idx;
+  // Single unified modal renderer. All three entry points (openLunchModal,
+  // openWeekModal, openModal) normalise their data and call this.
+  function _showModal({ title, image, health, time, times_cooked, reminder,
+      ingredients, instructions, condiment_type, record_type, yieldVal,
+      badgeLabel, badgeColor, badgeSecondary, toolbarHtml }) {
+    document.getElementById('modal-toolbar').innerHTML = toolbarHtml;
 
-    document.getElementById('modal-toolbar').innerHTML = `
-      ${visitBtn(m.url, 'Recipe')}
-      <button class="modal-close-btn" onclick="closeModal()" title="Close">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-        <span>Close</span>
-      </button>
-    `;
-
-    const imageHtml = m.image
-      ? `<img class="modal-image" src="/api/img?url=${encodeURIComponent(m.image)}"
-             alt="${escHtml(m.title)}" onerror="this.style.display='none'">`
+    const imageHtml = image
+      ? `<img class="modal-image" src="/api/img?url=${encodeURIComponent(image)}"
+             alt="${escHtml(title)}" onerror="this.style.display='none'">`
       : `<div class="modal-image-placeholder">🍽</div>`;
 
-    const color    = _DAY_COLORS[m.day] || '#555';
-    const pClass   = healthPillClass(m.health);
-    const ings     = (m.ingredients  || []).map(i => `<li>${escHtml(i)}</li>`).join('');
-    const steps    = (m.instructions || []).map(s => `<li>${linkifyStep(s)}</li>`).join('');
+    const pClass       = healthPillClass(health);
+    const isCondiment  = record_type === 'condiment';
+    const timesLabel   = !isCondiment && (times_cooked != null)
+      ? ((times_cooked || 0) === 0 ? 'Never tried' : `Tried ${times_cooked}\xd7`)
+      : '';
+    const condimentLabel = isCondiment && condiment_type
+      ? condiment_type.charAt(0).toUpperCase() + condiment_type.slice(1) : '';
 
-    let dateDisplay = '';
-    if (m.date) {
-      const d = new Date(m.date + 'T00:00:00');
-      dateDisplay = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-    }
+    const metaParts = [
+      health         ? `<span class="health-pill ${pClass}">${escHtml(health)}</span>` : '',
+      condimentLabel ? `<span style="margin-left:8px">${escHtml(condimentLabel)}</span>` : '',
+      time           ? `<span style="margin-left:8px">${escHtml(time)}</span>` : '',
+      yieldVal       ? `<span style="margin-left:8px">Serves ${escHtml(String(yieldVal))}</span>` : '',
+      timesLabel     ? `<span style="margin-left:8px;color:#888">${timesLabel}</span>` : '',
+    ].filter(Boolean).join('');
+
+    const ings  = (ingredients  || []).map(i => `<li>${escHtml(i)}</li>`).join('');
+    const steps = (instructions || []).map(s => `<li>${linkifyStep(s)}</li>`).join('');
+    const borderColor = badgeColor || '#ccc';
 
     document.getElementById('modal-content').innerHTML = `
       ${imageHtml}
       <div class="modal-body">
+        ${badgeLabel ? `
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <span style="background:${color};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700">${escHtml(m.day)}</span>
-          <span style="font-size:12px;color:#888">${escHtml(dateDisplay)}</span>
-        </div>
-        <div class="modal-title">${escHtml(m.title)}</div>
-        <div class="modal-meta">
-          <span class="health-pill ${pClass}">${escHtml(m.health)}</span>
-          ${m.time ? `<span style="margin-left:8px">${escHtml(m.time)}</span>` : ''}
-          <span style="margin-left:8px;color:#888">${(m.times_cooked || 0) === 0 ? 'Never tried' : `Tried ${m.times_cooked}\xd7`}</span>
-        </div>
-        ${m.reminder ? `
-          <div style="margin-top:14px;padding:10px 14px;background:#fafafa;border-left:3px solid ${color};border-radius:0 6px 6px 0;font-size:12px;color:#555;line-height:1.5">
-            ${escHtml(m.reminder)}
+          <span style="background:${borderColor};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700">${escHtml(badgeLabel)}</span>
+          ${badgeSecondary ? `<span style="font-size:12px;color:#888">${escHtml(badgeSecondary)}</span>` : ''}
+        </div>` : ''}
+        <div class="modal-title">${escHtml(title)}</div>
+        ${metaParts ? `<div class="modal-meta">${metaParts}</div>` : ''}
+        ${reminder ? `
+          <div style="margin-top:14px;padding:10px 14px;background:#fafafa;border-left:3px solid ${borderColor};border-radius:0 6px 6px 0;font-size:12px;color:#555;line-height:1.5">
+            ${escHtml(reminder)}
           </div>` : ''}
         ${ings  ? `<div class="modal-section-title">Ingredients</div><ul class="modal-ingredients">${ings}</ul>` : ''}
         ${steps ? `<div class="modal-section-title">Instructions</div><ol class="modal-instructions">${steps}</ol>` : ''}
@@ -1573,11 +1683,58 @@
     `;
 
     document.getElementById('modal').classList.add('open');
+    document.getElementById('modal-content').scrollTop = 0;
     _savedScrollY = window.scrollY;
     document.body.style.overflow = 'hidden';
     document.body.style.position = 'fixed';
     document.body.style.top = `-${_savedScrollY}px`;
     document.body.style.width = '100%';
+  }
+
+  function openLunchModal() {
+    if (!lunchPick || lunchPick.status !== 'selected') return;
+    const lp = lunchPick;
+    _showModal({
+      title:         lp.name,
+      image:         lp.image,
+      health:        lp.health,
+      time:          lp.time,
+      times_cooked:  lp.times_cooked,
+      reminder:      null,
+      ingredients:   lp.ingredients,
+      instructions:  lp.instructions,
+      yieldVal:      null,
+      badgeLabel:    'Lunch',
+      badgeColor:    '#7f8c8d',
+      badgeSecondary: 'This week',
+      toolbarHtml:   `${visitBtn(lp.url, 'Recipe')}${visitBtn(lp.source_url, 'Source', 'source-btn')}${_closeBtnHtml()}`,
+    });
+  }
+
+  function openWeekModal(idx) {
+    const m = weekMeals[idx];
+    currentIdx = idx;
+    const color = _DAY_COLORS[m.day] || '#555';
+    let dateDisplay = '';
+    if (m.date) {
+      const d = new Date(m.date + 'T00:00:00');
+      dateDisplay = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    }
+    _showModal({
+      title:         m.title,
+      image:         m.image,
+      health:        m.health,
+      time:          m.time,
+      times_cooked:  m.times_cooked,
+      reminder:      m.reminder,
+      ingredients:   m.ingredients,
+      instructions:  m.instructions,
+      yieldVal:      null,
+      badgeLabel:    m.day,
+      badgeColor:    color,
+      badgeSecondary: dateDisplay,
+      toolbarHtml:   `${visitBtn(m.url, 'Recipe')}${visitBtn(m.source_url, 'Source', 'source-btn')}${_closeBtnHtml()}`,
+    });
   }
 
   function renderGrid() {
@@ -1668,79 +1825,55 @@
   function openModal(idx, isSearchResult = false) {
     currentIdx = idx;
     const r = isSearchResult ? searchResults[idx] : allRecipes[idx];
+    const yieldVal = Array.isArray(r.yield) ? r.yield.sort((a, b) => a.length - b.length)[0] : r.yield;
+    const color    = sourceColor(r.source || 'Unknown');
 
-    // Toolbar
-    const visitHref = r.url ? `href="${r.url}" target="_blank" rel="noopener"` : '';
-    document.getElementById('modal-toolbar').innerHTML = `
-      ${currentView === 'new'
-        ? `<button class="modal-action add-btn" onclick="addToCollection(${idx})" title="Add to Recipe Collection">
-             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-               <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-               <line x1="12" y1="9" x2="12" y2="15"/><line x1="9" y1="12" x2="15" y2="12"/>
-             </svg>
-             <span>Add</span>
-           </button>
-           <button class="modal-action dismiss-btn" onclick="dismissRecipe(${idx})" title="Remove from New queue">
-             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-             </svg>
-             <span>Remove</span>
-           </button>`
-        : currentView === 'collection' && r.record_type !== 'condiment'
-        ? `<button class="modal-action remove-btn" onclick="removeFromCollection(${idx})" title="Remove from collection">
-             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-               <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-               <path d="M10 11v6"/><path d="M14 11v6"/>
-               <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-             </svg>
-             <span>Remove</span>
-           </button>`
-        : ''
-      }
-      ${currentView === 'collection'
-        ? `${visitBtn(r.recipe_url, 'Recipe')}${visitBtn(r.source_url, 'Source', 'source-btn')}${r.video_url && r.video_url !== r.source_url ? visitBtn(r.video_url, 'Watch') : ''}`
-        : `${visitBtn(r.url, 'Visit')}${r.video_url && r.video_url !== r.url ? visitBtn(r.video_url, 'Watch') : ''}`
-      }
-      <button class="modal-close-btn" onclick="closeModal()" title="Close">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-        <span>Close</span>
-      </button>
-    `;
+    const actionHtml = currentView === 'new'
+      ? `<button class="modal-action add-btn" onclick="addToCollection(${idx})" title="Add to Recipe Collection">
+           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+             <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+             <line x1="12" y1="9" x2="12" y2="15"/><line x1="9" y1="12" x2="15" y2="12"/>
+           </svg>
+           <span>Add</span>
+         </button>
+         <button class="modal-action dismiss-btn" onclick="dismissRecipe(${idx})" title="Remove from New queue">
+           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+           </svg>
+           <span>Remove</span>
+         </button>`
+      : currentView === 'collection' && r.record_type !== 'condiment'
+      ? `<button class="modal-action remove-btn" onclick="removeFromCollection(${idx})" title="Remove from collection">
+           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+             <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+             <path d="M10 11v6"/><path d="M14 11v6"/>
+             <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+           </svg>
+           <span>Remove</span>
+         </button>`
+      : '';
 
-    // Content
-    const imageHtml = r.image
-      ? `<img class="modal-image" src="/api/img?url=${encodeURIComponent(r.image)}"
-             alt="${escHtml(r.title)}" onerror="this.style.display='none'">`
-      : `<div class="modal-image-placeholder">🍽</div>`;
+    const visitHtml = currentView === 'collection'
+      ? `${visitBtn(r.recipe_url, 'Recipe')}${visitBtn(r.source_url, 'Source', 'source-btn')}${r.video_url && r.video_url !== r.source_url ? visitBtn(r.video_url, 'Watch') : ''}`
+      : `${visitBtn(r.url, 'Source')}${r.video_url && r.video_url !== r.url ? visitBtn(r.video_url, 'Watch') : ''}`;
 
-    const ings  = (r.ingredients  || []).map(i => `<li>${escHtml(i)}</li>`).join('');
-    const steps = (r.instructions || []).map(s => `<li>${linkifyStep(s)}</li>`).join('');
-    const isCondiment = r.record_type === 'condiment';
-    const timesCookedLabel = isCondiment ? '' : ((r.times_cooked || 0) === 0 ? 'Never tried' : `Tried ${r.times_cooked}\xd7`);
-    const yieldVal = Array.isArray(r.yield) ? r.yield.sort((a,b) => a.length - b.length)[0] : r.yield;
-    const condimentTypeLabel = isCondiment && r.condiment_type ? r.condiment_type.charAt(0).toUpperCase() + r.condiment_type.slice(1) : '';
-    const meta  = [condimentTypeLabel, r.time, yieldVal ? `Serves ${yieldVal}` : '', timesCookedLabel].filter(Boolean).join(' · ');
-
-    document.getElementById('modal-content').innerHTML = `
-      ${imageHtml}
-      <div class="modal-body">
-        <div class="modal-source">${escHtml(r.source || '')}</div>
-        <div class="modal-title">${escHtml(r.title)}</div>
-        ${meta ? `<div class="modal-meta">${escHtml(meta)}</div>` : ''}
-        ${ings  ? `<div class="modal-section-title">Ingredients</div><ul class="modal-ingredients">${ings}</ul>` : ''}
-        ${steps ? `<div class="modal-section-title">Instructions</div><ol class="modal-instructions">${steps}</ol>` : ''}
-      </div>
-    `;
-
-    document.getElementById('modal').classList.add('open');
-    document.getElementById('modal-content').scrollTop = 0;
-    _savedScrollY = window.scrollY;
-    document.body.style.overflow = 'hidden';
-    document.body.style.position = 'fixed';
-    document.body.style.top = `-${_savedScrollY}px`;
-    document.body.style.width = '100%';
+    _showModal({
+      title:          r.title,
+      image:          r.image,
+      health:         r.health,
+      time:           r.time,
+      times_cooked:   r.times_cooked,
+      reminder:       r.reminder || null,
+      ingredients:    r.ingredients,
+      instructions:   r.instructions,
+      condiment_type: r.condiment_type,
+      record_type:    r.record_type,
+      yieldVal,
+      badgeLabel:     r.source || '',
+      badgeColor:     color,
+      badgeSecondary: r.cuisine || '',
+      toolbarHtml:    `${actionHtml}${visitHtml}${_closeBtnHtml()}`,
+    });
   }
 
   function closeModal() {
@@ -1858,7 +1991,8 @@
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-      if (document.getElementById('fs-overlay').style.display !== 'none') closeFilterSheet();
+      if (document.getElementById('agent-overlay').style.display !== 'none') closeAgentSheet();
+      else if (document.getElementById('fs-overlay').style.display !== 'none') closeFilterSheet();
       else closeModal();
     }
   });
@@ -1899,11 +2033,14 @@
       savedBtn.classList.add('active');
     }
     const filterBtn = document.getElementById('filter-btn');
+    const agentBtn  = document.getElementById('agent-btn');
     if (currentView === 'week') {
       filterBtn.style.display = 'none';
+      agentBtn.style.display  = 'none';
       loadWeek();
     } else {
       filterBtn.style.display = '';
+      agentBtn.style.display  = currentView === 'new' ? '' : 'none';
       load();
     }
   }

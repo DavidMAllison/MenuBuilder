@@ -19,6 +19,7 @@ Tools:
   finalize_plan            — generate plan + shopping CSV, launch apps
   process_recipe_url       — check for similar recipe, add if new, optionally swap into day
   process_recipe_image     — extract recipe from a photo (cookbook page), add to collection
+  set_recipe_image         — store a user-submitted photo as the image for an existing recipe
   get_prep_guide           — on-demand prep guide (mode: weekly | tonight | auto)
   sync_atk_recipes         — import new recipes from ATK favorite collections
 """
@@ -54,6 +55,8 @@ METADATA_PATH = Path(_CONFIG["metadata_path"])
 _CUISINE_FAMILY_MAP: dict[str, str] = _CONFIG.get("cuisine_family_map", {})
 WEEKLYPLAN_DIR = METADATA_PATH.parent / "weeklyplan"
 RECIPES_DIR = METADATA_PATH.parent / "recipes"
+RECIPE_IMAGES_DIR = METADATA_PATH.parent / "recipe_images"
+CONDIMENTS_PATH   = METADATA_PATH.parent / "condiments.json"
 FEEDBACK_CURRENT_FILE = WEEKLYPLAN_DIR / "feedback_current.json"
 
 ACTIVITY_FILE = MENUBUILDER_DIR / "menu_activity.json"
@@ -523,6 +526,13 @@ _SOURCE_CUISINE_ALIASES: list[tuple[str, str]] = [
     ("memorie di angelina",       "Italian"),
     ("memoriediangelina",         "Italian"),
     ("frank fariello",            "Italian"),
+    ("cooking con claudia",       "Mexican"),
+    ("pati jinich",               "Mexican"),
+    ("patijinich",                "Mexican"),
+    ("rick bayless",              "Mexican"),
+    ("rickbayless",               "Mexican"),
+    ("mexico in my kitchen",      "Mexican"),
+    ("mexicoinmykitchen",         "Mexican"),
 ]
 
 
@@ -1282,11 +1292,14 @@ def _write_recipe_md(title: str, recipe_data: dict, source_url: str, source_name
         attribution = f"**Source**: {source_credit}"
     else:
         attribution = ""
+    video_url = recipe_data.get("video_url", "")
+    video_line = f"**Watch**: [YouTube]({video_url})" if video_url and video_url != source_url else ""
     lines = [
         f"# {title}", "",
         f"**Time**: {recipe_data.get('time', '')}  ",
         f"**Yield**: {recipe_data.get('servings', '')}  ",
         attribution,
+        video_line,
         "", "## Ingredients", "",
     ]
     for ing in recipe_data.get("ingredients", []):
@@ -1585,6 +1598,15 @@ def _display_ing(name: str) -> str:
     return _ING_ALIASES.get(lower, name)
 
 
+def _condiment_ingredients(name: str) -> list[dict]:
+    """Return the structured ingredients list for a named condiment, or [] if not found."""
+    try:
+        data = json.loads(CONDIMENTS_PATH.read_text())
+        return data.get(name, {}).get("ingredients", [])
+    except Exception:
+        return []
+
+
 def _build_shopping_csv(selected: dict, week_start: date) -> str:
     """
     Generate shopping CSV content, aggregating duplicate ingredients across recipes.
@@ -1635,6 +1657,12 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
             _add_structured(structured, name, date_str)
         else:
             _add_raw(recipes[key].get("ingredients_raw", []), name, date_str)
+
+        # Pull in condiment ingredients for any condiment_deps on this recipe
+        for cdep in recipes[key].get("condiment_deps", []):
+            cing = _condiment_ingredients(cdep)
+            if cing:
+                _add_structured(cing, f"{cdep} (for {name})", date_str)
 
     # Append lunch ingredients if Ashley has picked this week
     if LUNCH_STATE_FILE.exists():
@@ -3542,6 +3570,75 @@ def process_recipe_image(image_b64: str, mime_type: str = "image/jpeg",
             f"Added '{result['title']}' to the collection ({result['health']}). "
             "Run generate_github_pages_data.py + push to publish to GitHub Pages."
         ),
+    }
+
+
+@mcp.tool()
+def set_recipe_image(recipe_name: str, image_b64: str, mime_type: str = "image/jpeg") -> dict:
+    """
+    Store a user-submitted photo as the image for an existing recipe.
+
+    Used when a user texts a photo of a cooked meal to Keanu with a caption like
+    "photo of [meal name]". Fuzzy-matches recipe_name against the collection,
+    saves the image to disk, and updates the 'image' field in recipe_metadata.json.
+
+    The saved path is understood by the recipe review server's /api/img endpoint.
+
+    Returns:
+        status="updated":   { status, recipe, image_path, message }
+        status="ambiguous": { status, candidates, message }
+        status="not_found": { status, message }
+        status="error":     { status, error }
+    """
+    import base64 as _b64
+
+    recipes = _load_metadata()
+
+    # 1. Fuzzy-match recipe name
+    key = _find_recipe_key(recipe_name, recipes)
+    if not key:
+        candidates_lower = difflib.get_close_matches(
+            recipe_name.lower(),
+            [k.lower() for k in recipes],
+            n=3, cutoff=0.5,
+        )
+        if candidates_lower:
+            lower_to_key = {k.lower(): k for k in recipes}
+            matched = [lower_to_key[c] for c in candidates_lower if c in lower_to_key]
+            return {
+                "status": "ambiguous",
+                "candidates": matched,
+                "message": (
+                    f"No exact match for '{recipe_name}'. Did you mean: "
+                    + ", ".join(f'"{m}"' for m in matched) + "?"
+                ),
+            }
+        return {
+            "status": "not_found",
+            "message": f"No recipe found matching '{recipe_name}'.",
+        }
+
+    # 2. Decode and save image
+    RECIPE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^a-zA-Z0-9_-]", "_", key)
+    ext = "jpg" if any(x in mime_type for x in ("jpeg", "jpg")) else mime_type.split("/")[-1]
+    image_path = RECIPE_IMAGES_DIR / f"{slug}.{ext}"
+
+    try:
+        image_bytes = _b64.standard_b64decode(image_b64)
+        image_path.write_bytes(image_bytes)
+    except Exception as e:
+        return {"status": "error", "error": f"Failed to save image: {e}"}
+
+    # 3. Update metadata
+    recipes[key]["image"] = str(image_path)
+    _save_metadata(recipes)
+
+    return {
+        "status": "updated",
+        "recipe": key,
+        "image_path": str(image_path),
+        "message": f"Photo saved as image for '{key}'.",
     }
 
 

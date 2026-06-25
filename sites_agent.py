@@ -70,6 +70,29 @@ def _ld_image(item: dict) -> str:
             return first.get("url", "") or first.get("contentUrl", "")
     return ""
 
+
+def _extract_video_url(item: dict) -> str:
+    video = item.get("video")
+    if not video:
+        return ""
+    if isinstance(video, list):
+        video = video[0] if video else None
+    if not video:
+        return ""
+    if isinstance(video, str):
+        url = video
+    elif isinstance(video, dict):
+        url = video.get("contentUrl") or video.get("embedUrl") or video.get("url") or ""
+    else:
+        return ""
+    if not url:
+        return ""
+    m = re.match(r"https?://(?:www\.)?youtube\.com/embed/([A-Za-z0-9_-]+)", url)
+    if m:
+        return f"https://www.youtube.com/watch?v={m.group(1)}"
+    return url
+
+
 # ---------------------------------------------------------------------------
 # Site registry — add a new site here, no other code changes needed for
 # standard ld+json sites.
@@ -246,6 +269,15 @@ _LD_JSON_JS = '''() => {
                     const imgF = item.image;
                     const ldImg = typeof imgF === 'string' ? imgF : (Array.isArray(imgF) && imgF.length ? (typeof imgF[0] === 'string' ? imgF[0] : (imgF[0].url || '')) : (imgF && imgF.url ? imgF.url : ''));
                     const ogEl = document.querySelector('meta[property="og:image"]');
+                    const vidF = item.video;
+                    let videoUrl = '';
+                    if (vidF) {
+                        const v = Array.isArray(vidF) ? vidF[0] : vidF;
+                        if (typeof v === 'string') videoUrl = v;
+                        else if (v) videoUrl = v.contentUrl || v.embedUrl || v.url || '';
+                        const ytM = videoUrl.match(/youtube\.com\/embed\/([A-Za-z0-9_-]+)/);
+                        if (ytM) videoUrl = 'https://www.youtube.com/watch?v=' + ytM[1];
+                    }
                     return {
                         title: item.name || '',
                         description: item.description || '',
@@ -260,6 +292,7 @@ _LD_JSON_JS = '''() => {
                         cuisine: item.recipeCuisine || '',
                         category: item.recipeCategory || '',
                         image: ldImg || (ogEl ? ogEl.content : ''),
+                        video_url: videoUrl,
                     };
                 }
             }
@@ -324,6 +357,7 @@ def _fetch_httpx(url: str) -> dict:
                 "cuisine": item.get("recipeCuisine", ""),
                 "category": item.get("recipeCategory", ""),
                 "image": _ld_image(item) or _og_image(soup),
+                "video_url": _extract_video_url(item),
             }
     return {"error": "No ld+json Recipe schema found", "url": url}
 
@@ -414,6 +448,9 @@ Rules:
 - Aim to find 3-5 valid recipes (with ingredients and instructions) per request. Skip results with errors or missing content.
 - Note the site source and likely cuisine for each recipe in your final summary."""
 
+_CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
+_CACHED_TOOLS = [*TOOLS[:-1], {**TOOLS[-1], "cache_control": {"type": "ephemeral"}}]
+
 
 # ---------------------------------------------------------------------------
 # Agent loop
@@ -434,8 +471,8 @@ def run_agent(user_request: str) -> List[dict]:
                 model="claude-opus-4-7",
                 max_tokens=4096,
                 thinking={"type": "adaptive"},
-                system=SYSTEM,
-                tools=TOOLS,
+                system=_CACHED_SYSTEM,
+                tools=_CACHED_TOOLS,
                 messages=messages,
             )
 

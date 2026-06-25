@@ -563,6 +563,9 @@ Rules:
 - Aim for 6-8 valid recipes total.
 - At the end, print a brief summary of what you found."""
 
+_CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
+_CACHED_TOOLS = [*TOOLS[:-1], {**TOOLS[-1], "cache_control": {"type": "ephemeral"}}]
+
 
 # ---------------------------------------------------------------------------
 # Agent loop
@@ -583,8 +586,8 @@ def run_agent(user_request: str) -> list[dict]:
                 model="claude-opus-4-7",
                 max_tokens=4096,
                 thinking={"type": "adaptive"},
-                system=SYSTEM,
-                tools=TOOLS,
+                system=_CACHED_SYSTEM,
+                tools=_CACHED_TOOLS,
                 messages=messages,
             )
 

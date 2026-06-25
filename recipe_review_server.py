@@ -546,6 +546,7 @@ def this_week():
             "reminder":     m.get("reminder", ""),
             "image":        meta.get("image", ""),
             "source":       meta.get("source", ""),
+            "source_url":   meta.get("source_url", ""),
             "cuisine":      meta.get("cuisine", ""),
             "ingredients":  meta.get("ingredients_raw", []) or [
                 f"{i.get('quantity','')} {i.get('unit','')} {i.get('name','')}".strip()
@@ -599,15 +600,17 @@ def lunch_pick_api():
     ]
 
     return jsonify({
-        "status":       "selected",
-        "name":         name,
-        "url":          url,
-        "health":       meta.get("health", ""),
-        "time":         meta.get("time", ""),
-        "image":        meta.get("image", ""),
-        "source":       meta.get("source", ""),
-        "ingredients":  ingredients,
-        "instructions": meta.get("instructions", []),
+        "status":        "selected",
+        "name":          name,
+        "url":           url,
+        "health":        meta.get("health", ""),
+        "time":          meta.get("time", ""),
+        "image":         meta.get("image", ""),
+        "source":        meta.get("source", ""),
+        "source_url":    meta.get("source_url", ""),
+        "times_cooked":  meta.get("times_cooked", 0),
+        "ingredients":   ingredients,
+        "instructions":  meta.get("instructions", []),
     })
 
 
@@ -865,6 +868,39 @@ def proxy_image():
         return send_file(cache_path, mimetype=content_type.split(";")[0].strip())
     except Exception:
         return "", 404
+
+
+_fill_ideas_proc: "subprocess.Popen | None" = None
+_fill_ideas_lock = threading.Lock()
+
+
+@app.route("/api/fill_ideas", methods=["POST"])
+@login_required
+def fill_ideas():
+    global _fill_ideas_proc
+    with _fill_ideas_lock:
+        if _fill_ideas_proc is not None and _fill_ideas_proc.poll() is None:
+            return jsonify({"status": "already_running"})
+        body = request.get_json(silent=True) or {}
+        agents = body.get("agents", "all")
+        topic = (body.get("topic") or "").strip()
+        script = Path(__file__).parent / "fill_menu_ideas.py"
+        cmd = [sys.executable, str(script)]
+        if isinstance(agents, list) and agents:
+            cmd += ["--agents", ",".join(agents)]
+        if topic:
+            cmd += ["--topic", topic]
+        _fill_ideas_proc = subprocess.Popen(cmd, cwd=str(Path(__file__).parent))
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/fill_ideas_status")
+@login_required
+def fill_ideas_status():
+    global _fill_ideas_proc
+    if _fill_ideas_proc is None:
+        return jsonify({"running": False})
+    return jsonify({"running": _fill_ideas_proc.poll() is None})
 
 
 if __name__ == "__main__":

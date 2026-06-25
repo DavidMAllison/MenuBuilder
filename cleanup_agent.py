@@ -41,14 +41,92 @@ from bs4 import BeautifulSoup
 # Paths
 # ---------------------------------------------------------------------------
 
-MENUBUILDER_DIR = Path(__file__).parent
-METADATA_PATH   = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
-RECIPES_DIR     = Path.home() / "Dropbox/LLMContext/cooking/recipes"
+MENUBUILDER_DIR  = Path(__file__).parent
+METADATA_PATH    = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
+CONDIMENTS_PATH  = Path.home() / "Dropbox/LLMContext/cooking/condiments.json"
+RECIPES_DIR      = Path.home() / "Dropbox/LLMContext/cooking/recipes"
 STATE_PATH      = MENUBUILDER_DIR / "cleanup_state.json"
 REPORT_PATH     = MENUBUILDER_DIR / "cleanup_report.json"
 CLASSIFY_PATH   = MENUBUILDER_DIR / "cleanup_classify_preview.json"
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+
+# ---------------------------------------------------------------------------
+# Cuisine / metadata constants
+# ---------------------------------------------------------------------------
+
+CUISINE_VARIANT_MAP = {
+    "Italian-American":                              "Italian",
+    "Chinese-American":                              "Chinese",
+    "Vietnamese-American":                           "Vietnamese",
+    "Chinese home-style":                            "Chinese",
+    "Cantonese Chinese":                             "Chinese",
+    "Chinese - Uyghur":                             "Chinese",
+    "Moroccan / North African":                      "Moroccan",
+    "Peruvian / Latin American":                     "Peruvian",
+    "Middle Eastern / Levantine":                    "Middle Eastern",
+    "French / European bistro":                      "French",
+    "American / technique":                          "American",
+    "Mexican (Baja California)":                     "Mexican",
+    "Mexican (Central Mexico / mole-adjacent)":      "Mexican",
+    "Mexican (Mexico City classic)":                 "Mexican",
+    "Mexican (Northern coastal / Sonora)":           "Mexican",
+    "Goan":                                          "Indian",
+    "Goan Recipes":                                  "Indian",
+}
+
+_DOMAIN_CUISINE = {
+    "seriouseats.com":           "American",
+    "maangchi.com":              "Korean",
+    "justonecookbook.com":       "Japanese",
+    "hotthaikitchen.com":        "Thai",
+    "vietworldkitchen.com":      "Vietnamese",
+    "thewoksoflife.com":         "Chinese",
+    "mexicoinmykitchen.com":     "Mexican",
+    "patijinich.com":            "Mexican",
+    "indianhealthyrecipes.com":  "Indian",
+    "hebbarskitchen.com":        "Indian",
+    "chetnamakan.co.uk":         "Indian",
+    "kannammacooks.com":         "Indian",
+    "ranveerbrar.com":           "Indian",
+    "archanaskitchen.com":       "Indian",
+    "olivetomato.com":           "Mediterranean",
+    "themediterraneandish.com":  "Mediterranean",
+    "smittenkitchen.com":        "American",
+    "italianfoodforever.com":    "Italian",
+    "skinnytaste.com":           "American",
+    "recipetineats.com":         "American",
+}
+
+_DOMAIN_SOURCE = {
+    "seriouseats.com":           "Serious Eats",
+    "maangchi.com":              "Maangchi",
+    "justonecookbook.com":       "Just One Cookbook",
+    "hotthaikitchen.com":        "Hot Thai Kitchen",
+    "vietworldkitchen.com":      "Viet World Kitchen",
+    "thewoksoflife.com":         "Woks of Life",
+    "mexicoinmykitchen.com":     "Mexico in My Kitchen",
+    "patijinich.com":            "Pati Jinich",
+    "indianhealthyrecipes.com":  "Indian Healthy Recipes",
+    "hebbarskitchen.com":        "Hebbars Kitchen",
+    "chetnamakan.co.uk":         "Chetna Makan",
+    "kannammacooks.com":         "Kannamma Cooks",
+    "ranveerbrar.com":           "Ranveer Brar",
+    "archanaskitchen.com":       "Archana's Kitchen",
+    "olivetomato.com":           "Olive Tomato",
+    "themediterraneandish.com":  "The Mediterranean Dish",
+    "smittenkitchen.com":        "Smitten Kitchen",
+    "americastestkitchen.com":   "America's Test Kitchen",
+    "cookscountry.com":          "Cook's Country",
+    "italianfoodforever.com":    "Italian Food Forever",
+    "skinnytaste.com":           "Skinnytaste",
+    "recipetineats.com":         "RecipeTin Eats",
+}
+
+
+def _url_domain(url: str) -> str:
+    m = re.search(r"https?://(?:www\.)?([^/]+)", url)
+    return m.group(1).lower() if m else ""
 
 # ---------------------------------------------------------------------------
 # API key
@@ -808,6 +886,101 @@ def fix_classify(apply: bool) -> None:
         print(f"\nRun with --fix-classify --apply to write these to recipe_metadata.json")
 
 # ---------------------------------------------------------------------------
+# Fix: metadata (cuisine, source, meal_type, needs_review) — no HTTP, no model
+# ---------------------------------------------------------------------------
+
+def fix_metadata(dry_run: bool) -> None:
+    """Auto-fix cuisine normalization, source inference, meal_type mismatches, needs_review clearing."""
+    config    = json.loads((MENUBUILDER_DIR / "config.json").read_text(encoding="utf-8"))
+    canonical = set(config.get("cuisine_family_map", {}).keys())
+
+    metadata = json.loads(METADATA_PATH.read_text(encoding="utf-8"))
+    recipes  = metadata["recipes"]
+
+    cuisine_fixed        = 0
+    source_fixed         = 0
+    meal_type_fixed      = 0
+    needs_review_cleared = 0
+
+    for key, r in recipes.items():
+        if r.get("status") not in ("active",):
+            continue
+
+        url    = (r.get("source_url") or r.get("url") or "").strip()
+        domain = _url_domain(url) if url else ""
+
+        # 1. Cuisine normalization — variant → canonical
+        cuisine = r.get("cuisine", "")
+        if cuisine and cuisine not in canonical:
+            normalized = CUISINE_VARIANT_MAP.get(cuisine)
+            if normalized:
+                if not dry_run:
+                    recipes[key]["cuisine"] = normalized
+                print(f"  [cuisine] {r.get('title', key)[:55]}: {cuisine!r} → {normalized!r}")
+                cuisine_fixed += 1
+                cuisine = normalized
+
+        # 2. Missing cuisine — infer from source domain
+        if not cuisine and domain:
+            inferred = _DOMAIN_CUISINE.get(domain)
+            if inferred:
+                if not dry_run:
+                    recipes[key]["cuisine"] = inferred
+                print(f"  [cuisine-infer] {r.get('title', key)[:50]}: → {inferred!r} ({domain})")
+                cuisine_fixed += 1
+
+        # 3. Missing source — infer from domain
+        if not r.get("source") and domain:
+            inferred_src = _DOMAIN_SOURCE.get(domain)
+            if inferred_src:
+                if not dry_run:
+                    recipes[key]["source"] = inferred_src
+                print(f"  [source-infer] {r.get('title', key)[:50]}: → {inferred_src!r}")
+                source_fixed += 1
+
+        # 4. meal_type mismatch — time > 60 min tagged Weeknight
+        # Skip slow_cooker (hands-off, weeknight-safe by design)
+        if r.get("meal_type") == "Weeknight" and r.get("cooking_method") != "slow_cooker":
+            time_str = r.get("time", "")
+            # Strip passive time (marinating, resting) so "20 min active + 4 hr marinating"
+            # doesn't incorrectly flip to Weekend
+            active_time = re.sub(
+                r"\+?\s*\d+\s*(?:hours?|h|minutes?|min)\s*(?:marinating|marinate|resting|rest|chilling|overnight)",
+                "", time_str, flags=re.IGNORECASE,
+            ).strip()
+            mins = 0
+            mh = re.search(r"(\d+)\s*hour", active_time, re.IGNORECASE)
+            if mh:
+                mins = int(mh.group(1)) * 60
+            mm = re.search(r"(\d+)\s*min", active_time, re.IGNORECASE)
+            if mm:
+                mins += int(mm.group(1))
+            if mins > 60:
+                if not dry_run:
+                    recipes[key]["meal_type"] = "Weekend"
+                print(f"  [meal_type] {r.get('title', key)[:50]}: Weeknight → Weekend ({time_str})")
+                meal_type_fixed += 1
+
+        # 5. needs_review — clear if instructions pass quality check
+        if r.get("needs_review"):
+            if not _is_stub_instructions(r.get("instructions")):
+                if not dry_run:
+                    recipes[key]["needs_review"] = False
+                print(f"  [needs_review] cleared: {r.get('title', key)[:55]}")
+                needs_review_cleared += 1
+
+    prefix = "DRY RUN — " if dry_run else ""
+    print(
+        f"\n{prefix}Metadata fixes: {cuisine_fixed} cuisine, {source_fixed} source, "
+        f"{meal_type_fixed} meal_type, {needs_review_cleared} needs_review cleared"
+    )
+
+    if not dry_run and (cuisine_fixed or source_fixed or meal_type_fixed or needs_review_cleared):
+        METADATA_PATH.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"Saved to {METADATA_PATH}")
+
+
+# ---------------------------------------------------------------------------
 # Main scan
 # ---------------------------------------------------------------------------
 
@@ -934,13 +1107,61 @@ def run_scan(args: argparse.Namespace) -> None:
         print()
 
 # ---------------------------------------------------------------------------
+# Condiment check
+# ---------------------------------------------------------------------------
+
+def check_condiments() -> None:
+    """Check condiments.json for missing images and dead source_urls."""
+    if not CONDIMENTS_PATH.exists():
+        print("condiments.json not found")
+        return
+
+    data = json.loads(CONDIMENTS_PATH.read_text())
+    print(f"\n=== Condiment check ({len(data)} entries) ===\n")
+
+    missing_image = []
+    missing_url   = []
+    dead_url      = []
+
+    for name, entry in data.items():
+        if not entry.get("image"):
+            missing_image.append(name)
+        url = entry.get("source_url", "")
+        if not url:
+            missing_url.append(name)
+        else:
+            try:
+                r = httpx.head(url, timeout=8, follow_redirects=True)
+                if r.status_code >= 400:
+                    dead_url.append((name, url, r.status_code))
+            except Exception as e:
+                dead_url.append((name, url, str(e)))
+
+    if missing_url:
+        print(f"No source_url ({len(missing_url)}) — home/original recipes:")
+        for n in missing_url:
+            print(f"  {n}")
+    if missing_image:
+        print(f"\nMissing image ({len(missing_image)}):")
+        for n in missing_image:
+            print(f"  {n}")
+    if dead_url:
+        print(f"\nDead source_url ({len(dead_url)}):")
+        for name, url, status in dead_url:
+            print(f"  {name}: {status}  {url}")
+    if not dead_url and not missing_image:
+        print("All condiments OK.")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Recipe collection cleanup agent")
-    # Mode
+    # Fix modes (stackable — any combination runs in order)
     parser.add_argument("--fix-safe",     action="store_true", help="Apply cached images + instructions")
+    parser.add_argument("--fix-metadata", action="store_true", help="Auto-fix cuisine, source, meal_type, needs_review (no HTTP, no model)")
     parser.add_argument("--fix-classify", action="store_true", help="Run Haiku health/time classification")
     parser.add_argument("--apply",        action="store_true", help="With --fix-classify: write to metadata")
     # Scan filter
@@ -948,6 +1169,7 @@ def main() -> None:
     parser.add_argument("--check-images",       action="store_true")
     parser.add_argument("--check-instructions", action="store_true")
     parser.add_argument("--check-semantic",     action="store_true")
+    parser.add_argument("--check-condiments",   action="store_true")
     # Tuning
     parser.add_argument("--dry-run",    action="store_true", help="Never write state or metadata")
     parser.add_argument("--stale-days", type=int, default=7, help="Re-check state entries older than N days")
@@ -955,12 +1177,18 @@ def main() -> None:
     parser.add_argument("--workers",    type=int, default=12, help="Parallel HTTP threads")
     args = parser.parse_args()
 
+    any_fix = args.fix_safe or args.fix_metadata or args.fix_classify
+
     if args.fix_safe:
         state = _load_state()
         fix_safe(state, args.dry_run)
-    elif args.fix_classify:
+    if args.fix_metadata:
+        fix_metadata(args.dry_run)
+    if args.fix_classify:
         fix_classify(apply=args.apply)
-    else:
+    if args.check_condiments:
+        check_condiments()
+    elif not any_fix:
         run_scan(args)
 
 

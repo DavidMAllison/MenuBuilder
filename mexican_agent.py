@@ -7,6 +7,7 @@ Sources:
   - mexicoinmykitchen.com (Mely Martinez)
   - rickbayless.com (Rick Bayless)
   - Cooking con Claudia (YouTube)
+  - De Mi Rancho a Tu Cocina (YouTube, Doña Ángela)
 
 Usage:
   mexican "find recipes from Oaxaca"
@@ -27,6 +28,7 @@ from pathlib import Path
 import httpx
 from bs4 import BeautifulSoup
 import anthropic
+from yt_utils import enrich_recipe_from_transcript
 
 # Load API key from sms-assistant .env if not already in environment
 if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -71,94 +73,174 @@ def _ld_image(item: dict) -> str:
 
 _SKIP_URL_PATTERNS = ("episode", "/season-", "book", "event", "award", "nominated", "james-beard")
 _CLAUDIA_CHANNEL_ID = "UC0tVWRw4aNoVqXaobA8E_Ig"
+_RANCHO_CHANNEL_ID  = "UCJjyyWFwUIOfKhb35WgCqVg"
 _MEXICAN_KEYWORDS = (
     "mexican", "receta", "tacos", "tamales", "enchiladas", "mole", "salsa",
     "pozole", "carnitas", "chile", "tortilla", "frijoles", "arroz", "birria",
     "menudo", "barbacoa", "caldo", "sopa", "tinga", "chorizo", "nopal",
 )
+_YT_API_BASE = "https://www.googleapis.com/youtube/v3"
+_INGREDIENT_HEADERS = {"ingredients", "ingredientes", "ingredient", "ingrediente"}
+_INSTRUCTION_HEADERS = {
+    "instructions", "instrucciones", "directions", "method", "preparation",
+    "preparacion", "preparación", "steps", "pasos", "procedure", "how to make",
+}
+
+
+def _load_yt_api_key() -> str:
+    config_path = Path(__file__).parent / "config.json"
+    try:
+        return json.loads(config_path.read_text(encoding="utf-8")).get("youtube_api_key", "")
+    except Exception:
+        return ""
 
 
 def search_claudia(query: str, max_results: int = 8) -> list[dict]:
-    """Search Cooking con Claudia's YouTube channel for Mexican recipes."""
-    import yt_dlp
-    import warnings
-    warnings.filterwarnings("ignore")
+    """Search Cooking con Claudia's YouTube channel via YouTube Data API v3.
 
-    search_url = f"https://www.youtube.com/channel/{_CLAUDIA_CHANNEL_ID}/search?query={query.replace(' ', '+')}"
-    ydl_opts = {"quiet": True, "extract_flat": True, "playlist_items": f"1:{max_results * 2}"}
+    Note: Claudia occasionally posts Asian-style recipes (stir-fries, fried rice, etc.).
+    The Mexican keyword filter intentionally excludes those here — they won't appear
+    in results even if they match the query.
+    """
+    api_key = _load_yt_api_key()
+    if not api_key:
+        return [{"error": "youtube_api_key not set in config.json"}]
 
+    params = {
+        "channelId": _CLAUDIA_CHANNEL_ID,
+        "q": query,
+        "type": "video",
+        "part": "snippet",
+        "maxResults": min(max_results * 2, 50),
+        "key": api_key,
+    }
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(search_url, download=False)
+        with httpx.Client(timeout=15) as http:
+            r = http.get(f"{_YT_API_BASE}/search", params=params)
+            r.raise_for_status()
     except Exception as e:
         return [{"error": str(e)}]
 
     results = []
-    for entry in (info.get("entries") or []):
-        title = entry.get("title", "")
-        video_id = entry.get("id") or entry.get("url", "")
-        if not video_id:
-            continue
-        url = f"https://www.youtube.com/watch?v={video_id}" if not video_id.startswith("http") else video_id
-        # Filter out non-Mexican content — skip if no Mexican keyword in title
+    for item in r.json().get("items", []):
+        title = item["snippet"]["title"]
+        video_id = item["id"]["videoId"]
         title_lower = title.lower()
         if not any(k in title_lower for k in _MEXICAN_KEYWORDS):
             continue
-        # Skip Shorts (usually under 60s, less useful for full recipes)
         if "#short" in title_lower or "shorts" in title_lower:
             continue
-        results.append({"title": title, "url": url})
+        results.append({"title": title, "url": f"https://www.youtube.com/watch?v={video_id}"})
         if len(results) >= max_results:
             break
 
     return results
 
 
-def _parse_claudia_description(description: str) -> list[str]:
-    """Extract ingredient lines from a Cooking con Claudia video description."""
+_IMPORTANT_HEADER_RE = re.compile(
+    r"^[^a-zA-Z]*i\s*m\s*p\s*o\s*r\s*t\s*a\s*n\s*t[^a-zA-Z]*$", re.IGNORECASE
+)
+_SOCIAL_LINE_RE = re.compile(
+    r"(tiktok|instagram|\bfb\b|facebook|business inquir|recipes in spanish"
+    r"|want to see more|follow me|tag me on any|subscribe button"
+    r"|www\.|\.com/@|\.co/@)",
+    re.IGNORECASE,
+)
+
+
+def _parse_claudia_description(description: str) -> tuple[list[str], list[str]]:
+    """Extract ingredients and instructions from a Cooking con Claudia video description.
+
+    Claudia puts ingredients in the description but not step-by-step instructions.
+    We collect any lines under standalone IMPORTANT/Tip section headers as cooking notes.
+    Returns (ingredients, instructions).
+    """
     lines = description.splitlines()
-    ingredients = []
-    in_ingredients = False
+    ingredients: list[str] = []
+    instructions: list[str] = []
+    section = None  # "ingredients" | "instructions" | "notes" | None
+
     for line in lines:
         stripped = line.strip()
-        if stripped.lower() == "ingredients":
-            in_ingredients = True
+        lower = stripped.lower().rstrip(":").strip()
+
+        # Named section headers — allow inline suffixes like "ingredients: 6-8 servings"
+        if any(lower == h or lower.startswith(h + ":") or lower.startswith(h + " ") for h in _INGREDIENT_HEADERS):
+            section = "ingredients"
             continue
-        if in_ingredients:
-            # Stop at blank line after ingredients or a new section heading
-            if not stripped:
-                if ingredients:
-                    break
+        if any(lower == h or lower.startswith(h + ":") or lower.startswith(h + " ") for h in _INSTRUCTION_HEADERS):
+            section = "instructions"
+            continue
+        # Standalone IMPORTANT header (not "important" mid-sentence)
+        if _IMPORTANT_HEADER_RE.match(stripped) or re.match(r"tip\b", stripped, re.IGNORECASE):
+            if section != "ingredients":
+                section = "notes"
+            continue
+
+        if not stripped:
+            continue
+
+        # Social/URL lines — exit recipe section once data collected
+        if (stripped.startswith("http") or stripped.startswith("@")
+                or stripped.startswith("#") or _SOCIAL_LINE_RE.search(stripped)):
+            if ingredients or instructions:
+                section = None
+            continue
+
+        if section == "ingredients":
+            clean = re.sub(r"^[-•*✓]\s*", "", stripped)
+            if clean and not re.match(r"^\d+[-–]\d+\s+servings?", clean, re.IGNORECASE):
+                ingredients.append(clean)
+        elif section == "instructions":
+            clean = re.sub(r"^\d+[.)]\s*", "", stripped)
+            if clean:
+                instructions.append(clean)
+        elif section == "notes":
+            # Skip affiliate/promo lines (contain embedded URLs or promo keywords)
+            if re.search(r"https?://", stripped):
                 continue
-            # Stop if it looks like a URL or social link
-            if stripped.startswith("http") or stripped.startswith("@") or stripped.startswith("#"):
-                break
-            ingredients.append(stripped)
-    return ingredients
+            if any(x in stripped.lower() for x in ("subscribe", "recipe just type", "amazon", "apron", "pots & pans", "blender")):
+                continue
+            clean = re.sub(r"^[‼️⚠️🛍🫶🏽♥️📸😘🥰😁😅😊🙏🏽❤️👉🏼\s]+", "", stripped).strip()
+            if clean and len(clean) > 10:
+                instructions.append(clean)
+
+    return ingredients, instructions
 
 
 def fetch_claudia(url: str) -> dict:
     """Fetch a Cooking con Claudia YouTube video and extract recipe from description."""
-    import yt_dlp
-    import warnings
-    warnings.filterwarnings("ignore")
+    api_key = _load_yt_api_key()
+    if not api_key:
+        return {"error": "youtube_api_key not set in config.json", "url": url}
 
-    ydl_opts = {"quiet": True}
+    m = re.search(r"[?&]v=([A-Za-z0-9_-]{11})", url)
+    if not m:
+        return {"error": "Could not extract video ID from URL", "url": url}
+
+    params = {"id": m.group(1), "part": "snippet", "key": api_key}
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        with httpx.Client(timeout=15) as http:
+            r = http.get(f"{_YT_API_BASE}/videos", params=params)
+            r.raise_for_status()
     except Exception as e:
         return {"error": str(e), "url": url}
 
-    title = info.get("title", "").strip()
-    description = info.get("description", "")
-    ingredients = _parse_claudia_description(description)
+    items = r.json().get("items", [])
+    if not items:
+        return {"error": "Video not found", "url": url}
 
-    if not ingredients:
-        return {"error": "No ingredients found in description", "url": url, "title": title}
+    snippet = items[0]["snippet"]
+    title = snippet.get("title", "").strip()
+    thumbnails = snippet.get("thumbnails", {})
+    image = (thumbnails.get("high") or thumbnails.get("medium") or thumbnails.get("default") or {}).get("url", "")
 
-    return {
+    ingredients, desc_instructions = _parse_claudia_description(snippet.get("description", ""))
+
+    video_id = m.group(1)
+    recipe = {
         "url": url,
+        "video_url": url,
         "title": title,
         "description": "",
         "prep_time": "",
@@ -166,11 +248,111 @@ def fetch_claudia(url: str) -> dict:
         "total_time": "",
         "yield": "",
         "ingredients": ingredients,
-        "instructions": [f"See video: {url}"],
+        "instructions": desc_instructions,
         "cuisine": "Mexican",
         "category": "",
-        "image": info.get("thumbnail", ""),
+        "image": image,
     }
+
+    # Always enrich instructions from transcript; fill ingredients if description had none
+    enrich_recipe_from_transcript(recipe, video_id)
+
+    if not recipe["ingredients"]:
+        return {"error": "No ingredients found in description or transcript", "url": url, "title": title}
+
+    if not recipe["instructions"]:
+        recipe["instructions"] = [f"See video: {url}"]
+
+    return recipe
+
+
+def search_rancho(query: str, max_results: int = 8) -> list[dict]:
+    """Search De Mi Rancho a Tu Cocina (Doña Ángela) YouTube channel."""
+    api_key = _load_yt_api_key()
+    if not api_key:
+        return [{"error": "youtube_api_key not set in config.json"}]
+    params = {
+        "channelId": _RANCHO_CHANNEL_ID,
+        "q": query,
+        "type": "video",
+        "part": "snippet",
+        "maxResults": min(max_results * 2, 50),
+        "key": api_key,
+    }
+    try:
+        with httpx.Client(timeout=15) as http:
+            r = http.get(f"{_YT_API_BASE}/search", params=params)
+            r.raise_for_status()
+    except Exception as e:
+        return [{"error": str(e)}]
+
+    results = []
+    for item in r.json().get("items", []):
+        title = item["snippet"]["title"]
+        if "#short" in title.lower() or "shorts" in title.lower():
+            continue
+        video_id = item["id"]["videoId"]
+        results.append({"title": title, "url": f"https://www.youtube.com/watch?v={video_id}"})
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def fetch_rancho(url: str) -> dict:
+    """Fetch a De Mi Rancho a Tu Cocina video; description in Spanish, transcript translated by Haiku."""
+    api_key = _load_yt_api_key()
+    if not api_key:
+        return {"error": "youtube_api_key not set in config.json", "url": url}
+
+    m = re.search(r"[?&]v=([A-Za-z0-9_-]{11})", url)
+    if not m:
+        return {"error": "Could not extract video ID from URL", "url": url}
+    video_id = m.group(1)
+
+    params = {"id": video_id, "part": "snippet", "key": api_key}
+    try:
+        with httpx.Client(timeout=15) as http:
+            r = http.get(f"{_YT_API_BASE}/videos", params=params)
+            r.raise_for_status()
+    except Exception as e:
+        return {"error": str(e), "url": url}
+
+    items = r.json().get("items", [])
+    if not items:
+        return {"error": "Video not found", "url": url}
+
+    snippet = items[0]["snippet"]
+    title = snippet.get("title", "").strip()
+    thumbs = snippet.get("thumbnails", {})
+    image = (thumbs.get("high") or thumbs.get("medium") or thumbs.get("default") or {}).get("url", "")
+
+    ingredients, desc_instructions = _parse_claudia_description(snippet.get("description", ""))
+
+    recipe = {
+        "url": url,
+        "video_url": url,
+        "title": title,
+        "description": "",
+        "prep_time": "",
+        "cook_time": "",
+        "total_time": "",
+        "yield": "",
+        "ingredients": ingredients,
+        "instructions": desc_instructions,
+        "cuisine": "Mexican",
+        "category": "",
+        "image": image,
+        "source": "De Mi Rancho a Tu Cocina",
+    }
+
+    enrich_recipe_from_transcript(recipe, video_id)
+
+    if not recipe["ingredients"]:
+        return {"error": "No ingredients found in description or transcript", "url": url, "title": title}
+    if not recipe["instructions"]:
+        recipe["instructions"] = [f"See video: {url}"]
+
+    return recipe
 
 
 def _load_mimk_urls() -> list[str]:
@@ -310,6 +492,41 @@ def search_patijinich(query: str, max_results: int = 20) -> list[dict]:
     return results
 
 
+def _parse_wprm_ingredients(soup: BeautifulSoup) -> list[str]:
+    """Extract WPRM ingredients, preserving group headers (e.g. 'For the Sauce', 'Optional')."""
+    ingredients = []
+
+    def _parse_li(li) -> str | None:
+        parts = []
+        amt  = li.select_one(".wprm-recipe-ingredient-amount")
+        unit = li.select_one(".wprm-recipe-ingredient-unit")
+        name = li.select_one(".wprm-recipe-ingredient-name")
+        note = li.select_one(".wprm-recipe-ingredient-notes")
+        if amt:  parts.append(amt.text.strip())
+        if unit: parts.append(unit.text.strip())
+        if name: parts.append(name.text.strip())
+        if note: parts.append(f"({note.text.strip()})")
+        return " ".join(parts) if parts else None
+
+    groups = soup.select(".wprm-recipe-ingredient-group")
+    if groups:
+        for group in groups:
+            header = group.select_one(".wprm-recipe-ingredient-group-name")
+            if header and header.text.strip():
+                ingredients.append(f"[{header.text.strip()}]")
+            for li in group.select(".wprm-recipe-ingredient"):
+                line = _parse_li(li)
+                if line:
+                    ingredients.append(line)
+    else:
+        for li in soup.select(".wprm-recipe-ingredient"):
+            line = _parse_li(li)
+            if line:
+                ingredients.append(line)
+
+    return ingredients
+
+
 def _fetch_patijinich_wprm(url: str) -> dict:
     """Fetch a Pati Jinich recipe using the WPRM print URL (more reliable than ld+json).
 
@@ -330,11 +547,7 @@ def _fetch_patijinich_wprm(url: str) -> dict:
     title_el = soup.find(class_="wprm-recipe-name")
     title = title_el.get_text(strip=True) if title_el else ""
 
-    ingredients = [
-        el.get_text(separator=" ", strip=True)
-        for el in soup.find_all(class_="wprm-recipe-ingredient")
-        if el.get_text(strip=True)
-    ]
+    ingredients = _parse_wprm_ingredients(soup)
 
     instructions = [
         el.get_text(separator=" ", strip=True)
@@ -496,6 +709,8 @@ def _source_label(url: str) -> str:
     return url
 
 
+
+
 # --- Tool definitions for Claude ---
 
 TOOLS = [
@@ -529,6 +744,36 @@ TOOLS = [
                 "max_results": {"type": "integer", "description": "Max results to return (default 8)"},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "search_rancho",
+        "description": (
+            "Search De Mi Rancho a Tu Cocina (Doña Ángela) YouTube channel for Mexican recipes. "
+            "Traditional, rustic Mexican home cooking — moles, tamales, guisos, antojitos. "
+            "Videos are in Spanish; ingredients and steps extracted from transcript and translated."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Dish name or ingredient (Spanish or English)"},
+                "max_results": {"type": "integer", "description": "Max results to return (default 8)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "fetch_rancho_recipe",
+        "description": (
+            "Fetch a De Mi Rancho a Tu Cocina YouTube video and extract the recipe. "
+            "Use this for URLs returned by search_rancho — not for other YouTube sources."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "YouTube watch URL returned by search_rancho"},
+            },
+            "required": ["url"],
         },
     },
     {
@@ -586,7 +831,8 @@ Available sources:
 - patijinich.com (Pati Jinich) — use search_patijinich
 - rickbayless.com (Rick Bayless) — use search_rickbayless
 - mexicoinmykitchen.com (Mely Martinez) — use search_mexicoinmykitchen; authentic home-cooking, wide dish variety
-- Cooking con Claudia (YouTube) — use search_claudia; ingredients from description, instructions link to video
+- Cooking con Claudia (YouTube) — use search_claudia then fetch_recipe for each URL
+- De Mi Rancho a Tu Cocina (YouTube, Doña Ángela) — use search_rancho then fetch_rancho_recipe for each URL; traditional/rustic Mexican; videos in Spanish, recipe extracted from transcript
 
 Rules:
 - Only fetch URLs returned by search tools. Never guess or construct URLs.
@@ -602,6 +848,9 @@ Rules:
 - Skip pages that return errors or have no ingredients/instructions.
 - At the end, write a brief plain-text summary of what you found."""
 
+_CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
+_CACHED_TOOLS = [*TOOLS[:-1], {**TOOLS[-1], "cache_control": {"type": "ephemeral"}}]
+
 
 def run_agent(user_request: str) -> list[dict]:
     messages = [{"role": "user", "content": user_request}]
@@ -614,8 +863,8 @@ def run_agent(user_request: str) -> list[dict]:
             model="claude-opus-4-7",
             max_tokens=4096,
             thinking={"type": "adaptive"},
-            system=SYSTEM,
-            tools=TOOLS,
+            system=_CACHED_SYSTEM,
+            tools=_CACHED_TOOLS,
             messages=messages,
         )
 
@@ -653,10 +902,26 @@ def run_agent(user_request: str) -> list[dict]:
                 result = search_claudia(inp["query"], inp.get("max_results", 8))
                 print(f"  Found {len(result)} result(s)")
 
+            elif name == "search_rancho":
+                print(f"  [De Mi Rancho a Tu Cocina] Searching: {inp['query']!r}")
+                result = search_rancho(inp["query"], inp.get("max_results", 8))
+                print(f"  Found {len(result)} result(s)")
+
             elif name == "search_rickbayless":
                 print(f"  [Rick Bayless] Searching: {inp['query']!r}")
                 result = search_rickbayless(inp["query"], inp.get("max_results", 20))
                 print(f"  Found {len(result)} result(s)")
+
+            elif name == "fetch_rancho_recipe":
+                print(f"  [De Mi Rancho] Fetching: {inp['url']}")
+                result = fetch_rancho(inp["url"])
+                if "error" in result:
+                    print(f"  Error: {result['error']}")
+                else:
+                    title = result.get("title", "unknown")
+                    print(f"  Got: {title}")
+                    if result.get("ingredients") and result.get("instructions"):
+                        found_recipes.append(result)
 
             elif name == "fetch_recipe":
                 print(f"  Fetching: {inp['url']}")
@@ -670,7 +935,8 @@ def run_agent(user_request: str) -> list[dict]:
                     print(f"  Got: {title}" + (f" ({time_str})" if time_str else ""))
                     # Collect valid recipes (must have ingredients + instructions)
                     if result.get("ingredients") and result.get("instructions"):
-                        result["source"] = _source_label(result["url"])
+                        if not result.get("source"):
+                            result["source"] = _source_label(result["url"])
                         found_recipes.append(result)
 
             else:
