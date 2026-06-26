@@ -286,6 +286,26 @@ def _classify_and_write(
     except Exception:
         health = "Moderate"
 
+    title_en: Optional[str] = None
+    try:
+        client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        trans_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=60,
+            messages=[{"role": "user", "content": (
+                "If this recipe title is a full sentence or phrase in a non-English language "
+                "(e.g. Spanish, Italian, French), provide a concise English translation. "
+                "If it is already in English, or if it is an internationally recognized dish name "
+                "used in English cooking contexts (e.g. yakisoba, bulgogi, mapo tofu, pad thai, "
+                "ramen, pho, bibimbap), reply with exactly: null\n"
+                f"Title: {title}"
+            )}],
+        )
+        trans_text = trans_resp.content[0].text.strip()
+        title_en = None if trans_text.lower() == "null" else trans_text
+    except Exception:
+        title_en = None
+
     md_path = _write_recipe_md(title, fetched_data, source_url, source_name, source_credit)
 
     if recipes is None:
@@ -309,6 +329,7 @@ def _classify_and_write(
             "ingredients_raw": ings_raw,
             "instructions": fetched_data.get("instructions", []),
             "ingredients": [],
+            "title_en": title_en,
         }
         if needs_review:
             entry["needs_review"] = True
