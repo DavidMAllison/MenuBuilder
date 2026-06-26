@@ -457,6 +457,33 @@ def classify_kid_friendly(recipes: list[dict]) -> dict[str, bool]:
 
 
 # ---------------------------------------------------------------------------
+# Title translation — store English translation for non-English titles
+# ---------------------------------------------------------------------------
+
+def translate_title(title: str) -> "str | None":
+    """Return English translation if title is not in English, else None."""
+    try:
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=60,
+            messages=[{"role": "user", "content": (
+                "If this recipe title is a full sentence or phrase in a non-English language "
+                "(e.g. Spanish, Italian, French), provide a concise English translation. "
+                "If it is already in English, or if it is an internationally recognized dish name "
+                "used in English cooking contexts (e.g. yakisoba, bulgogi, mapo tofu, pad thai, "
+                "ramen, pho, bibimbap), reply with exactly: null\n"
+                f"Title: {title}"
+            )}],
+        )
+        text = resp.content[0].text.strip()
+        return None if text.lower() == "null" else text
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Prep classification — delegated to prep_utils
 # ---------------------------------------------------------------------------
 

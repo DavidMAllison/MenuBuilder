@@ -18,6 +18,7 @@ The agent searches and fetches recipes, then writes results to
 /tmp/mexican_agent_results.json for the caller to review and save.
 """
 
+import difflib
 import json
 import os
 import re
@@ -957,7 +958,20 @@ def run_agent(user_request: str) -> list[dict]:
         except Exception:
             pass
     seen_urls = {(r.get("url") or "").rstrip("/") for r in existing}
-    merged = existing + [r for r in found_recipes if (r.get("url") or "").rstrip("/") not in seen_urls]
+    seen_titles = [r.get("title", "").lower().strip() for r in existing]
+    deduped: list[dict] = []
+    for r in found_recipes:
+        url = (r.get("url") or "").rstrip("/")
+        if url and url in seen_urls:
+            continue
+        t = r.get("title", "").lower().strip()
+        if any(difflib.SequenceMatcher(None, t, s).ratio() >= 0.85 for s in seen_titles):
+            continue
+        deduped.append(r)
+        if url:
+            seen_urls.add(url)
+        seen_titles.append(t)
+    merged = existing + deduped
     RESULTS_PATH.write_text(json.dumps(merged, indent=2), encoding="utf-8")
     return found_recipes
 

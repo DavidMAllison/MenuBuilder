@@ -29,7 +29,7 @@ from werkzeug.security import check_password_hash
 sys.path.insert(0, str(Path(__file__).parent))
 from fill_menu_ideas import (  # noqa: E402
     classify_health, classify_effort, classify_kid_friendly, parse_ingredients_structured,
-    _build_recipe_md, _title_to_filename, _infer_cooking_method,
+    translate_title, _build_recipe_md, _title_to_filename, _infer_cooking_method,
     _infer_meal_type, _quality_check, _register_cuisine, RECIPES_DIR,
 )
 from prep_utils import classify_prep  # noqa: E402
@@ -439,6 +439,7 @@ def add_recipe():
     prep_map    = classify_prep([r])
     effort_map  = classify_effort([r])
     ing_map     = parse_ingredients_structured([r])
+    title_en    = translate_title(title)
 
     cuisine = recipe.get("cuisine", "")
     if isinstance(cuisine, list):
@@ -474,6 +475,7 @@ def add_recipe():
         "image":           recipe.get("image", ""),
         "video_url":       recipe.get("video_url", ""),
         "kid_approved":    False,
+        "title_en":        title_en,
     }
 
     # Write .md file
