@@ -454,12 +454,6 @@ _SKIP_FEEDBACK_KEYWORDS = frozenset([
     "going out to eat", "going out",
 ])
 
-# Signals in Ashley's reply that mean a day has no dinner to cook
-_OUT_SIGNALS = frozenset([
-    "going out", "eating out", "out to eat", "out to dinner",
-    "dine out", "dining out", "no dinner", "no cooking",
-])
-
 
 def _parse_last_plan() -> list:
     if not WEEKLYPLAN_DIR.exists():
@@ -544,16 +538,6 @@ KNOWN_CUISINES: set[str] = {k.lower() for k in _CUISINE_FAMILY_MAP}
 KNOWN_FAMILIES: set[str] = {v.lower() for v in _CUISINE_FAMILY_MAP.values()}
 
 
-def _register_cuisine(cuisine: str) -> None:
-    """Add an unknown cuisine to config.json with itself as its own family."""
-    if cuisine in _CUISINE_FAMILY_MAP:
-        return
-    _CUISINE_FAMILY_MAP[cuisine] = cuisine
-    KNOWN_CUISINES.add(cuisine.lower())
-    raw = json.loads(_CONFIG_PATH.read_text())
-    raw.setdefault("cuisine_family_map", {})[cuisine] = cuisine
-    _CONFIG_PATH.write_text(json.dumps(raw, indent=2, ensure_ascii=False))
-
 # Source-name → cuisine-type aliases for cuisine_direction normalization.
 # Keys are lowercase substrings to match against; values are canonical cuisine types.
 _SOURCE_CUISINE_ALIASES: list[tuple[str, str]] = [
@@ -630,9 +614,11 @@ def _normalize_cuisine_direction(direction: str) -> tuple[str, Optional[str]]:
         if kc in d_lower:
             return (direction.strip(), None)
 
-    # Unknown — register it in config.json and pass through
-    _register_cuisine(direction.strip())
-    note = f"Registered new cuisine '{direction.strip()}' in config.json."
+    # Unknown — pass through without persisting. Writing config.json at
+    # request time crossed the davidallison/allisonbot permission boundary
+    # (a top Sunday-failure cause) and let free-text SMS input pollute
+    # cuisine_family_map with garbage entries. See architecture_review_and_fix_plan.md.
+    note = f"Unrecognized cuisine direction '{direction.strip()}' — passing through."
     return (direction.strip(), note)
 
 
@@ -2642,6 +2628,102 @@ def process_recipe_url(url: str, day: str = "", force_add: bool = False) -> dict
 
 
 @mcp.tool()
+def _classify_ashley_reply(reply: str) -> str:
+    """Classify Ashley's reply intent via Haiku. Same pattern as _claude_swap
+    (same model, constrained-output prompt, graceful fallback on any error).
+
+    Returns one of: approve, swap_request, eating_out, swap_plus_approve, unclear.
+    """
+    import anthropic as _anthropic
+
+    valid = {"approve", "swap_request", "eating_out", "swap_plus_approve", "unclear"}
+    try:
+        client = _anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=20,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Classify the intent of this reply to a proposed weekly dinner menu.\n\n"
+                    f"Reply: \"{reply}\"\n\n"
+                    "Categories:\n"
+                    "- approve: approves the menu as-is, no changes requested "
+                    "(e.g. \"Sounds good!\", \"looks great\", \"yep\", a thumbs-up emoji)\n"
+                    "- swap_request: asks to change one or more meals, without approving "
+                    "the rest of the menu\n"
+                    "- eating_out: says they're eating out, ordering takeout, or otherwise "
+                    "not cooking on a specific day\n"
+                    "- swap_plus_approve: requests a change to one meal AND approves "
+                    "everything else in the same message (e.g. \"all good except swap "
+                    "Tuesday for tacos\")\n"
+                    "- unclear: a question, or anything that doesn't clearly fit the above\n\n"
+                    "Reply with exactly one word: approve, swap_request, eating_out, "
+                    "swap_plus_approve, or unclear."
+                ),
+            }],
+        )
+        label = resp.content[0].text.strip().lower()
+    except Exception:
+        return "unclear"
+    return label if label in valid else "unclear"
+
+
+def _resend_menu_to_ashley(new_selected: dict, week_start: date) -> list:
+    """Build meals_json for the updated selection and re-send it to Ashley."""
+    day_to_date = _day_date_map(week_start)
+    meals_json = [
+        {"day": f"{day} {day_to_date[day].strftime('%-m/%-d')}", "recipe": new_selected[day]}
+        for day in DAYS_ORDER if day in new_selected
+    ]
+    cmd = [
+        sys.executable, str(MENUBUILDER_DIR / "send_menu_partner.py"),
+        "--meals", json.dumps(meals_json),
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except Exception:
+        pass
+    return meals_json
+
+
+def _finalize_or_request_idea_activation(activity: dict) -> dict:
+    """Shared by approve and swap_plus_approve: check activity's current
+    selected_meals for idea-status recipes, try auto-activation, and finalize
+    if clear. _do_finalize persists activity itself; no _save_activity needed
+    before calling this for a plain finalize."""
+    selected = activity.get("selected_meals", {})
+    recipes = _load_metadata()
+    ideas_on_menu = [
+        name for name in selected.values()
+        if (key := _find_recipe_key(name, recipes)) and recipes[key].get("status") == "idea"
+    ]
+
+    failed_ideas = []
+    for name in ideas_on_menu:
+        if not _try_auto_activate(name, recipes):
+            key = _find_recipe_key(name, recipes)
+            source_url = recipes[key].get("source_url", "") if key else ""
+            failed_ideas.append({"name": name, "source_url": source_url})
+
+    activity["ideas_on_menu"] = ideas_on_menu
+
+    if failed_ideas:
+        activity["state"] = "awaiting_idea_activation"
+        activity["pending_ideas"] = failed_ideas
+        _save_activity(activity)
+        return {
+            **activity,
+            "message": (
+                f"Ashley approved! But {len(failed_ideas)} idea recipe(s) couldn't be "
+                f"auto-fetched. Activate them manually then call finalize_plan()."
+            ),
+            "pending_ideas": failed_ideas,
+        }
+
+    return _do_finalize(activity)
+
+
 def handle_ashley_reply(reply: str) -> dict:
     """
     Process Ashley's reply to the proposed menu.
@@ -2650,19 +2732,32 @@ def handle_ashley_reply(reply: str) -> dict:
         reply: Ashley's text message (e.g. "looks good", "swap Tuesday to salmon",
                "can we do something lighter on Wednesday?")
 
-    Approval:
-      - Detects standard approval phrases ("looks good", "ok", "perfect", etc.)
+    Routing:
+      - A URL in the reply is detected by regex first and routed to
+        process_recipe_url — never sent to the classifier.
+      - An exact match against APPROVAL_PHRASES is an optional fast path that
+        skips the classification call; otherwise Haiku classifies intent into
+        approve / swap_request / eating_out / swap_plus_approve / unclear.
+        The classifier is the authority — this replaces the old keyword-first
+        flow, which mis-routed replies like "Sounds good!" into the
+        unparseable branch because of the trailing punctuation (2026-07-12).
+
+    approve:
       - All recipes are now status="active" at intake; no activation step needed.
         The awaiting_idea_activation path is kept for backward compatibility but
         will not be triggered under normal operation.
       - Generates plan files, launches apps → state: complete
 
-    Swap request:
+    swap_request / swap_plus_approve:
       - Parses structured commands ("swap 3 to X", "change Tuesday to tacos")
       - Falls back to Claude Haiku for natural language ("we've had too much chicken")
-      - Re-sends updated menu to Ashley, stays in awaiting_ashley_signoff
+      - swap_request re-sends the updated menu and stays in awaiting_ashley_signoff
+      - swap_plus_approve applies the swap and finalizes immediately
 
-    Unparseable:
+    eating_out:
+      - Marks the extracted day "Going Out to Eat" and re-sends the menu
+
+    unclear (includes swap/eating_out intents where extraction failed):
       - Returns {parsed: false, reply: ...} for manual handling
 
     Returns the updated activity state plus any action-specific fields.
@@ -2675,7 +2770,8 @@ def handle_ashley_reply(reply: str) -> dict:
     selected = activity.get("selected_meals", {})
     week_start = date.fromisoformat(activity["week_start"])
 
-    # ── URL in reply — route to process_recipe_url ──
+    # ── URL in reply — route to process_recipe_url. Checked before
+    # classification; URLs shouldn't go to the model. ──
     url_match = re.search(r'https?://\S+', reply)
     if url_match:
         url = url_match.group(0).rstrip(".,)")
@@ -2693,103 +2789,52 @@ def handle_ashley_reply(reply: str) -> dict:
             ),
         }
 
+    # ── Intent classification — exact-match fast path, else Haiku is authority ──
+    if lowered in APPROVAL_PHRASES:
+        intent = "approve"
+    else:
+        intent = _classify_ashley_reply(reply)
+
     # ── Eating out / going out ──
-    if any(s in lowered for s in _OUT_SIGNALS):
+    if intent == "eating_out":
         eating_out_day = _extract_day_from_text(reply)
         if eating_out_day and eating_out_day in selected:
             new_selected = dict(selected)
             new_selected[eating_out_day] = "Going Out to Eat"
             activity["selected_meals"] = new_selected
-            if any(p in lowered for p in APPROVAL_PHRASES):
-                _save_activity(activity)
-                return _do_finalize(activity)
-            day_to_date = _day_date_map(week_start)
-            meals_json = [
-                {"day": f"{day} {day_to_date[day].strftime('%-m/%-d')}", "recipe": new_selected[day]}
-                for day in DAYS_ORDER if day in new_selected
-            ]
-            cmd = [
-                sys.executable, str(MENUBUILDER_DIR / "send_menu_partner.py"),
-                "--meals", json.dumps(meals_json),
-            ]
-            try:
-                subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-            except Exception:
-                pass
+            meals_json = _resend_menu_to_ashley(new_selected, week_start)
             _save_activity(activity)
             return {
                 **activity,
                 "message": f"Ashley says going out {eating_out_day}. Updated menu re-sent.",
                 "meals_sent": meals_json,
             }
+        intent = "unclear"  # couldn't extract which day — fall through below
 
     # ── Approval ──
-    if any(lowered == p or lowered.startswith(p + " ") for p in APPROVAL_PHRASES):
-        # Check for idea recipes on the menu
-        recipes = _load_metadata()
-        ideas_on_menu = [
-            name for name in selected.values()
-            if (key := _find_recipe_key(name, recipes)) and recipes[key].get("status") == "idea"
-        ]
+    if intent == "approve":
+        return _finalize_or_request_idea_activation(activity)
 
-        # Try to auto-activate each idea
-        failed_ideas = []
-        for name in ideas_on_menu:
-            if not _try_auto_activate(name, recipes):
-                key = _find_recipe_key(name, recipes)
-                source_url = recipes[key].get("source_url", "") if key else ""
-                failed_ideas.append({"name": name, "source_url": source_url})
+    # ── Swap / swap_plus_approve ──
+    if intent in ("swap_request", "swap_plus_approve"):
+        new_selected = _parse_swap(reply, selected, week_start)
+        if not new_selected:
+            new_selected = _claude_swap(reply, selected, activity.get("cuisine_direction"))
 
-        activity["ideas_on_menu"] = ideas_on_menu
-
-        if failed_ideas:
-            activity["state"] = "awaiting_idea_activation"
-            activity["pending_ideas"] = failed_ideas
+        if new_selected:
+            activity["selected_meals"] = new_selected
+            if intent == "swap_plus_approve":
+                return _finalize_or_request_idea_activation(activity)
+            meals_json = _resend_menu_to_ashley(new_selected, week_start)
             _save_activity(activity)
             return {
                 **activity,
-                "message": (
-                    f"Ashley approved! But {len(failed_ideas)} idea recipe(s) couldn't be "
-                    f"auto-fetched. Activate them manually then call finalize_plan()."
-                ),
-                "pending_ideas": failed_ideas,
+                "message": "Ashley's swap applied. Updated menu re-sent to her.",
+                "meals_sent": meals_json,
             }
+        intent = "unclear"  # classifier saw a swap but nothing extractable
 
-        # All clear — finalize
-        return _do_finalize(activity)
-
-    # ── Swap ──
-    new_selected = _parse_swap(reply, selected, week_start)
-    if not new_selected:
-        new_selected = _claude_swap(reply, selected, activity.get("cuisine_direction"))
-
-    if new_selected:
-        activity["selected_meals"] = new_selected
-        # If the reply also signals approval, finalize immediately
-        if any(p in lowered for p in APPROVAL_PHRASES):
-            _save_activity(activity)
-            return _do_finalize(activity)
-        day_to_date = _day_date_map(week_start)
-        meals_json = [
-            {"day": f"{day} {day_to_date[day].strftime('%-m/%-d')}", "recipe": new_selected[day]}
-            for day in DAYS_ORDER if day in new_selected
-        ]
-        cmd = [
-            sys.executable, str(MENUBUILDER_DIR / "send_menu_partner.py"),
-            "--meals", json.dumps(meals_json),
-        ]
-        try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        except Exception:
-            pass
-        _save_activity(activity)
-        return {
-            **activity,
-            "message": "Ashley's swap applied. Updated menu re-sent to her.",
-            "meals_sent": meals_json,
-        }
-
-    # ── Unparseable ──
+    # ── Unclear / unparseable ──
     return {
         **activity,
         "parsed": False,
