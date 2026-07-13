@@ -2,14 +2,13 @@
 """
 recipe_review_server.py -- Local web server for reviewing agent-sourced recipes.
 
-Reads /tmp/italian_agent_results_{uid}.json and serves a Pinterest-style card UI.
+Reads agent results from Dropbox/LLMContext/cooking/agent_results/ and serves a Pinterest-style card UI.
 
 Usage:
   python3 recipe_review_server.py
   Then open http://localhost:5051
 """
 
-import glob
 import hashlib
 import json
 import os
@@ -85,6 +84,7 @@ def logout():
 
 UID = os.getuid()
 DISMISSED_FILE = Path(f"/tmp/dismissed_{UID}.json")
+AGENT_RESULTS_DIR = Path.home() / "Dropbox/LLMContext/cooking/agent_results"
 METADATA_PATH    = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
 CONDIMENTS_PATH  = Path.home() / "Dropbox/LLMContext/cooking/condiments.json"
 IMG_CACHE_DIR = Path.home() / ".cache" / "recipe_images"
@@ -203,9 +203,9 @@ def _build_index():
 
 
 def _tmp_fingerprint() -> str:
-    files = sorted(glob.glob(f"/tmp/*_agent_results_{UID}.json"))
+    files = sorted(AGENT_RESULTS_DIR.glob("*_agent_results.json"))
     return "|".join(
-        f"{f}:{Path(f).stat().st_mtime:.0f}" for f in files if Path(f).exists()
+        f"{f}:{f.stat().st_mtime:.0f}" for f in files if f.exists()
     )
 
 
@@ -312,13 +312,13 @@ def recipes():
 
     hidden = _hidden_urls()
 
-    files = sorted(glob.glob(f"/tmp/*_agent_results_{UID}.json"))
+    files = sorted(AGENT_RESULTS_DIR.glob("*_agent_results.json"))
     candidates = []
     seen_urls: set = set()
     seen_titles: set = set()
     for path in files:
         try:
-            for r in json.loads(Path(path).read_text(encoding="utf-8")):
+            for r in json.loads(path.read_text(encoding="utf-8")):
                 url = (r.get("url", "") or "").rstrip("/")
                 norm_title = _normalize_title(r.get("title", ""))
                 if url and url in seen_urls:
@@ -527,37 +527,75 @@ def this_week():
 
     metadata = _load_metadata().get("recipes", {})
 
+    def _meta_lookup(title, metadata):
+        meta = metadata.get(title, {})
+        if not meta:
+            tl = title.lower()
+            for k, v in metadata.items():
+                if k.lower() == tl:
+                    return v
+        return meta
+
     meals = []
     for m in plan.get("meals", []):
         title = m.get("title", "")
-        # fuzzy lookup in metadata for image + ingredients + instructions
-        meta = metadata.get(title, {})
-        if not meta:
-            title_lower = title.lower()
-            for k, v in metadata.items():
-                if k.lower() == title_lower:
-                    meta = v
-                    break
-        meals.append({
-            "day":          m.get("day", ""),
-            "date":         m.get("date", ""),
-            "title":        title,
-            "health":       m.get("health", ""),
-            "time":         m.get("time", ""),
-            "url":          m.get("url", ""),
-            "reminder":     m.get("reminder", ""),
-            "image":        meta.get("image", ""),
-            "source":       meta.get("source", ""),
-            "source_url":   meta.get("source_url", ""),
-            "cuisine":      meta.get("cuisine", ""),
-            "ingredients":  meta.get("ingredients_raw", []) or [
-                f"{i.get('quantity','')} {i.get('unit','')} {i.get('name','')}".strip()
-                for i in (meta.get("ingredients") or [])
-                if isinstance(i, dict)
-            ],
-            "instructions": meta.get("instructions", []),
-            "times_cooked": meta.get("times_cooked", 0),
-        })
+        paired = m.get("paired_recipes")  # list of {title, url, health, time}
+
+        if paired and len(paired) > 1:
+            # Multi-recipe day: enrich each sub-recipe from metadata
+            enriched_pairs = []
+            first_image = ""
+            for p in paired:
+                p_meta = _meta_lookup(p.get("title", ""), metadata)
+                img = p_meta.get("image", "")
+                if img and not first_image:
+                    first_image = img
+                enriched_pairs.append({
+                    "title":      p.get("title", ""),
+                    "url":        p.get("url", ""),
+                    "source_url": p_meta.get("source_url", ""),
+                    "image":      img,
+                })
+            meals.append({
+                "day":            m.get("day", ""),
+                "date":           m.get("date", ""),
+                "title":          title,
+                "health":         m.get("health", ""),
+                "time":           m.get("time", ""),
+                "url":            m.get("url", ""),
+                "reminder":       m.get("reminder", ""),
+                "image":          first_image,
+                "source":         "",
+                "source_url":     "",
+                "cuisine":        "",
+                "ingredients":    [],
+                "instructions":   [],
+                "times_cooked":   0,
+                "paired_recipes": enriched_pairs,
+            })
+        else:
+            # Single-recipe day
+            meta = _meta_lookup(title, metadata)
+            meals.append({
+                "day":          m.get("day", ""),
+                "date":         m.get("date", ""),
+                "title":        title,
+                "health":       m.get("health", ""),
+                "time":         m.get("time", ""),
+                "url":          m.get("url", ""),
+                "reminder":     m.get("reminder", ""),
+                "image":        meta.get("image", ""),
+                "source":       meta.get("source", ""),
+                "source_url":   meta.get("source_url", ""),
+                "cuisine":      meta.get("cuisine", ""),
+                "ingredients":  meta.get("ingredients_raw", []) or [
+                    f"{i.get('quantity','')} {i.get('unit','')} {i.get('name','')}".strip()
+                    for i in (meta.get("ingredients") or [])
+                    if isinstance(i, dict)
+                ],
+                "instructions": meta.get("instructions", []),
+                "times_cooked": meta.get("times_cooked", 0),
+            })
 
     return jsonify({
         "found":      True,
@@ -906,7 +944,7 @@ def fill_ideas_status():
 
 
 if __name__ == "__main__":
-    print(f"Aggregating /tmp/*_agent_results_{UID}.json")
+    print(f"Aggregating {AGENT_RESULTS_DIR}/*_agent_results.json")
     print("Open http://localhost:5051")
     # Kick off index build in background so it's ready before first search
     threading.Thread(target=_build_index, daemon=True).start()

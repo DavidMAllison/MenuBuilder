@@ -33,7 +33,7 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
                 os.environ["ANTHROPIC_API_KEY"] = line.split("=", 1)[1].strip()
                 break
 
-RESULTS_PATH = Path(f"/tmp/italian_agent_results_{os.getuid()}.json")
+RESULTS_PATH = Path.home() / "Dropbox/LLMContext/cooking/agent_results/italian_agent_results.json"
 CUCCHIAIO_SITEMAP_CACHE = Path(f"/tmp/cucchiaio_sitemap_{os.getuid()}.txt")
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
@@ -562,6 +562,7 @@ Italian cuisine reference:
 Rules:
 - Only fetch URLs returned by the search tools. Do not construct or guess URLs.
 - Aim for 6-8 valid recipes total.
+- When extracting ingredients, mark optional items, garnishes, or "for serving" additions with an "(optional)" prefix — e.g. "(optional) grated Parmesan for serving".
 - At the end, print a brief summary of what you found."""
 
 _CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]

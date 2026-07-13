@@ -30,6 +30,9 @@ __pycache__/
 # MCP runtime state
 menu_activity.json
 
+# Workflow testbed output
+test_output/
+
 # Agent runtime state and logs
 agent_rotation_state.json
 cleanup_classify_preview.json

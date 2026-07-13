@@ -52,45 +52,15 @@ def _title_to_filename(title: str) -> str:
 
 
 def _build_md(title: str, entry: dict, needs_review: bool) -> str:
-    lines = [f"# {title}", ""]
-
-    if needs_review:
-        lines += [
-            "> **Needs Review** — auto-generated content; verify formatting and completeness before first cook.",
-            "",
-        ]
-
-    time_str = entry.get("time", "")
-    servings = entry.get("servings", "")
-    source    = entry.get("source", "")
-    source_url = entry.get("source_url", "")
-
-    if time_str:
-        lines.append(f"**Time**: {time_str}  ")
-    if servings:
-        lines.append(f"**Serves**: {servings}  ")
-    if source_url:
-        label = source if source else source_url
-        lines.append(f"**Adapted from**: [{label}]({source_url})  ")
-    elif source:
-        lines.append(f"**Source**: {source}  ")
-
-    if time_str or servings or source_url or source:
-        lines.append("")
-
-    # Ingredients
-    lines += ["## Ingredients", ""]
-    for ing in entry.get("ingredients_raw", []):
-        lines.append(f"- {ing}")
-    lines.append("")
-
-    # Instructions
-    lines += ["## Instructions", ""]
-    for i, step in enumerate(entry.get("instructions", []), 1):
-        lines.append(f"{i}. {step}")
-    lines.append("")
-
-    return "\n".join(lines)
+    """Thin wrapper — see recipe_md.py for the canonical builder every
+    intake path shares."""
+    from recipe_md import build_recipe_md
+    return build_recipe_md(
+        title=title,
+        ingredients=entry.get("ingredients_raw", []),
+        instructions=entry.get("instructions", []),
+        needs_review=needs_review,
+    )
 
 
 def main():

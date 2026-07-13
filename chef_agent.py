@@ -15,7 +15,7 @@ Usage:
   chef "find a Kenji smash burger recipe"
 
 Specify a chef by name to restrict to that source. Otherwise all sources are searched.
-Results written to /tmp/chef_agent_results.json.
+Results written to Dropbox/LLMContext/cooking/agent_results/chef_agent_results.json.
 """
 
 import difflib
@@ -38,7 +38,7 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
                 os.environ["ANTHROPIC_API_KEY"] = line.split("=", 1)[1].strip()
                 break
 
-RESULTS_PATH = Path(f"/tmp/chef_agent_results_{os.getuid()}.json")
+RESULTS_PATH = Path.home() / "Dropbox/LLMContext/cooking/agent_results/chef_agent_results.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 _YT_API_BASE       = "https://www.googleapis.com/youtube/v3"
@@ -329,6 +329,12 @@ def _fetch_chetnamakan(url: str, soup: BeautifulSoup) -> dict:
 
 # --- Generic fetch with ld+json ---
 
+def _parse_yield(raw) -> str:
+    if isinstance(raw, list):
+        raw = raw[-1] if raw else ""
+    return str(raw).strip()
+
+
 def _iso_to_minutes(iso: str) -> int:
     if not iso:
         return 0
@@ -400,7 +406,7 @@ def fetch_recipe(url: str) -> dict:
                 "prep_time": item.get("prepTime", ""),
                 "cook_time": item.get("cookTime", ""),
                 "total_time": total_time,
-                "yield": str(item.get("recipeYield", "")),
+                "yield": _parse_yield(item.get("recipeYield", "")),
                 "ingredients": item.get("recipeIngredient", []),
                 "instructions": instructions,
                 "cuisine": item.get("recipeCuisine", ""),
@@ -661,6 +667,7 @@ Rules:
 - If the user names a specific chef (Alton, Alton Brown, Deb, Smitten Kitchen, Chetna, Chetna Makan, Kenji, Kenji Lopez-Alt), restrict to that source only. Otherwise search all sources.
 - If the user asks for a specific cuisine, use your knowledge to search for dish names from that cuisine rather than searching the cuisine name itself. Example: for "Indian chicken dish" search for "butter chicken", "tikka masala", "chicken biryani", not "Indian chicken".
 - Aim to find 3-5 valid recipes (with ingredients and instructions) per request. Skip results with errors or missing content.
+- When extracting ingredients, mark optional items, garnishes, or "for serving" additions with an "(optional)" prefix — e.g. "(optional) lemon wedges for serving".
 - In your final summary, note the source chef and likely cuisine for each recipe found."""
 
 _CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]

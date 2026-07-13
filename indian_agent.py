@@ -39,7 +39,7 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
                 os.environ["ANTHROPIC_API_KEY"] = line.split("=", 1)[1].strip()
                 break
 
-RESULTS_PATH = Path(f"/tmp/indian_agent_results_{os.getuid()}.json")
+RESULTS_PATH = Path.home() / "Dropbox/LLMContext/cooking/agent_results/indian_agent_results.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 client = anthropic.Anthropic()
@@ -546,7 +546,7 @@ def fetch_recipe(url: str) -> dict:
                 "prep_time": item.get("prepTime", ""),
                 "cook_time": item.get("cookTime", ""),
                 "total_time": item.get("totalTime", ""),
-                "yield": str(item.get("recipeYield", "")),
+                "yield": _parse_yield(item.get("recipeYield", "")),
                 "ingredients": ingredients,
                 "instructions": instructions,
                 "cuisine": cuisine or "Indian",
@@ -625,6 +625,12 @@ def _convert_measurements_batch(recipes: list[dict]) -> None:
     converted = json.loads(m.group())
     for orig, conv in zip(to_convert, converted):
         orig["ingredients"] = conv.get("ingredients", orig["ingredients"])
+
+
+def _parse_yield(raw) -> str:
+    if isinstance(raw, list):
+        raw = raw[-1] if raw else ""
+    return str(raw).strip()
 
 
 def _iso_to_minutes(iso: str) -> int:
@@ -845,6 +851,7 @@ Rules:
 - Skip pages that return errors or have no extractable content.
 - Search with specific dish names or ingredients — not vague terms like "Indian recipe."
 - For general/ambiguous queries: search 2-3 sources using dish terms natural to each source.
+- When extracting ingredients, mark optional items, garnishes, or "for serving" additions with an "(optional)" prefix — e.g. "(optional) fresh cilantro for garnish".
 - At the end, print a brief plain-text summary of what you found."""
 
 _CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]

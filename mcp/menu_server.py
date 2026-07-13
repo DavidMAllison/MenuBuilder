@@ -77,6 +77,11 @@ DAYS_ORDER = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 ADULT_NAMES = set(n.lower() for n in _CONFIG.get("adult_names", []))
 _GARDEN_HERBS = set(h.lower() for h in _CONFIG.get("garden_herbs", []))
 
+# ---------------------------------------------------------------------------
+# Test mode — set via set_test_mode() MCP tool; redirects all file I/O
+# ---------------------------------------------------------------------------
+_TEST_DIR: Optional[Path] = None
+
 # Day-of-week helpers (date.weekday(): Mon=0 … Sun=6)
 _WD_TO_ABBREV = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 _ABBREV_TO_DOW = {day: i for i, day in enumerate(DAYS_ORDER)}  # Sun=0 … Sat=6
@@ -146,16 +151,18 @@ APPROVAL_PHRASES = (
 # ---------------------------------------------------------------------------
 
 def _load_activity() -> dict:
-    if ACTIVITY_FILE.exists():
+    path = (_TEST_DIR / "menu_activity.json") if _TEST_DIR else ACTIVITY_FILE
+    if path.exists():
         try:
-            return json.loads(ACTIVITY_FILE.read_text())
+            return json.loads(path.read_text())
         except Exception:
             pass
     return {"state": "idle"}
 
 
 def _save_activity(activity: dict) -> None:
-    ACTIVITY_FILE.write_text(json.dumps(activity, indent=2))
+    path = (_TEST_DIR / "menu_activity.json") if _TEST_DIR else ACTIVITY_FILE
+    path.write_text(json.dumps(activity, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -163,14 +170,41 @@ def _save_activity(activity: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def _load_metadata() -> dict:
+    if _TEST_DIR:
+        test_copy = _TEST_DIR / "recipe_metadata_test.json"
+        if test_copy.exists():
+            return json.loads(test_copy.read_text()).get("recipes", {})
     return json.loads(METADATA_PATH.read_text()).get("recipes", {})
 
 
 def _save_metadata(recipes: dict) -> None:
+    if _TEST_DIR:
+        target = _TEST_DIR / "recipe_metadata_test.json"
+        raw = json.loads(target.read_text()) if target.exists() else {}
+        raw["recipes"] = recipes
+        raw["last_updated"] = date.today().isoformat()
+        target.write_text(json.dumps(raw, indent=2))
+        return
     raw = json.loads(METADATA_PATH.read_text()) if METADATA_PATH.exists() else {}
     raw["recipes"] = recipes
     raw["last_updated"] = date.today().isoformat()
     METADATA_PATH.write_text(json.dumps(raw, indent=2))
+
+
+def _day_meals(val) -> list:
+    """Normalize a selected_meals day value to a list of recipe name strings."""
+    if isinstance(val, list):
+        return [str(v) for v in val if v]
+    return [str(val)] if val else []
+
+
+_HEALTH_ORDER = {"Heart-Healthy": 0, "Moderate": 1, "Indulgent": 2}
+
+
+def _combined_health(healths: list) -> str:
+    """Return the worst health classification from a list."""
+    ranked = [h for h in healths if h in _HEALTH_ORDER]
+    return max(ranked, key=lambda h: _HEALTH_ORDER[h]) if ranked else (healths[0] if healths else "Moderate")
 
 
 def _find_recipe_key(name: str, recipes: dict) -> Optional[str]:
@@ -189,6 +223,19 @@ def _find_recipe_key(name: str, recipes: dict) -> Optional[str]:
         for key in recipes:
             if name_lower in key.lower() or key.lower().startswith(name_lower):
                 return key
+    return None
+
+
+def _find_recipe_best_match(name: str, recipes: dict) -> Optional[tuple]:
+    """Returns (key, score) for the best fuzzy match >= 0.80, else None."""
+    name_lower = name.lower().strip()
+    best_key, best_score = None, 0.0
+    for key in recipes:
+        score = difflib.SequenceMatcher(None, name_lower, key.lower()).ratio()
+        if score > best_score:
+            best_key, best_score = key, score
+    if best_score >= 0.80:
+        return (best_key, best_score)
     return None
 
 
@@ -969,8 +1016,34 @@ def _parse_cuisine_slots(direction: str) -> dict:
     return slots
 
 
-def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optional[str]) -> dict:
+# Max meals per protein type per week (all others default to 1)
+_PROTEIN_CAPS = {"Chicken": 2}
+
+
+def _parse_eating_out_days(constraints: str, schedule_notes: list) -> list:
+    """Extract day abbreviations for eating-out days from constraints + schedule notes."""
+    out_signals = ("eating out", "going out", "out to eat", "out to dinner", "eat out")
+    eating_out = []
+    texts = [constraints] + list(schedule_notes)
+    for text in texts:
+        if not text:
+            continue
+        lower = text.lower()
+        if any(sig in lower for sig in out_signals):
+            for day_name, abbrev in DAY_NAME_MAP.items():
+                if day_name in lower and abbrev not in eating_out:
+                    eating_out.append(abbrev)
+    return eating_out
+
+
+def _select_meals(
+    candidates: list,
+    quick_days: list,
+    cuisine_direction: Optional[str],
+    eating_out_days: Optional[list] = None,
+) -> dict:
     pool = list(candidates)
+    eating_out_set = set(eating_out_days or [])
 
     if cuisine_direction and cuisine_direction.lower() not in ("what we've got", ""):
         c_lower = cuisine_direction.lower()
@@ -1002,8 +1075,9 @@ def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optiona
 
     cuisine_slots = _parse_cuisine_slots(cuisine_direction or "")
     quick_set = {d.lower() for d in quick_days}
-    selected: dict = {}
-    used_proteins: set = set()
+    # Pre-fill eating-out days so _pick skips them
+    selected: dict = {day: "Going Out to Eat" for day in eating_out_set}
+    protein_counts: dict = {}
     cuisine_family_counts: dict = {}
     indulgent_count = 0
 
@@ -1023,7 +1097,8 @@ def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optiona
                 if c.get("health") == "Indulgent" and indulgent_count >= 1:
                     continue
                 protein = c["protein"]
-                if protein in used_proteins and len(pool) > len(days_subset) * 2:
+                cap = _PROTEIN_CAPS.get(protein, 1)
+                if protein_counts.get(protein, 0) >= cap and len(pool) > len(days_subset) * 2:
                     continue
                 # Enforce per-cuisine slots when direction explicitly quantifies them
                 fam = _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", ""))
@@ -1031,7 +1106,7 @@ def _select_meals(candidates: list, quick_days: list, cuisine_direction: Optiona
                 if slot_cap is not None and cuisine_family_counts.get(fam, 0) >= slot_cap and len(pool) > len(days_subset) * 2:
                     continue
                 selected[day] = c["name"]
-                used_proteins.add(protein)
+                protein_counts[protein] = protein_counts.get(protein, 0) + 1
                 cuisine_family_counts[fam] = cuisine_family_counts.get(fam, 0) + 1
                 if c.get("health") == "Indulgent":
                     indulgent_count += 1
@@ -1304,32 +1379,23 @@ def _fetch_recipe_data(url: str) -> Optional[dict]:
 
 def _write_recipe_md(title: str, recipe_data: dict, source_url: str, source_name: str,
                      source_credit: str = "") -> Path:
-    """Write a recipe .md file to RECIPES_DIR. Returns the path."""
+    """Write a recipe .md file to RECIPES_DIR. Returns the path.
+
+    source_url/source_name/source_credit are not written into the file —
+    callers persist source_url to recipe_metadata.json separately, and the
+    GitHub Pages template renders attribution from there. Kept as params
+    since callers already have them at the call site. See recipe_md.py for
+    the canonical builder every intake path shares.
+    """
+    from recipe_md import build_recipe_md
     filename = title.replace(" ", "_") + ".md"
     path = RECIPES_DIR / filename
-    if source_url:
-        attribution = f"**Adapted from**: [{source_name or source_url}]({source_url})"
-    elif source_credit:
-        attribution = f"**Source**: {source_credit}"
-    else:
-        attribution = ""
-    video_url = recipe_data.get("video_url", "")
-    video_line = f"**Watch**: [YouTube]({video_url})" if video_url and video_url != source_url else ""
-    lines = [
-        f"# {title}", "",
-        f"**Time**: {recipe_data.get('time', '')}  ",
-        f"**Yield**: {recipe_data.get('servings', '')}  ",
-        attribution,
-        video_line,
-        "", "## Ingredients", "",
-    ]
-    for ing in recipe_data.get("ingredients", []):
-        lines.append(f"- {ing}")
-    lines += ["", "## Instructions", ""]
-    for i, step in enumerate(recipe_data.get("instructions", []), 1):
-        lines.append(f"{i}. {step}")
-    lines.append("")
-    path.write_text("\n".join(l for l in lines if l is not None), encoding="utf-8")
+    content = build_recipe_md(
+        title=title,
+        ingredients=recipe_data.get("ingredients", []),
+        instructions=recipe_data.get("instructions", []),
+    )
+    path.write_text(content, encoding="utf-8")
     return path
 
 
@@ -1383,30 +1449,46 @@ def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> 
 
     recipes = _load_metadata()
     day_to_date = _day_date_map(week_start)
-    # Strip suggest_meals display annotations before writing to plan
-    ordered = [(day, re.sub(r'\s*\[[^\]]+\]', '', selected[day]).strip()) for day in DAYS_ORDER if day in selected]
-
     week_sunday = week_start - timedelta(days=1)
     week_saturday = week_start + timedelta(days=5)
 
     meals_info = []
-    for day, name in ordered:
+    for day in DAYS_ORDER:
+        if day not in selected:
+            continue
+        names = [re.sub(r'\s*\[[^\]]+\]', '', n).strip() for n in _day_meals(selected[day])]
         dt = day_to_date.get(day)
         date_iso = dt.isoformat() if dt else ""
-        if any(kw in name.lower() for kw in _SKIP_FEEDBACK_KEYWORDS):
+
+        # Eating-out / placeholder
+        if len(names) == 1 and any(kw in names[0].lower() for kw in _SKIP_FEEDBACK_KEYWORDS):
             meals_info.append({
-                "day": day, "date": date_iso, "title": name,
-                "health": "", "time": "", "url": "", "reminder": "Going out to eat — no dinner to cook",
+                "day": day, "date": date_iso, "title": names[0],
+                "health": "", "time": "", "url": "", "urls": [], "reminder": "Going out to eat — no dinner to cook",
             })
             continue
-        key = _find_recipe_key(name, recipes)
-        meta = recipes.get(key, {}) if key else {}
-        health = meta.get("health", "Moderate")
-        time_str = meta.get("time", "?")
-        url = _recipe_url(name, meta)
+
+        per_recipe = []
+        for name in names:
+            key = _find_recipe_key(name, recipes)
+            meta = recipes.get(key, {}) if key else {}
+            canonical = key if key else name  # use metadata title so plan lookups always match
+            per_recipe.append({
+                "title": canonical,
+                "health": meta.get("health", "Moderate"),
+                "time": meta.get("time", "?"),
+                "url": _recipe_url(canonical, meta),
+            })
+
+        combined_title = " + ".join(r["title"] for r in per_recipe)
+        combined_health = _combined_health([r["health"] for r in per_recipe])
+        combined_time = " + ".join(r["time"] for r in per_recipe) if len(per_recipe) > 1 else per_recipe[0]["time"]
+        urls = [r["url"] for r in per_recipe if r["url"]]
         meals_info.append({
-            "day": day, "date": date_iso, "title": name,
-            "health": health, "time": time_str, "url": url, "reminder": "",
+            "day": day, "date": date_iso, "title": combined_title,
+            "health": combined_health, "time": combined_time,
+            "url": urls[0] if urls else "", "urls": urls, "reminder": "",
+            **({"paired_recipes": per_recipe} if len(per_recipe) > 1 else {}),
         })
 
     health_counts: dict = {}
@@ -1665,32 +1747,32 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
     for day in DAYS_ORDER:
         if day not in selected:
             continue
-        name = selected[day]
-        key = _find_recipe_key(name, recipes)
-        if not key:
-            continue
         cook_date = day_to_date.get(day)
         if not cook_date:
             continue
         date_str = cook_date.isoformat()
-        structured = recipes[key].get("ingredients", [])
-        if structured:
-            _add_structured(structured, name, date_str)
-        else:
-            _add_raw(recipes[key].get("ingredients_raw", []), name, date_str)
+        for name in _day_meals(selected[day]):
+            key = _find_recipe_key(name, recipes)
+            if not key:
+                continue
+            structured = recipes[key].get("ingredients", [])
+            if structured:
+                _add_structured(structured, name, date_str)
+            else:
+                _add_raw(recipes[key].get("ingredients_raw", []), name, date_str)
+            for cdep in recipes[key].get("condiment_deps", []):
+                cing = _condiment_ingredients(cdep)
+                if cing:
+                    _add_structured(cing, f"{cdep} (for {name})", date_str)
 
-        # Pull in condiment ingredients for any condiment_deps on this recipe
-        for cdep in recipes[key].get("condiment_deps", []):
-            cing = _condiment_ingredients(cdep)
-            if cing:
-                _add_structured(cing, f"{cdep} (for {name})", date_str)
-
-    # Append lunch ingredients if Ashley has picked this week
+    # Append lunch ingredients if Ashley has picked THIS week (set within 7 days of week_start)
     if LUNCH_STATE_FILE.exists():
         try:
             lunch = json.loads(LUNCH_STATE_FILE.read_text())
             pick = lunch.get("current_pick")
-            if pick and lunch.get("status") == "selected":
+            set_date_str = lunch.get("set_date", "")
+            cutoff = (week_start - timedelta(days=7)).isoformat()
+            if pick and lunch.get("status") == "selected" and set_date_str >= cutoff:
                 key = _find_recipe_key(pick, recipes)
                 if key:
                     sat_date = (week_start - timedelta(days=2)).isoformat()
@@ -1759,39 +1841,60 @@ def _do_finalize(activity: dict) -> dict:
     Prep guide is no longer sent automatically — it is on-demand via get_prep_guide().
     Mutates and saves activity state to 'complete'.
     Returns the completed activity dict.
+
+    Shopping list and WeeklyShoppingList.app are skipped when the target week
+    starts more than 7 days from today (future-week planning). Call
+    generate_shopping_list when ready to shop.
     """
     selected = activity.get("selected_meals", {})
     week_start = date.fromisoformat(activity["week_start"])
     schedule_notes = activity.get("schedule_notes", [])
 
+    # Defer shopping for plans built more than 7 days in advance
+    days_until_week = (week_start - date.today()).days
+    defer_shopping = days_until_week > 7
+
     # Generate plan JSON
     plan_data = _build_plan_json(selected, week_start, schedule_notes)
 
-    # Write plan file
-    plan_path = WEEKLYPLAN_DIR / f"mealplan_{week_start.isoformat()}.json"
-    shopping_path = WEEKLYPLAN_DIR / f"shopping_{week_start.isoformat()}.csv"
-    WEEKLYPLAN_DIR.mkdir(exist_ok=True)
+    # Write plan file — redirect to test_output when in test mode
+    output_dir = (_TEST_DIR / "weeklyplan") if _TEST_DIR else WEEKLYPLAN_DIR
+    plan_path = output_dir / f"mealplan_{week_start.isoformat()}.json"
+    shopping_path = output_dir / f"shopping_{week_start.isoformat()}.csv"
+    output_dir.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(plan_data, indent=2, ensure_ascii=False))
-    shopping_path.write_text(_build_shopping_csv(selected, week_start))
-    os.chmod(plan_path, 0o666)
-    os.chmod(shopping_path, 0o666)
+    if not _TEST_DIR:
+        os.chmod(plan_path, 0o666)
 
-    # Launch apps
-    subprocess.Popen(["open", "/Applications/WeeklyShoppingList.app"])
-    subprocess.Popen(["open", "/Applications/WeeklyMealCalendar.app"])
+    if not defer_shopping:
+        shopping_path.write_text(_build_shopping_csv(selected, week_start))
+        if not _TEST_DIR:
+            os.chmod(shopping_path, 0o666)
+            subprocess.Popen(["open", "/Applications/WeeklyShoppingList.app"])
 
-    # Summary notification to admin only
-    summary = _plan_summary_text(plan_data)
-    if ADMIN_HANDLE:
-        _send_outbox(ADMIN_HANDLE, f"Plan ready!\n\n{summary}")
+    # In test mode skip app launches and SMS; log summary to stderr instead
+    if _TEST_DIR:
+        summary = _plan_summary_text(plan_data)
+        print(f"[TEST MODE] Plan written to {plan_path}\n{summary}", file=sys.stderr)
+    else:
+        # Always launch calendar app — future events are still useful to see
+        subprocess.Popen(["open", "/Applications/WeeklyMealCalendar.app"])
 
-    # Clear the pending approval file
-    if PENDING_FILE.exists():
-        PENDING_FILE.unlink()
+        # Summary notification to admin only
+        summary = _plan_summary_text(plan_data)
+        if ADMIN_HANDLE:
+            note = "\n\n(Shopping list deferred — run generate_shopping_list when ready to shop.)" if defer_shopping else ""
+            _send_outbox(ADMIN_HANDLE, f"Plan ready!\n\n{summary}{note}")
+
+        # Clear the pending approval file
+        if PENDING_FILE.exists():
+            PENDING_FILE.unlink()
 
     activity["state"] = "complete"
     activity["plan_path"] = str(plan_path)
-    activity["shopping_path"] = str(shopping_path)
+    activity["shopping_deferred"] = defer_shopping
+    if not defer_shopping:
+        activity["shopping_path"] = str(shopping_path)
     _save_activity(activity)
     return activity
 
@@ -1823,7 +1926,7 @@ def get_workflow_state() -> dict:
 
 
 @mcp.tool()
-def start_menu_workflow() -> dict:
+def start_menu_workflow(week_start: str = "") -> dict:
     """
     Initialize a new weekly menu build workflow.
 
@@ -1832,8 +1935,17 @@ def start_menu_workflow() -> dict:
     3. Merge any feedback from feedback_current.json onto those meals
     4. Write fresh activity state (menu_activity.json)
 
-    Returns the new activity state. last_week_meals will show each meal
-    with any pre-existing SMS feedback merged in.
+    Args:
+        week_start: Optional ISO date (YYYY-MM-DD) of the Monday to plan for.
+                    If omitted, defaults to the next upcoming Monday.
+                    Use this to plan future weeks (e.g. "2026-07-13" for the week
+                    starting July 13). If a non-Monday date is provided, it is
+                    normalized to the Monday of that week.
+
+    Returns the new activity state including:
+        week_start:  ISO date of the Monday (e.g. "2026-06-29")
+        week_label:  Human-readable range for confirmation (e.g. "Jun 29 – Jul 5, 2026")
+        last_week_meals: meals from the previous plan with any SMS feedback merged in
 
     State after call: awaiting_meal_logging
     """
@@ -1861,12 +1973,26 @@ def start_menu_workflow() -> dict:
     except Exception:
         pass
 
-    week_start = _get_week_start()
+    if week_start:
+        try:
+            ws = date.fromisoformat(week_start)
+            # Normalize to Monday of the given week
+            if ws.weekday() != 0:
+                ws = ws - timedelta(days=ws.weekday())
+        except ValueError:
+            return {"error": f"Invalid week_start date: {week_start!r}. Use YYYY-MM-DD format."}
+    else:
+        ws = _get_week_start()
+
+    week_sunday = ws - timedelta(days=1)
+    week_saturday = ws + timedelta(days=5)
+    week_label = f"{week_sunday.strftime('%b %-d')} – {week_saturday.strftime('%b %-d, %Y')}"
 
     activity = {
         "state": "awaiting_meal_logging",
         "initiated_at": datetime.now().isoformat(),
-        "week_start": week_start.isoformat(),
+        "week_start": ws.isoformat(),
+        "week_label": week_label,
         "last_week_meals": meals,
         "schedule_notes": [],
         "cuisine_direction": None,
@@ -2040,8 +2166,18 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
                     quick_days.append(abbrev)
     activity["quick_days"] = quick_days
 
+    eating_out_days = _parse_eating_out_days(
+        constraints, activity.get("schedule_notes", [])
+    )
+    activity["eating_out_days"] = eating_out_days
+
     candidates = _load_candidates(quick_days)
-    selected = _select_meals(candidates, quick_days, cuisine_direction or activity.get("cuisine_direction"))
+    selected = _select_meals(
+        candidates,
+        quick_days,
+        cuisine_direction or activity.get("cuisine_direction"),
+        eating_out_days=eating_out_days,
+    )
     activity["selected_meals"] = selected
     activity["state"] = "awaiting_meal_approval"
     _save_activity(activity)
@@ -2162,13 +2298,36 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
 
     all_recipes = _load_metadata()
 
+    if replacement and not _find_recipe_key(replacement, all_recipes):
+        match = _find_recipe_best_match(replacement, all_recipes)
+        if match:
+            return {
+                "status": "needs_confirmation",
+                "suggested": match[0],
+                "message": f"Did you mean '{match[0]}'?",
+                "day": day,
+                "outgoing_recipe": outgoing,
+            }
+        return {"error": f"Recipe '{replacement}' not found. Please check the name and try again."}
+
     if not replacement:
         # Check if reason names a specific recipe (e.g. "swap to Pasta e Ceci")
         name_m = re.search(r'\bto\s+(.{4,})', reason.lower())
         if name_m:
-            rkey = _find_recipe_key(name_m.group(1).strip().rstrip(" .,"), all_recipes)
+            parsed_name = name_m.group(1).strip().rstrip(" .,")
+            rkey = _find_recipe_key(parsed_name, all_recipes)
             if rkey:
                 replacement = rkey
+            else:
+                match = _find_recipe_best_match(parsed_name, all_recipes)
+                if match:
+                    return {
+                        "status": "needs_confirmation",
+                        "suggested": match[0],
+                        "message": f"Did you mean '{match[0]}'?",
+                        "day": day,
+                        "outgoing_recipe": outgoing,
+                    }
 
     if not replacement:
         # Exclude every recipe already in the plan (including outgoing — we want something different)
@@ -2689,25 +2848,25 @@ def activate_idea_recipe(name: str, content: str = "", source_url: str = "") -> 
             return {"success": True, "auto_activated": True, "canonical_name": key}
         return {"success": False, "needs_content": True, "canonical_name": key}
 
-    # Write .md file
+    # Write .md file. No embedded attribution — source_url in metadata
+    # (persisted below) renders via the GitHub Pages template's .meta bar.
+    # NOT routed through recipe_md.py's build_recipe_md() — content here is
+    # caller-supplied prose (auto-fetched or user-pasted), not structured
+    # ingredient/instruction lists, so there's nothing to feed the builder.
+    # Don't reintroduce a Time/Servings/Adapted-from header if editing this.
     filename = re.sub(r"[^\w\s-]", "", key).strip().replace(" ", "_") + ".md"
     md_path = RECIPES_DIR / filename
     RECIPES_DIR.mkdir(exist_ok=True)
-
-    # Prepend attribution if source_url provided and not already in content
-    if source_url and "Adapted from" not in content:
-        source_label = recipes[key].get("source", source_url)
-        header = f"# {key}\n\n**Adapted from**: [{source_label}]({source_url})\n\n"
-        if not content.startswith("#"):
-            content = header + content
-        else:
-            content = content  # assume caller included attribution
+    if not content.startswith("#"):
+        content = f"# {key}\n\n" + content
 
     md_path.write_text(content, encoding="utf-8")
 
     # Update metadata
     recipes[key]["status"] = "active"
     recipes[key]["filename"] = filename
+    if source_url:
+        recipes[key]["source_url"] = source_url
 
     # Populate prep data if not already present from the idea intake stage
     if not recipes[key].get("prep_components"):
@@ -2752,11 +2911,12 @@ def finalize_plan() -> dict:
 
     Steps:
     1. Verify all selected_meals ideas are activated (fails if any still have status="idea")
-    2. Generate mealplan_YYYY-MM-DD.txt (DINNERS block + REMINDERS via Claude Sonnet)
-    3. Generate shopping_YYYY-MM-DD.csv (Item / Notes(qty) / Date(cook date) format)
-    4. Launch WeeklyShoppingList.app and WeeklyMealCalendar.app
+    2. Generate mealplan_YYYY-MM-DD.json (DINNERS block + REMINDERS via Claude Sonnet)
+    3. Generate shopping_YYYY-MM-DD.csv and launch WeeklyShoppingList.app
+       — SKIPPED if the target week starts more than 7 days from today (future-week
+         planning). Call generate_shopping_list when ready to shop.
+    4. Launch WeeklyMealCalendar.app (always — future calendar events are useful)
     5. Send plan summary to admin (David) via Keanu outbox
-    6. Send prep guide to both David and Ashley via Keanu outbox
 
     Requires ANTHROPIC_API_KEY in environment for REMINDERS generation (falls back
     to simple day-name reminders if not available).
@@ -2764,9 +2924,10 @@ def finalize_plan() -> dict:
     Returns:
         {
           "state": "complete",
-          "plan_path": "/Users/Shared/cooking/weeklyplan/mealplan_YYYY-MM-DD.txt",
+          "plan_path": "/Users/Shared/cooking/weeklyplan/mealplan_YYYY-MM-DD.json",
           "shopping_path": "/Users/Shared/cooking/weeklyplan/shopping_YYYY-MM-DD.csv",
-          "prep_guide": "PREP GUIDE: ..."  (empty string if no prep components)
+                           (omitted when shopping_deferred is true)
+          "shopping_deferred": true | false
         }
     """
     activity = _load_activity()
@@ -2780,7 +2941,7 @@ def finalize_plan() -> dict:
     # Verify no ideas remain un-activated
     recipes = _load_metadata()
     still_ideas = [
-        name for name in selected.values()
+        name for val in selected.values() for name in _day_meals(val)
         if (key := _find_recipe_key(name, recipes)) and recipes[key].get("status") == "idea"
     ]
     if still_ideas:
@@ -2828,8 +2989,9 @@ def generate_shopping_list(meals: dict, week_start: str) -> dict:
 
     csv_content = _build_shopping_csv(meals, ws)
 
-    shopping_path = WEEKLYPLAN_DIR / f"shopping_{week_start}.csv"
-    WEEKLYPLAN_DIR.mkdir(exist_ok=True)
+    output_dir = (_TEST_DIR / "weeklyplan") if _TEST_DIR else WEEKLYPLAN_DIR
+    shopping_path = output_dir / f"shopping_{week_start}.csv"
+    output_dir.mkdir(parents=True, exist_ok=True)
     shopping_path.write_text(csv_content)
 
     row_count = max(0, csv_content.count("\n") - 1)  # subtract header
@@ -2956,6 +3118,16 @@ def update_plan_meal(day: str, title: str) -> dict:
         new_reminder = "Going out to eat — no dinner to cook"
     else:
         key = _find_recipe_key(title, recipes)
+        if not key:
+            match = _find_recipe_best_match(title, recipes)
+            if match:
+                return {
+                    "status": "needs_confirmation",
+                    "suggested": match[0],
+                    "message": f"Did you mean '{match[0]}'?",
+                    "day": day,
+                    "title": title,
+                }
         meta = recipes.get(key, {}) if key else {}
         new_url = _recipe_url(title, meta)
         new_time = meta.get("time", "")
@@ -3006,6 +3178,14 @@ def get_recipe_url(name: str) -> dict:
     recipes = _load_metadata()
     key = _find_recipe_key(name, recipes)
     if not key:
+        match = _find_recipe_best_match(name, recipes)
+        if match:
+            return {
+                "status": "needs_confirmation",
+                "suggested": match[0],
+                "message": f"Did you mean '{match[0]}'?",
+                "name": name,
+            }
         return {"name": name, "url": ""}
     meta = recipes[key]
     url = _recipe_url(key, meta)
@@ -3205,12 +3385,12 @@ def sync_atk_recipes(target: int = 5, dry_run: bool = False, collection: str = "
     Falls back to your top-rated ATK recipes if collections don't yield enough new entries.
     Skips any recipe already in recipe_metadata.json (dedup by URL and title).
 
-    Each imported recipe gets:
-      - A .md file in ~/Dropbox/LLMContext/cooking/recipes/
-      - A full metadata entry (health, cuisine, ingredients, instructions, cook_time)
-      - needs_review: true if content looks thin (< 2 steps, < 3 ingredients)
+    Imported recipes are written to the Dropbox agent_results queue
+    (atk_agent_results.json). Open the Recipe Review UI /New tab to approve
+    and add them to the collection. Classification (health, cuisine, ingredients)
+    happens at add-time via the Review UI, not during this sync.
 
-    After importing, run generate_github_pages_data.py and push to update the recipe site.
+    After approving in the Review UI, run generate_github_pages_data.py and push.
 
     Args:
         target:     Max number of new recipes to import (default 5).
@@ -3427,7 +3607,12 @@ def add_lunch_recipe_url(url: str) -> dict:
     filename  = safe_name + ".md"
     md_path   = RECIPES_DIR / filename
 
-    md_content = f"# {title}\n\n**Adapted from**: [{url}]({url})\n\n## Instructions\n\n{instructions}\n"
+    # No embedded attribution — source_url in metadata (set below) renders
+    # via the GitHub Pages template's .meta bar. NOT routed through
+    # recipe_md.py's build_recipe_md() — this is a raw scraped text blob,
+    # not a structured ingredient/instruction list. Don't reintroduce a
+    # Time/Servings/Adapted-from header if editing this.
+    md_content = f"# {title}\n\n## Instructions\n\n{instructions}\n"
     md_path.write_text(md_content)
 
     data    = json.loads(METADATA_PATH.read_text())
@@ -3661,6 +3846,75 @@ def set_recipe_image(recipe_name: str, image_b64: str, mime_type: str = "image/j
         "image_path": str(image_path),
         "message": f"Photo saved as image for '{key}'.",
     }
+
+
+@mcp.tool()
+def set_test_mode(enabled: bool) -> dict:
+    """
+    Enable or disable sandboxed test mode for the planning workflow.
+
+    When enabled:
+    - All file writes go to test_output/ in the project directory
+    - recipe_metadata.json is copied to test_output/recipe_metadata_test.json
+      (copy only made once; subsequent enables reuse the existing copy)
+    - App launches (WeeklyShoppingList.app, WeeklyMealCalendar.app) are suppressed
+    - SMS/outbox messages are suppressed (plan summary logged to stderr instead)
+    - PENDING_FILE is not cleared
+
+    When disabled:
+    - All I/O reverts to production paths
+    - test_output/ data is left in place (call cleanup_test_data() to wipe it)
+
+    Args:
+        enabled: True to enable test mode, False to disable.
+
+    Returns:
+        {"ok": True, "mode": "test"|"production", "test_dir": str (when enabled)}
+    """
+    global _TEST_DIR
+    if enabled:
+        test_dir = MENUBUILDER_DIR / "test_output"
+        test_dir.mkdir(exist_ok=True)
+        test_copy = test_dir / "recipe_metadata_test.json"
+        if not test_copy.exists():
+            test_copy.write_text(METADATA_PATH.read_text())
+        _TEST_DIR = test_dir
+        return {"ok": True, "mode": "test", "test_dir": str(test_dir)}
+    else:
+        _TEST_DIR = None
+        return {"ok": True, "mode": "production"}
+
+
+@mcp.tool()
+def cleanup_test_data() -> dict:
+    """
+    Wipe test_output/ data and reset test mode to disabled.
+
+    Removes test_output/weeklyplan/ and test_output/menu_activity.json.
+    Leaves test_output/recipe_metadata_test.json in place (re-copied fresh
+    the next time set_test_mode(True) is called and the file is absent).
+
+    Returns:
+        {"ok": True, "cleaned": [list of paths removed]}
+    """
+    import shutil
+    global _TEST_DIR
+    _TEST_DIR = None
+
+    test_dir = MENUBUILDER_DIR / "test_output"
+    removed = []
+
+    weeklyplan = test_dir / "weeklyplan"
+    if weeklyplan.exists():
+        shutil.rmtree(weeklyplan)
+        removed.append(str(weeklyplan))
+
+    activity = test_dir / "menu_activity.json"
+    if activity.exists():
+        activity.unlink()
+        removed.append(str(activity))
+
+    return {"ok": True, "cleaned": removed}
 
 
 if __name__ == "__main__":

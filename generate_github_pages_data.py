@@ -58,6 +58,7 @@ def main():
             "cuisine": recipe.get("cuisine_type") or recipe.get("cuisine", ""),
             "source": recipe.get("source", ""),
             "source_url": recipe.get("url") or recipe.get("source_url", ""),
+            "video_url": recipe.get("video_url", ""),
         }
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)

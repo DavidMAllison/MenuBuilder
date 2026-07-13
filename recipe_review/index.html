@@ -205,7 +205,7 @@
     .fs-pill.active { background: #2980b9; border-color: transparent; color: #fff; }
 
     .fs-checkbox-list {
-      max-height: 200px; overflow-y: auto;
+      max-height: 320px; overflow-y: auto;
       display: flex; flex-direction: column; gap: 0;
     }
 
@@ -730,6 +730,33 @@
       font-size: 10px;
       color: #999;
       margin-top: auto;
+    }
+
+    .week-card-links {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .week-card-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 7px;
+      border-radius: 8px;
+      border: 1px solid #e0e0e0;
+      color: #555;
+      text-decoration: none;
+      background: #f9f9f9;
+      transition: background 0.12s, border-color 0.12s;
+    }
+
+    .week-card-link:hover {
+      background: #efefef;
+      border-color: #bbb;
+      color: #222;
     }
 
     .health-pill {
@@ -1530,6 +1557,20 @@
     return 'other';
   }
 
+  const _CARD_LINK_SVG = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+  function _mkCardLink(url, label) {
+    if (!url) return '';
+    return `<a class="week-card-link" href="${escHtml(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${_CARD_LINK_SVG}${escHtml(label)}</a>`;
+  }
+  function _weekCardLinks(m) {
+    if (m.paired_recipes && m.paired_recipes.length > 1) {
+      const links = m.paired_recipes.map((p, i) => _mkCardLink(p.url, `Recipe ${i + 1}`)).join('');
+      return links ? `<div class="week-card-links">${links}</div>` : '';
+    }
+    const links = _mkCardLink(m.url, 'Recipe') + _mkCardLink(m.source_url, 'Source');
+    return links ? `<div class="week-card-links">${links}</div>` : '';
+  }
+
   function renderWeek() {
     const main = document.getElementById('main');
     main.innerHTML = '';
@@ -1575,6 +1616,7 @@
             <span class="health-pill ${pClass}">${escHtml(m.health)}</span>
           </div>
           ${m.time ? `<div class="week-card-meta">${escHtml(m.time)}</div>` : ''}
+          ${_weekCardLinks(m)}
         </div>
       `;
       grid.appendChild(card);
@@ -1635,7 +1677,7 @@
   // openWeekModal, openModal) normalise their data and call this.
   function _showModal({ title, image, health, time, times_cooked, reminder,
       ingredients, instructions, condiment_type, record_type, yieldVal,
-      badgeLabel, badgeColor, badgeSecondary, toolbarHtml }) {
+      badgeLabel, badgeColor, badgeSecondary, toolbarHtml, extraHtml }) {
     document.getElementById('modal-toolbar').innerHTML = toolbarHtml;
 
     const imageHtml = image
@@ -1677,6 +1719,7 @@
           <div style="margin-top:14px;padding:10px 14px;background:#fafafa;border-left:3px solid ${borderColor};border-radius:0 6px 6px 0;font-size:12px;color:#555;line-height:1.5">
             ${escHtml(reminder)}
           </div>` : ''}
+        ${extraHtml || ''}
         ${ings  ? `<div class="modal-section-title">Ingredients</div><ul class="modal-ingredients">${ings}</ul>` : ''}
         ${steps ? `<div class="modal-section-title">Instructions</div><ol class="modal-instructions">${steps}</ol>` : ''}
       </div>
@@ -1720,20 +1763,37 @@
       const d = new Date(m.date + 'T00:00:00');
       dateDisplay = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
     }
+
+    const isPaired = m.paired_recipes && m.paired_recipes.length > 1;
+    const toolbarHtml = isPaired
+      ? m.paired_recipes.map((p, i) => visitBtn(p.url, `Recipe ${i + 1}`)).join('') + _closeBtnHtml()
+      : `${visitBtn(m.url, 'Recipe')}${visitBtn(m.source_url, 'Source', 'source-btn')}${_closeBtnHtml()}`;
+
+    let extraHtml = '';
+    if (isPaired) {
+      const recipeLinks = m.paired_recipes.map(p =>
+        p.url
+          ? `<li><a href="${escHtml(p.url)}" target="_blank" rel="noopener" style="color:#2980b9">${escHtml(p.title)}</a></li>`
+          : `<li>${escHtml(p.title)}</li>`
+      ).join('');
+      extraHtml = `<div class="modal-section-title">Recipes</div><ul class="modal-ingredients">${recipeLinks}</ul>`;
+    }
+
     _showModal({
       title:         m.title,
       image:         m.image,
       health:        m.health,
       time:          m.time,
-      times_cooked:  m.times_cooked,
+      times_cooked:  isPaired ? null : m.times_cooked,
       reminder:      m.reminder,
-      ingredients:   m.ingredients,
-      instructions:  m.instructions,
+      ingredients:   isPaired ? [] : m.ingredients,
+      instructions:  isPaired ? [] : m.instructions,
       yieldVal:      null,
       badgeLabel:    m.day,
       badgeColor:    color,
       badgeSecondary: dateDisplay,
-      toolbarHtml:   `${visitBtn(m.url, 'Recipe')}${visitBtn(m.source_url, 'Source', 'source-btn')}${_closeBtnHtml()}`,
+      toolbarHtml,
+      extraHtml,
     });
   }
 
@@ -1806,7 +1866,7 @@
         + `<div class="card-image-placeholder" style="display:none">🍽</div>`
       : `<div class="card-image-placeholder">🍽</div>`;
 
-    if (recipe.in_collection) card.classList.add('in-collection');
+    if (recipe.in_collection && currentView !== 'collection') card.classList.add('in-collection');
 
     const scoreBadge = (isSearchResult && recipe.score != null)
       ? `<span class="score-badge">${Math.round(recipe.score * 100)}%</span>` : '';

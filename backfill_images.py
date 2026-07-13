@@ -44,7 +44,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill og:image for existing recipes")
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     parser.add_argument("--limit", type=int, default=0, help="Max recipes to process (0 = all)")
-    parser.add_argument("--recipe", type=str, default="", help="Process a single recipe by title")
+    parser.add_argument("--recipe", type=str, action="append", default=[], help="Process recipe(s) by title (repeatable)")
     parser.add_argument("--force", action="store_true", help="Re-fetch even if image already set")
     args = parser.parse_args()
 
@@ -56,7 +56,7 @@ def main() -> None:
     for key, v in recipes.items():
         if v.get("status") != "active":
             continue
-        if args.recipe and v.get("title", key) != args.recipe:
+        if args.recipe and v.get("title", key) not in args.recipe:
             continue
         if not args.force and v.get("image"):
             continue

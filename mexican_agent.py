@@ -15,7 +15,7 @@ Usage:
   mexican "get some weeknight dishes from Yucatan"
 
 The agent searches and fetches recipes, then writes results to
-/tmp/mexican_agent_results.json for the caller to review and save.
+Dropbox/LLMContext/cooking/agent_results/mexican_agent_results.json.
 """
 
 import difflib
@@ -40,7 +40,7 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
                 os.environ["ANTHROPIC_API_KEY"] = line.split("=", 1)[1].strip()
                 break
 
-RESULTS_PATH = Path(f"/tmp/mexican_agent_results_{os.getuid()}.json")
+RESULTS_PATH = Path.home() / "Dropbox/LLMContext/cooking/agent_results/mexican_agent_results.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 _MIMK_CACHE = Path(f"/tmp/mimk_recipe_urls_{os.getuid()}.json")
@@ -847,6 +847,7 @@ Rules:
   Try 3-4 specific queries before giving up on a region.
 - Aim to find 3-5 valid recipes (with ingredients and instructions) per request.
 - Skip pages that return errors or have no ingredients/instructions.
+- When extracting ingredients, mark optional items, garnishes, or "for serving" additions with an "(optional)" prefix — e.g. "(optional) lime wedges for serving".
 - At the end, write a brief plain-text summary of what you found."""
 
 _CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]

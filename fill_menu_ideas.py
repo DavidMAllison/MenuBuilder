@@ -75,37 +75,15 @@ def _quality_check(ingredients_raw: list, instructions: list) -> bool:
 
 
 def _build_recipe_md(title: str, entry: dict, needs_review: bool) -> str:
-    """Format a recipe entry as a .md file."""
-    lines = [f"# {title}", ""]
-    if needs_review:
-        lines += [
-            "> **Needs Review** — auto-generated content; verify formatting and completeness before first cook.",
-            "",
-        ]
-    time_str   = entry.get("time", "")
-    servings   = entry.get("servings", "")
-    source     = entry.get("source", "")
-    source_url = entry.get("source_url", "")
-    if time_str:
-        lines.append(f"**Time**: {time_str}  ")
-    if servings:
-        lines.append(f"**Serves**: {servings}  ")
-    if source_url:
-        label = source if source else source_url
-        lines.append(f"**Adapted from**: [{label}]({source_url})  ")
-    elif source:
-        lines.append(f"**Source**: {source}  ")
-    if time_str or servings or source_url or source:
-        lines.append("")
-    lines += ["## Ingredients", ""]
-    for ing in entry.get("ingredients_raw", []):
-        lines.append(f"- {ing}")
-    lines.append("")
-    lines += ["## Instructions", ""]
-    for i, step in enumerate(entry.get("instructions", []), 1):
-        lines.append(f"{i}. {step}")
-    lines.append("")
-    return "\n".join(lines)
+    """Format a recipe entry as a .md file. Thin wrapper — see recipe_md.py
+    for the canonical builder every intake path shares."""
+    from recipe_md import build_recipe_md
+    return build_recipe_md(
+        title=title,
+        ingredients=entry.get("ingredients_raw", []),
+        instructions=entry.get("instructions", []),
+        needs_review=needs_review,
+    )
 
 if not os.environ.get("ANTHROPIC_API_KEY"):
     env_path = Path.home() / "projects/personal/sms-assistant/.env"
@@ -274,6 +252,14 @@ QUERY_POOLS = {
         "fried rice",
         "grilled fish",
     ],
+    "atk": [
+        "weeknight chicken and fish",
+        "vegetable sides and salads",
+        "pork and beef weeknight",
+        "pasta and grains",
+        "soups and stews",
+        "sheet pan and one pan dinners",
+    ],
 }
 
 ALL_AGENTS = list(QUERY_POOLS.keys())
@@ -301,6 +287,8 @@ def _run_agent(agent_name: str, topic: str) -> list[dict]:
             from mediterranean_agent import run_agent
         elif agent_name == "sites":
             from sites_agent import run_agent
+        elif agent_name == "atk":
+            from atk_agent import run_agent
         else:
             print(f"  [!] Unknown agent: {agent_name}")
             return []
@@ -825,7 +813,7 @@ def main():
         print(f"\nNew recipes available in Review UI (/New view):")
         for r in new_recipes:
             print(f"  + {r.get('title','?')} ({r.get('source','?')})")
-        print(f"\nAgents wrote results to /tmp — open the Recipe Review UI and use Add to Collection.")
+        print(f"\nAgents wrote results to Dropbox/agent_results/ — open the Recipe Review UI and use Add to Collection.")
 
     # Post-run metadata cleanup — fix cuisine/source/meal_type + classify missing health/time
     print("\n--- Post-run cleanup ---")
