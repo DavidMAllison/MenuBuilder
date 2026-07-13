@@ -59,51 +59,124 @@ client = anthropic.Anthropic()
 _CONFIG_PATH = Path(__file__).parent / "config.json"
 
 
-def search_local_collection(query: str) -> List[dict]:
-    """Search recipes in recipe_metadata.json by name, cuisine, and source.
-
-    Returns a list of matching recipes with title, url, cuisine, source, time, and health.
-    Results are sorted by relevance (number of query terms matched).
-    Intended for SMS lookup intent — user asking for a recipe they already have.
-    """
+def _load_collection() -> tuple:
+    """Load recipe metadata (envelope-tolerant) and GitHub Pages base URL."""
     config = json.loads(_CONFIG_PATH.read_text())
     metadata_path = Path(config["metadata_path"].replace("~", str(Path.home())))
     github_base = config.get("github_pages_base_url", "")
+    raw = json.loads(metadata_path.read_text())
+    # Post-Jun-2026 files wrap recipes in {metadata_version, last_updated, recipes}
+    recipes = raw.get("recipes", raw)
+    return recipes, github_base
 
-    recipes = json.loads(metadata_path.read_text())
+
+def _result_entry(name: str, data: dict, github_base: str) -> dict:
+    url = data.get("url", "")
+    if not url and github_base:
+        filename = (data.get("filename") or name.replace(" ", "_")).removesuffix(".md")
+        url = f"{github_base}/{filename}"
+    return {
+        "title": name,
+        "url": url,
+        "cuisine": data.get("cuisine", ""),
+        "source": data.get("source", ""),
+        "time": data.get("time", ""),
+        "health": data.get("health", ""),
+        "effort": data.get("weeknight_effort", ""),
+        "times_cooked": data.get("times_cooked", 0),
+        "last_cooked": data.get("last_cooked_date") or "never",
+    }
+
+
+def search_local_collection(query: str) -> List[dict]:
+    """Search the local recipe collection.
+
+    Two passes:
+      1. Keyword pass over name/cuisine/source — a direct lookup like
+         "lamb barbacoa" resolves with no API call.
+      2. If no recipe matches every query term, Haiku reasons over the full
+         collection index (times_cooked, last_cooked_date, health, effort)
+         so intent queries work: "recipes I haven't tried", "something
+         light we haven't had in a while", "quick chicken, nothing fried".
+    """
+    recipes, github_base = _load_collection()
+    candidates = {
+        name: data
+        for name, data in recipes.items()
+        if isinstance(data, dict) and data.get("status") not in ("disliked", "ignored")
+    }
+
     terms = [t for t in query.lower().split() if len(t) > 2]
     if not terms:
         return []
 
-    results = []
-    for name, data in recipes.items():
-        if not isinstance(data, dict):
-            continue
-        if data.get("status") in ("disliked", "ignored"):
-            continue
+    keyword_hits = []
+    for name, data in candidates.items():
         searchable = " ".join(filter(None, [
-            name,
-            data.get("cuisine", ""),
-            data.get("source", ""),
+            name, data.get("cuisine", ""), data.get("source", ""),
         ])).lower()
         score = sum(1 for t in terms if t in searchable)
-        if score == 0:
-            continue
-        filename = name.replace(" ", "_")
-        results.append({
-            "title": name,
-            "url": f"{github_base}/{filename}" if github_base else "",
-            "cuisine": data.get("cuisine", ""),
-            "source": data.get("source", ""),
-            "time": data.get("time", ""),
-            "health": data.get("health", ""),
-            "_score": score,
-        })
+        if score:
+            keyword_hits.append((score, name, data))
+    keyword_hits.sort(key=lambda h: h[0], reverse=True)
 
-    results.sort(key=lambda r: r["_score"], reverse=True)
-    for r in results:
-        del r["_score"]
-    return results
+    # Confident direct lookup: some recipe matched every term in the query.
+    if keyword_hits and keyword_hits[0][0] == len(terms):
+        return [_result_entry(n, d, github_base) for _, n, d in keyword_hits]
+
+    llm_results = _reason_over_collection(query, candidates, github_base)
+    if llm_results is not None:
+        return llm_results
+    return [_result_entry(n, d, github_base) for _, n, d in keyword_hits]
+
+
+def _reason_over_collection(query: str, candidates: dict, github_base: str):
+    """Have Haiku interpret the request against the full collection index.
+
+    Returns a result list, or None on any failure so the caller can fall
+    back to keyword hits.
+    """
+    index_lines = []
+    for name, data in sorted(candidates.items()):
+        index_lines.append(
+            f"{name} | {data.get('cuisine', '?')} | {data.get('health', '?')}"
+            f" | {data.get('time', '?')} | effort:{data.get('weeknight_effort', '?')}"
+            f" | cooked:{data.get('times_cooked', 0)}x"
+            f" | last:{data.get('last_cooked_date') or 'never'}"
+        )
+
+    prompt = (
+        "You are searching a family's home recipe collection for an SMS assistant.\n\n"
+        f"Request: \"{query}\"\n\n"
+        "Collection index (name | cuisine | health | time | effort | times cooked | last cooked):\n"
+        + "\n".join(index_lines)
+        + "\n\nInterpret the request's intent, don't keyword-match. Examples: "
+        "\"haven't tried\" / \"new to us\" means cooked:0x; \"haven't had in a while\" "
+        "means an old last-cooked date; \"healthy\" means Heart-Healthy; \"quick\" or "
+        "\"easy\" means short time or effort:low. Combine criteria when the request "
+        "has several.\n\n"
+        "Return a JSON array of up to 8 exact recipe names from the index, best matches "
+        "first. Return [] if nothing fits. JSON only, no explanation."
+    )
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        raw = re.sub(r"^```[a-z]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        names = json.loads(raw)
+        if not isinstance(names, list):
+            return None
+        return [
+            _result_entry(n, candidates[n], github_base)
+            for n in names if n in candidates
+        ]
+    except Exception:
+        return None
 
 TOOLS = [
     {

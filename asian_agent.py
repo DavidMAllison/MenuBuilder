@@ -37,7 +37,7 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
                 os.environ["ANTHROPIC_API_KEY"] = line.split("=", 1)[1].strip()
                 break
 
-RESULTS_PATH = Path(f"/tmp/asian_agent_results_{os.getuid()}.json")
+RESULTS_PATH = Path.home() / "Dropbox/LLMContext/cooking/agent_results/asian_agent_results.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 client = anthropic.Anthropic()
@@ -565,6 +565,7 @@ Rules:
 - Skip pages that return errors or have no ld+json schema.
 - Search with specific dish names or ingredients — not vague terms like "Asian recipe."
 - For general/ambiguous queries: search 2-3 sources using dish terms that would naturally appear in each cuisine.
+- When extracting ingredients, mark optional items, garnishes, or "for serving" additions with an "(optional)" prefix — e.g. "(optional) raw egg yolk for dipping".
 - At the end, print a brief plain-text summary of what you found."""
 
 _CACHED_SYSTEM = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]

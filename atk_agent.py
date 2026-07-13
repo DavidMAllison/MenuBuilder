@@ -35,6 +35,13 @@ CONFIG_PATH  = PROJECT_ROOT / "config.json"
 ATK_BASE     = "https://www.americastestkitchen.com"
 COOKIE_TTL_H = 20   # hours before requiring Playwright re-login
 BATCH_SIZE   = 6    # recipes per Haiku call
+RESULTS_PATH = Path.home() / "Dropbox/LLMContext/cooking/agent_results/atk_agent_results.json"
+
+# Algolia search (public search-only key, safe to commit)
+_ALGOLIA_APP_ID  = "Y1FNZXUI30"
+_ALGOLIA_API_KEY = "8d504d0099ed27c1b73708d22871d805"
+_ALGOLIA_INDEX   = "everest_search_cortado_production"
+_ALGOLIA_URL     = f"https://{_ALGOLIA_APP_ID.lower()}-dsn.algolia.net/1/indexes/*/queries"
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +153,13 @@ def _verify_auth(http):
 # Collection / top-rated fetching
 # ---------------------------------------------------------------------------
 
-def _collection_slug(name):
-    return name.lower().strip().replace(" ", "-")
+def _get_all_collections(http):
+    """Fetch all user favorite collections from ATK API. Returns [(name, slug)]."""
+    resp = http.get("/api/v6/user_favorites_meta_data?site_key=atk")
+    if resp.status_code != 200:
+        return []
+    meta = resp.json().get("meta_data", {})
+    return [(c["name"].strip(), c["slug"]) for c in meta.get("collections", [])]
 
 
 def _get_collection(http, slug):
@@ -228,6 +240,30 @@ def _infer_method(title, keywords, instructions):
     return "stovetop"
 
 
+def _search_algolia(query: str, max_results: int = 15) -> list[dict]:
+    """Search all ATK recipes via Algolia. Returns [{title, url}]."""
+    body = {"requests": [{
+        "indexName": _ALGOLIA_INDEX,
+        "query": query,
+        "hitsPerPage": max_results,
+        "filters": "NOT f_hideFrom:web AND search_document_klass:recipe",
+        "attributesToRetrieve": ["title", "search_url"],
+    }]}
+    try:
+        resp = httpx.post(_ALGOLIA_URL, json=body, params={
+            "x-algolia-api-key": _ALGOLIA_API_KEY,
+            "x-algolia-application-id": _ALGOLIA_APP_ID,
+        }, timeout=10)
+        hits = resp.json()["results"][0]["hits"]
+        return [
+            {"title": h["title"], "url": ATK_BASE + h["search_url"]}
+            for h in hits if h.get("search_url")
+        ]
+    except Exception as e:
+        print(f"  [!] Algolia search error: {e}")
+        return []
+
+
 def _fetch_recipe(http, url):
     """
     Fetch an ATK recipe page and extract structured data via ld+json.
@@ -301,16 +337,29 @@ def _fetch_recipe(http, url):
                 if m:
                     video_url = f"https://www.youtube.com/watch?v={m.group(1)}"
 
+            # Image
+            img = item.get("image", "")
+            if isinstance(img, list):
+                img = img[0] if img else ""
+            if isinstance(img, dict):
+                img = img.get("url", "")
+            image_url = str(img).strip() if img else ""
+
             return {
                 "title":           item.get("name", "").strip(),
                 "url":             url,
-                "ingredients_raw": ingredients_raw,
+                "source":          "America's Test Kitchen",
+                "source_url":      url,
+                "ingredients":     ingredients_raw,
                 "instructions":    instructions,
+                "time":            time_str,
                 "cook_time":       time_str,
                 "total_min":       total_min,
                 "servings":        servings,
                 "keywords":        keywords,
                 "video_url":       video_url,
+                "image":           image_url,
+                "cuisine":         "",
             }
     return None
 
@@ -346,7 +395,7 @@ def _classify_batch(client, batch):
         lines.append(
             f"Title: {r['title']}\n"
             f"Cook time: {r.get('cook_time', 'unknown')}, {r.get('total_min', 0)} min\n"
-            f"Ingredients (first 8): {', '.join(r.get('ingredients_raw', [])[:8])}"
+            f"Ingredients (first 8): {', '.join(r.get('ingredients', [])[:8])}"
         )
     prompt = _CLASSIFY_PROMPT.format(recipes="\n\n".join(lines))
     try:
@@ -390,7 +439,7 @@ def _parse_ingredients_batch(client, batch):
     safe_map = {_safe_title(r["title"]): r["title"] for r in batch}
     lines = []
     for r in batch:
-        ing_lines = "\n".join(f"  - {i}" for i in r["ingredients_raw"])
+        ing_lines = "\n".join(f"  - {i}" for i in r["ingredients"])
         lines.append(f"Title: {_safe_title(r['title'])}\nIngredients:\n{ing_lines}")
     prompt = _INGREDIENTS_PROMPT.format(recipes="\n\n".join(lines))
     try:
@@ -417,7 +466,7 @@ def _quality_issues(recipe):
     issues = []
     if len(recipe.get("instructions", [])) < 2:
         issues.append("too few steps")
-    if len(recipe.get("ingredients_raw", [])) < 3:
+    if len(recipe.get("ingredients", [])) < 3:
         issues.append("too few ingredients")
     if any(re.search(r"<[a-z]", s) for s in recipe.get("instructions", [])):
         issues.append("HTML artifacts in instructions")
@@ -429,23 +478,15 @@ def _slug_filename(title):
 
 
 def _build_md(title, recipe, needs_review):
-    lines = []
-    if needs_review:
-        lines += ["> **NEEDS REVIEW**: Auto-generated — verify before cooking.", ""]
-    lines += [f"# {title}", ""]
-    if recipe.get("cook_time"):
-        lines.append(f"**Time:** {recipe['cook_time']}")
-    if recipe.get("servings"):
-        lines.append(f"**Servings:** {recipe['servings']}")
-    url = recipe.get("url", "")
-    lines += ["", f"*Adapted from [America's Test Kitchen]({url})*", "", "## Ingredients", ""]
-    for ing in recipe.get("ingredients_raw", []):
-        lines.append(f"- {ing}")
-    lines += ["", "## Instructions", ""]
-    for i, step in enumerate(recipe.get("instructions", []), 1):
-        lines.append(f"{i}. {step}")
-    lines += ["", "## Notes", "", ""]
-    return "\n".join(lines)
+    """Format a recipe entry as a .md file. Thin wrapper — see recipe_md.py
+    for the canonical builder every intake path shares."""
+    from recipe_md import build_recipe_md
+    return build_recipe_md(
+        title=title,
+        ingredients=recipe.get("ingredients", []),
+        instructions=recipe.get("instructions", []),
+        needs_review=needs_review,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -467,10 +508,11 @@ def _get_anthropic_client():
 # Main
 # ---------------------------------------------------------------------------
 
-def sync_atk(target=5, dry_run=False, force_login=False, collection_filter=None):
+def sync_atk(target=5, dry_run=False, force_login=False, collection_filter=None, lunch=False):
     """
-    Core sync logic. Can be called from CLI or imported by other scripts.
-    Returns list of recipe titles added to metadata.
+    Fetch new ATK recipes from saved collections and write to the Dropbox review queue.
+    Returns list of recipe dicts added to the queue.
+    lunch=True is noted but classification happens at Review UI add-time.
     """
     cfg = _load_config()
 
@@ -480,7 +522,6 @@ def sync_atk(target=5, dry_run=False, force_login=False, collection_filter=None)
     metadata_path = Path(cfg["metadata_path"])
     metadata      = json.loads(metadata_path.read_text(encoding="utf-8"))
     recipes       = metadata["recipes"]
-    recipes_dir   = metadata_path.parent / "recipes"
 
     # Build dedup sets
     known_urls   = {(e.get("source_url") or "").rstrip("/") for e in recipes.values()}
@@ -495,23 +536,28 @@ def sync_atk(target=5, dry_run=False, force_login=False, collection_filter=None)
         cfg, cookies = _ensure_auth(cfg, force=True)
         http = _make_client(cookies)
 
-    # Determine which collections to pull
-    all_collections = cfg["atk"].get("collection_name", [])
+    # Discover all collections from the ATK API
+    api_collections = _get_all_collections(http)  # [(name, slug)]
+    if not api_collections:
+        print("  [!] Could not fetch collections from ATK API")
+        return []
+
     if collection_filter:
-        collections = [c for c in all_collections if collection_filter.lower() in c.lower()]
+        cf = collection_filter.lower()
+        collections = [(n, s) for n, s in api_collections if cf in n.lower() or cf in s.lower()]
         if not collections:
-            print(f"No collection matching {collection_filter!r}. Available: {all_collections}")
+            print(f"No collection matching {collection_filter!r}.")
+            print(f"Available: {[n for n, s in api_collections]}")
             return []
     else:
-        collections = all_collections
+        collections = api_collections
 
     # Gather candidates from collections
     candidates = []
     seen_urls  = set()
 
     print(f"\nFetching from {len(collections)} collection(s)...")
-    for name in collections:
-        slug  = _collection_slug(name)
+    for name, slug in collections:
         items = _get_collection(http, slug)
         new   = 0
         for item in items:
@@ -530,8 +576,8 @@ def sync_atk(target=5, dry_run=False, force_login=False, collection_filter=None)
     ]
     print(f"  {len(candidates)} total across collections, {len(new_candidates)} not yet in metadata")
 
-    # Top-rated fallback if needed
-    if len(new_candidates) < target:
+    # Top-rated fallback only when no collection filter is active
+    if not collection_filter and len(new_candidates) < target:
         needed = target - len(new_candidates)
         print(f"\nFetching top-rated fallback (need {needed} more)...")
         for item in _get_top_rated(http):
@@ -563,84 +609,35 @@ def sync_atk(target=5, dry_run=False, force_login=False, collection_filter=None)
     for item in to_process:
         print(f"  Fetching: {item['title']}")
         recipe = _fetch_recipe(http, item["url"])
-        if not recipe or not recipe.get("ingredients_raw") or not recipe.get("instructions"):
+        if not recipe or not recipe.get("ingredients") or not recipe.get("instructions"):
             print(f"  [skip] Could not parse: {item['title']}")
             continue
         fetched.append(recipe)
-        print(f"  OK: {len(recipe['ingredients_raw'])} ingredients, {len(recipe['instructions'])} steps")
+        print(f"  OK: {len(recipe['ingredients'])} ingredients, {len(recipe['instructions'])} steps")
 
     if not fetched:
         print("No recipes successfully fetched.")
         return []
 
-    # Classify + parse ingredients via Haiku
-    print(f"\nClassifying {len(fetched)} recipe(s) with Haiku...")
-    ai_client         = _get_anthropic_client()
-    classifications   = {}
-    parsed_ingredients = {}
+    # Merge into queue file (Review UI handles classification at add-time)
+    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    existing = []
+    if RESULTS_PATH.exists():
+        try:
+            existing = json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    existing_urls = {(r.get("url") or "").rstrip("/") for r in existing}
+    new_items = [r for r in fetched if (r.get("url") or "").rstrip("/") not in existing_urls]
+    merged = existing + new_items
+    RESULTS_PATH.write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    for i in range(0, len(fetched), BATCH_SIZE):
-        batch = fetched[i:i + BATCH_SIZE]
-        classifications.update(_classify_batch(ai_client, batch))
-        parsed_ingredients.update(_parse_ingredients_batch(ai_client, batch))
+    for r in new_items:
+        print(f"  + {r['title']}")
+    print(f"\nDone. {len(new_items)} recipe(s) added to review queue ({len(fetched) - len(new_items)} already queued).")
+    print(f"Open the Recipe Review UI /New tab to approve.")
 
-    # Write metadata + .md files
-    added = []
-    for recipe in fetched:
-        title  = recipe["title"]
-        cls    = classifications.get(title, {})
-        struct = parsed_ingredients.get(title, [])
-        issues = _quality_issues(recipe)
-        needs_review = bool(issues)
-
-        if issues:
-            print(f"  [needs_review] {title}: {', '.join(issues)}")
-
-        filename   = _slug_filename(title)
-        total_min  = recipe.get("total_min", 0)
-        meal_type  = cls.get("meal_type") or ("weekend" if total_min > 60 else "weeknight")
-        method     = _infer_method(title, recipe.get("keywords", []), recipe.get("instructions", []))
-
-        # Write .md
-        md_path = recipes_dir / filename
-        md_path.write_text(_build_md(title, recipe, needs_review), encoding="utf-8")
-
-        # Metadata entry
-        recipes[title] = {
-            "filename":              filename,
-            "source":                "America's Test Kitchen",
-            "source_url":            recipe["url"],
-            "cuisine_type":          cls.get("cuisine", "American"),
-            "meal_type":             meal_type,
-            "health_classification": cls.get("health", "Moderate"),
-            "times_cooked":          0,
-            "last_cooked_date":      None,
-            "cooking_method":        method,
-            "status":                "active",
-            "ingredients_raw":       recipe["ingredients_raw"],
-            "ingredients":           struct,
-            "instructions":          recipe["instructions"],
-            "cook_time":             recipe.get("cook_time", ""),
-            "servings":              recipe.get("servings", ""),
-            "needs_review":          needs_review,
-            "prep_components":       [],
-            "prep_notes":            "",
-            "video_url":             recipe.get("video_url", ""),
-        }
-        added.append(title)
-        h = cls.get("health", "?")
-        c = cls.get("cuisine", "?")
-        t = recipe.get("cook_time", "")
-        print(f"  ✓ {title} [{h}] [{c}]{' ' + t if t else ''}")
-
-    if added:
-        metadata_path.write_text(
-            json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        print(f"\nDone. {len(added)} recipe(s) added to metadata.")
-        print(f"Remember to run generate_github_pages_data.py and push.")
-
-    return added
+    return new_items
 
 
 def main():
@@ -648,19 +645,91 @@ def main():
     parser.add_argument("--target",     type=int,  default=5,  help="Max new recipes to import (default 5)")
     parser.add_argument("--dry-run",    action="store_true",   help="Preview without writing")
     parser.add_argument("--force-login",action="store_true",   help="Re-login even if cookies are fresh")
-    parser.add_argument("--collection", type=str,  default="", help="Restrict to one collection name")
+    parser.add_argument("--collection", type=str,  default="", help="Restrict to one collection name (substring match)")
+    parser.add_argument("--lunch",      action="store_true",   help="Tag all imported recipes as lunch (meal_type=lunch, lunch_suitable=True)")
     args = parser.parse_args()
 
-    added = sync_atk(
+    sync_atk(
         target=args.target,
         dry_run=args.dry_run,
         force_login=args.force_login,
         collection_filter=args.collection or None,
+        lunch=args.lunch,
     )
-    if added:
-        print("\nAdded:")
-        for t in added:
-            print(f"  - {t}")
+
+
+def run_agent(topic: str = "") -> list[dict]:
+    """
+    fill_menu_ideas.py interface. Searches all ATK via Algolia using topic,
+    then supplements with saved collections. Writes to Dropbox queue.
+    """
+    cfg = _load_config()
+    if "atk" not in cfg or not cfg["atk"].get("email"):
+        print("  [!] ATK credentials not configured — skipping")
+        return []
+
+    cfg, cookies = _ensure_auth(cfg)
+    http = _make_client(cookies)
+    if not _verify_auth(http):
+        cfg, cookies = _ensure_auth(cfg, force=True)
+        http = _make_client(cookies)
+
+    metadata = json.loads(Path(cfg["metadata_path"]).read_text(encoding="utf-8"))
+    known_urls   = {(e.get("source_url") or "").rstrip("/") for e in metadata["recipes"].values()}
+    known_titles = {t.lower() for t in metadata["recipes"]}
+
+    existing_queue = []
+    if RESULTS_PATH.exists():
+        try:
+            existing_queue = json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    queued_urls = {(r.get("url") or "").rstrip("/") for r in existing_queue}
+
+    seen_urls = known_urls | queued_urls
+    candidates = []
+
+    # Primary: Algolia search on topic
+    if topic and topic != "atk collections":
+        print(f"  [ATK/Algolia] Searching: {topic!r}")
+        for hit in _search_algolia(topic, max_results=20):
+            url = hit["url"].rstrip("/")
+            if url not in seen_urls and hit["title"].lower() not in known_titles:
+                seen_urls.add(url)
+                candidates.append(hit)
+
+    # Secondary: saved collections
+    api_collections = _get_all_collections(http)
+    for name, slug in (api_collections or []):
+        for item in _get_collection(http, slug):
+            url = item["url"].rstrip("/")
+            if url not in seen_urls and item["title"].lower() not in known_titles:
+                seen_urls.add(url)
+                candidates.append(item)
+
+    if not candidates:
+        print("  [ATK] No new candidates found.")
+        return []
+
+    print(f"  [ATK] {len(candidates)} new candidates — fetching up to 10...")
+    fetched = []
+    for item in candidates[:20]:  # try up to 20, stop when we have 10
+        if len(fetched) >= 10:
+            break
+        recipe = _fetch_recipe(http, item["url"])
+        if not recipe or not recipe.get("ingredients") or not recipe.get("instructions"):
+            print(f"  [skip] Could not parse: {item['title']}")
+            continue
+        fetched.append(recipe)
+        print(f"  OK: {recipe['title']}")
+
+    # Write new items to queue
+    new_items = [r for r in fetched if (r.get("url") or "").rstrip("/") not in queued_urls]
+    merged = existing_queue + new_items
+    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RESULTS_PATH.write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"  [ATK] {len(new_items)} added to queue.")
+    return new_items
 
 
 if __name__ == "__main__":

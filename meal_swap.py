@@ -244,22 +244,19 @@ def _parse_ingredient(s: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _create_recipe_md(recipe: dict, source_url: str, source_name: str) -> Path:
+    """source_url/source_name aren't written into the file — the caller
+    persists source_url to recipe_metadata.json, and the GitHub Pages
+    template renders attribution from there. See recipe_md.py for the
+    canonical builder every intake path shares."""
+    from recipe_md import build_recipe_md
     title = recipe["title"]
     path = _recipes_dir() / (title.replace(" ", "_") + ".md")
-    lines = [
-        f"# {title}", "",
-        f"**Time**: {recipe.get('time', '')}  ",
-        f"**Yield**: {recipe.get('servings', '')}  ",
-        f"**Adapted from**: [{source_name}]({source_url})",
-        "", "## Ingredients", "",
-    ]
-    for ing in recipe.get("ingredients", []):
-        lines.append(f"- {ing}")
-    lines += ["", "## Instructions", ""]
-    for i, step in enumerate(recipe.get("instructions", []), 1):
-        lines.append(f"{i}. {step}")
-    lines.append("")
-    path.write_text("\n".join(lines), encoding="utf-8")
+    content = build_recipe_md(
+        title=title,
+        ingredients=recipe.get("ingredients", []),
+        instructions=recipe.get("instructions", []),
+    )
+    path.write_text(content, encoding="utf-8")
     return path
 
 

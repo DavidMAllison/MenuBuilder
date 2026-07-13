@@ -46,19 +46,37 @@ tell application "Reminders"
 	set targetList to list listName
 	delete (every reminder of targetList whose completed is false and body starts with "[menu]")
 	
-	-- Build a set of recently-completed reminder names (last 24 hours) to avoid re-adding them
-	-- 24h window handles same-day re-runs without dropping items from consecutive weekly lists
+	-- Build a set of recently-completed reminder names to avoid re-adding them.
+	-- Anchor to the plan start date (from CSV filename) rather than a rolling window.
+	-- Items completed before this plan was generated are treated as a prior week → not skipped → re-added correctly.
+	-- Items completed on or after the plan start date are already bought this week → skip.
 	set completedNames to {}
-	set cutoffDate to (current date) - (24 * hours)
+	try
+		set csvBase to do shell script "basename " & quoted form of latestCSV & " .csv"
+		set planDateStr to do shell script "echo " & quoted form of csvBase & " | sed 's/shopping_//'"
+		set planParts to do shell script "echo " & quoted form of planDateStr & " | tr '-' ' '"
+		set cutoffDate to current date
+		set day of cutoffDate to 1
+		set year of cutoffDate to ((word 1 of planParts) as integer)
+		set month of cutoffDate to ((word 2 of planParts) as integer)
+		set day of cutoffDate to ((word 3 of planParts) as integer)
+		set time of cutoffDate to 0
+	on error
+		set cutoffDate to (current date) - (1 * days) -- fallback: 24-hour window
+	end try
 	set completedReminders to (every reminder of targetList whose completed is true)
 	repeat with r in completedReminders
-		if (completion date of r) > cutoffDate then
-			set end of completedNames to (name of r) as string
-		end if
+		-- Guard against missing value on completion date (crashes the script without try)
+		try
+			if (completion date of r) ≥ cutoffDate then
+				set end of completedNames to (name of r) as string
+			end if
+		end try
 	end repeat
 	
 	-- Keep tell targetList outside the loop — opening the connection once is far faster
 	-- and prevents crashes on large lists
+	set addedCount to 0
 	tell targetList
 		repeat with aLine in itemLines
 			set aLine to aLine as string
@@ -93,6 +111,9 @@ tell application "Reminders"
 							else
 								make new reminder with properties {name:reminderName, body:"[menu] " & reminderNotes}
 							end if
+							set addedCount to addedCount + 1
+						on error errMsg
+							do shell script "echo " & quoted form of ("FAIL: " & reminderName & " — " & errMsg) & " >> /tmp/shopping_list.log"
 						end try
 					end if
 				end if
@@ -101,5 +122,7 @@ tell application "Reminders"
 	end tell
 end tell
 
-display notification "Shopping list ready in Reminders" with title "Weekly Shopping"
+display notification ((addedCount as text) & " items added to Reminders") with title "Weekly Shopping"
+
+
 

@@ -200,6 +200,26 @@
 - `cleanup_agent.py --check-condiments` checks source_url liveness and missing images across all condiments
 - Inventory tracking deferred — lower priority
 
+### Workflow Testbed — Sandboxed Planning Runs
+**Status**: COMPLETE Jun 29 2026. Parallel effort in sms-assistant project.
+
+- `set_test_mode(enabled)` and `cleanup_test_data()` MCP tools in `menu_server.py`
+- All file I/O redirects to `test_output/` when test mode is on; app launches, SMS, and PENDING_FILE clear are suppressed
+- `test_workflow.py`: calls workflow functions directly (no MCP transport), 25 assertions, self-cleaning. Run: `python3 test_workflow.py [--keep] [--week YYYY-MM-DD]`
+- `test_output/` in `.gitignore`
+
+### MCP Write Permission — Dual-User Context
+**Status**: Planned.
+
+`update_plan_meal` (and any other MCP tool that writes to `/Users/Shared/cooking/`) fails with `[Errno 1] Operation not permitted` when called from the Claude Code console. Root cause: the Sunday SMS workflow runs as `allisonbot` (via launchd), so plan files in `/Users/Shared/cooking/weeklyplan/` are owned by `allisonbot`. The Claude Code MCP server process runs as `davidallison` and cannot write those files even though they're `0o666` — likely a TCC restriction on `/Users/Shared/` for the MCP process.
+
+**Workaround**: edit the plan JSON directly (as Claude Code can write files) when a console-side swap is needed.
+
+**Fix options to investigate**:
+- Run the MCP server as `allisonbot` (via launchd) for all callers — single user context
+- Pre-create plan files as `davidallison`-owned on the console path, let SMS update in place
+- Check `/Users/Shared/cooking/` directory-level permissions (`ls -la /Users/Shared/cooking/`) — may need `chmod g+w` on the directory itself, not just the files
+
 ### Meal Costing (Long-Term)
 - Once price history accumulates, cost recipes using `ingredients` array + price-per-unit averages from `price_history.json`
 - MenuBuilder will skip entries missing `price_per_unit` gracefully
