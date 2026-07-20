@@ -42,6 +42,10 @@ A personal meal planning system built around real family constraints — health 
 
 ```
 suggest_meals.py              # Candidate meal filter — run before each weekly plan
+workflow_smoketest.py         # Pre-flight check — GitHub publish, .md structure, state paths, app binaries, TCC (26 checks)
+restart_mcp.sh                # Kill stale menu_server.py MCP subprocess(es) so the next tool call runs current code
+ruff.toml                     # Lint config (pyflakes F + pycodestyle E4/E7/E9)
+requirements.txt              # Pinned dependency versions
 process_feedback_queue.py     # Drain SMS feedback queue into feedback_current.json
 meal_swap.py                  # Mid-week meal swap — all swap logic lives here
 send_menu_partner.py          # Send weekly menu to partner for approval via Keanu
@@ -78,8 +82,8 @@ mcp/
   menu_server.py              # MCP server — exposes workflow tools over stdio; get_prep_guide is on-demand with mode=weekly|tonight|auto
   README.md                   # MCP setup and Claude Code wiring instructions
 recipe_metadata.json          # (not committed) Single source of truth for all recipe data
-menu_activity.json            # (not committed) Active workflow state (created by MCP server)
 config.json                   # (not committed) Local paths and settings — see config.example.json
+.env.example                  # Template for secrets (YouTube API key, ATK credentials, Flask secret) — copy to .env
 CLAUDE.md                     # AI assistant context and workflow instructions
 backlog.md                    # Planned features
 release-notes.md              # Shipped features log
@@ -92,14 +96,14 @@ or any MCP-compatible client (e.g. Keanu via SMS):
 
 | Tool | What it does |
 |---|---|
-| `get_workflow_state` | Returns current workflow step and state data |
+| `get_workflow_state` | Returns current workflow step and state data; flags `stale_code_warning` if `menu_server.py` changed on disk since this process started (run `restart_mcp.sh`) |
 | `start_menu_workflow` | Drains feedback queue, loads last week, initializes activity |
 | `log_meal_feedback` | Records last-week ratings; `"done"` finalizes and advances state |
 | `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week |
 | `advance_to_meal_approval` | Writes selected meals into menu_activity.json; bridges local SMS phase to MCP bridge phase |
 | `swap_meal` | Replaces one day's meal (auto-picks or takes explicit name) |
-| `approve_menu` | Sends selected meals to Ashley via Keanu for signoff |
-| `handle_ashley_reply` | Processes Ashley's approval or swap request; auto-activates idea recipes |
+| `approve_menu` | Sends selected meals to Ashley via Keanu for signoff; optional `expected_selected_meals` refuses to send if the caller's local mirror has drifted from the actual workflow state |
+| `handle_ashley_reply` | Processes Ashley's approval or swap request; a recipe URL in her reply is fetched and swapped in directly instead of stranding the workflow; auto-activates idea recipes |
 | `activate_idea_recipe` | Activates a pending idea from pasted markdown content or URL auto-fetch; `content` is optional — if empty and `source_url` given, fetch is attempted first; returns `needs_content: True` if fetch fails |
 | `finalize_plan` | Generates plan + shopping CSV, launches apps, notifies admin |
 | `get_prep_guide` | On-demand prep guide — `mode=weekly` (remaining meals this week) or `mode=tonight` (tonight's dinner); applies food-safety classification automatically |
@@ -111,7 +115,11 @@ or any MCP-compatible client (e.g. Keanu via SMS):
 | `process_recipe_url` | Check for a similar existing recipe by URL or fuzzy title, add if new, optionally swap into a plan day; `force_add=true` skips similarity check |
 | `process_recipe_image` | Extract a recipe from a photo (cookbook page) via Claude vision and add to the collection; `force_add=true` re-runs with same image after user confirms |
 
-Activity state lives in `menu_activity.json` (MenuBuilder's territory). See `mcp/README.md`
+Runtime state written by both this project and the SMS assistant (`menu_activity.json`,
+the weekly plan/shopping CSV, `lunch_state.json`, `feedback_queue.json`, the outbox spool)
+lives in `/Users/Shared/cooking-state/` — a shared directory outside Dropbox with an
+inheritable ACL, so ownership doesn't matter across the two Mac accounts that write to it.
+Recipe data (`recipe_metadata.json`, recipes, images) stays in Dropbox. See `mcp/README.md`
 for setup and Claude Code wiring instructions.
 
 ## Usage
