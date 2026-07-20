@@ -610,7 +610,7 @@ def this_week():
 @login_required
 def lunch_pick_api():
     """Return Ashley's current weekly lunch pick with recipe detail."""
-    lunch_state_file = Path("/Users/Shared/cooking/lunch_state.json")
+    lunch_state_file = Path("/Users/Shared/cooking-state/lunch_state.json")
     if not lunch_state_file.exists():
         return jsonify({"status": "none"})
     try:
