@@ -24,7 +24,6 @@ import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
 from pathlib import Path
 
 _ROTATION_STATE = Path(__file__).parent / "agent_rotation_state.json"
@@ -475,7 +474,6 @@ def translate_title(title: str) -> "str | None":
 # Prep classification — delegated to prep_utils
 # ---------------------------------------------------------------------------
 
-from prep_utils import classify_prep  # noqa: E402  (after sys.path setup above)
 
 
 # ---------------------------------------------------------------------------
@@ -810,10 +808,10 @@ def main():
     if not new_recipes:
         print("\nNothing new in the queue.")
     else:
-        print(f"\nNew recipes available in Review UI (/New view):")
+        print("\nNew recipes available in Review UI (/New view):")
         for r in new_recipes:
             print(f"  + {r.get('title','?')} ({r.get('source','?')})")
-        print(f"\nAgents wrote results to Dropbox/agent_results/ — open the Recipe Review UI and use Add to Collection.")
+        print("\nAgents wrote results to Dropbox/agent_results/ — open the Recipe Review UI and use Add to Collection.")
 
     # Post-run metadata cleanup — fix cuisine/source/meal_type + classify missing health/time
     print("\n--- Post-run cleanup ---")

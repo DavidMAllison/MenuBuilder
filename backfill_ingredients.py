@@ -24,7 +24,6 @@ import argparse
 import json
 import os
 import re
-import sys
 from pathlib import Path
 
 import anthropic
@@ -179,7 +178,7 @@ def main():
     if args.dry_run:
         for r in eligible:
             print(f"  [DRY RUN] Would parse: {r['title']} ({len(r['ingredients_raw'])} ingredients)")
-        print(f"\n[DRY RUN] No changes written.")
+        print("\n[DRY RUN] No changes written.")
         return
 
     # Initialize Anthropic client

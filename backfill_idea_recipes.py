@@ -173,7 +173,7 @@ def main():
         instr = result.get("instructions", [])
 
         if not ingr and not instr:
-            print(f"    FAIL: got empty ingredients and instructions")
+            print("    FAIL: got empty ingredients and instructions")
             skipped_fetch_fail.append(name)
             continue
 

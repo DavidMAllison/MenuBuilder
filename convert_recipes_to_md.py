@@ -398,7 +398,7 @@ def build_markdown(title, author, source, time_str, yield_str, body):
     if source:
         meta.append(f'Source: {source}')
     elif author:
-        meta.append(f'Source: America\'s Test Kitchen')
+        meta.append('Source: America\'s Test Kitchen')
     if time_str:
         meta.append(f'Time: {time_str}')
     if yield_str:

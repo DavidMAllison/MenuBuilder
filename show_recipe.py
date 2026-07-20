@@ -2,7 +2,6 @@
 """Open a recipe as a styled HTML page in the browser."""
 
 import json
-import os
 import subprocess
 import sys
 import tempfile

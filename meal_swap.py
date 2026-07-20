@@ -441,7 +441,7 @@ def execute_swap(
             elif incoming_content:
                 recipe_data = incoming_content
             else:
-                return {"success": False, "message": f"Idea recipe requires incoming_url or incoming_content"}
+                return {"success": False, "message": "Idea recipe requires incoming_url or incoming_content"}
 
     elif incoming_url or incoming_content:
         # Scenario C: brand new
