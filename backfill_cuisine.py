@@ -12,7 +12,6 @@ import html
 import json
 import os
 import re
-import sys
 from pathlib import Path
 
 import anthropic
@@ -147,7 +146,7 @@ def main():
         print(f"  {title[:53]:<55} {cuisine}")
 
     if unmatched:
-        print(f"\n[!] No classification returned for:")
+        print("\n[!] No classification returned for:")
         for t in unmatched:
             print(f"    {t}")
 

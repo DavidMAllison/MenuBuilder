@@ -113,7 +113,7 @@ def main():
                     for c in components:
                         print(f"    - {c}")
                 else:
-                    print(f"    (no advance prep)")
+                    print("    (no advance prep)")
                 if notes:
                     print(f"    Note: {notes}")
             else:

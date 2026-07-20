@@ -67,9 +67,9 @@ def generate_report(case_results: list[dict], run_id: str) -> str:
 
     lines = [
         f"# Chef Agent Eval — {run_id}",
-        f"",
+        "",
         f"Cases: {len(case_results)} &nbsp; Automated failures: {failures}",
-        f"",
+        "",
         "---",
         "",
     ]
@@ -78,16 +78,16 @@ def generate_report(case_results: list[dict], run_id: str) -> str:
         overall = "PASS" if c["t1_passed"] and c["t2_passed"] else "FAIL"
         lines += [
             f"## [{overall}] {c['id']}",
-            f"",
+            "",
             f"**Intent:** {c['description']}  ",
             f"**Query:** `{c['query']}`  ",
             f"**Results returned:** {len(c['results'])}",
-            f"",
-            f"| Tier | Check | Result |",
-            f"|------|-------|--------|",
+            "",
+            "| Tier | Check | Result |",
+            "|------|-------|--------|",
             f"| 1 | Source routing | {'PASS' if c['t1_passed'] else 'FAIL'} — {c['t1_detail']} |",
             f"| 2 | Parse completeness | {'PASS' if c['t2_passed'] else 'FAIL'} — {c['t2_detail']} |",
-            f"",
+            "",
         ]
 
         lines.append("**Results:**")

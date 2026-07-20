@@ -21,7 +21,6 @@ import argparse
 import json
 import os
 import re
-import sys
 from pathlib import Path
 
 import anthropic
@@ -117,7 +116,7 @@ def main():
             has_prep = bool(r.get("prep_components"))
             has_instructions = bool(r.get("instructions"))
             print(f"  [DRY RUN] {name} | method={method} prep={has_prep} instructions={has_instructions}")
-        print(f"\n[DRY RUN] No changes written.")
+        print("\n[DRY RUN] No changes written.")
         return
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")

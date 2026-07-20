@@ -23,7 +23,6 @@ import argparse
 import json
 import os
 import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -635,7 +634,7 @@ def sync_atk(target=5, dry_run=False, force_login=False, collection_filter=None,
     for r in new_items:
         print(f"  + {r['title']}")
     print(f"\nDone. {len(new_items)} recipe(s) added to review queue ({len(fetched) - len(new_items)} already queued).")
-    print(f"Open the Recipe Review UI /New tab to approve.")
+    print("Open the Recipe Review UI /New tab to approve.")
 
     return new_items
 

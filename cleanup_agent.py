@@ -28,7 +28,6 @@ import argparse
 import json
 import os
 import re
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -883,7 +882,7 @@ def fix_classify(apply: bool) -> None:
         METADATA_PATH.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"\nApplied {applied} classifications to {METADATA_PATH}")
     else:
-        print(f"\nRun with --fix-classify --apply to write these to recipe_metadata.json")
+        print("\nRun with --fix-classify --apply to write these to recipe_metadata.json")
 
 # ---------------------------------------------------------------------------
 # Fix: metadata (cuisine, source, meal_type, needs_review) — no HTTP, no model

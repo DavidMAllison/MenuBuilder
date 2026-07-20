@@ -17,7 +17,6 @@ Usage:
 import argparse
 import json
 import re
-import sys
 from pathlib import Path
 
 METADATA_PATH = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
