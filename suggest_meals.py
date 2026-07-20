@@ -13,8 +13,9 @@ Output: ranked candidate list per slot category, filtered by recency, health, va
 import json
 import argparse
 import os
+import random
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from collections import Counter, defaultdict
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.json')
@@ -288,6 +289,8 @@ def load_candidates(quick_nights=False):
     for name, r in recipes.items():
         if r.get('status') in ('disliked', 'ignored'):
             continue
+        if r.get('recommend_hold'):
+            continue
         if is_hiatus(name):
             continue
 
@@ -379,7 +382,9 @@ def print_group(title, items, limit=6):
     if not items:
         return
     print(f'\n  {title}')
-    for c in sorted(items, key=score)[:limit]:
+    shuffled = list(items)
+    random.shuffle(shuffled)
+    for c in sorted(shuffled, key=score)[:limit]:
         time_str = f"{c['minutes']} min" if c['minutes'] < 900 else '?'
         if c['method'] == 'slow_cooker':
             time_str = 'slow cooker'
@@ -424,7 +429,9 @@ def main():
     if args.json:
         import json as _json
         out = []
-        for c in sorted(candidates, key=score):
+        shuffled = list(candidates)
+        random.shuffle(shuffled)
+        for c in sorted(shuffled, key=score):
             time_str = f"{c['minutes']} min" if c['minutes'] < 900 else '?'
             if c['method'] == 'slow_cooker':
                 time_str = 'slow cooker'
