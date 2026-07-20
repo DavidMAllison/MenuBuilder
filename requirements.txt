@@ -1,0 +1,17 @@
+# MenuBuilder — pinned to the versions in .venv as of 2026-07-18 (Python 3.12).
+# Top-level packages plus directly-imported transitive deps (httpx, PyYAML, requests).
+# Install: .venv/bin/pip install -r requirements.txt
+
+anthropic==0.104.1
+beautifulsoup4==4.14.3
+chromadb==1.5.9
+cryptography==48.0.0
+Flask==3.1.3
+httpx==0.28.1
+mcp==1.27.1
+playwright==1.60.0
+python-dotenv==1.2.2
+PyYAML==6.0.3
+requests==2.34.2
+sentence-transformers==5.6.0
+yt-dlp==2026.3.17
