@@ -16,7 +16,7 @@ from pathlib import Path
 import httpx
 
 CONFIG_PATH      = Path(__file__).parent / "config.json"
-LUNCH_STATE_FILE = Path("/Users/Shared/cooking/lunch_state.json")
+LUNCH_STATE_FILE = Path("/Users/Shared/cooking-state/lunch_state.json")
 KEANU_URL        = "http://localhost:5050/send"
 
 config          = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}

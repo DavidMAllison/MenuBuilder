@@ -13,13 +13,12 @@ Usage:
 """
 
 import json
-import os
 import re
 import sqlite3
 import subprocess
 import sys
 import urllib.request
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 # ── Colors (strip when piped to file) ─────────────────────────────────────────
@@ -34,10 +33,11 @@ DIM = lambda s: _c("2",  s)
 # ── Canonical paths ────────────────────────────────────────────────────────────
 HOME      = Path.home()
 DROPBOX   = HOME / "Dropbox/LLMContext/cooking"
-PLANS_DIR = DROPBOX / "weeklyplan"
+STATE_DIR = Path("/Users/Shared/cooking-state")
+PLANS_DIR = STATE_DIR / "weeklyplan"
 META_PATH = DROPBOX / "recipe_metadata.json"
-INV_PATH  = Path("/Users/Shared/cooking/inventory.json")
-LUNCH_PATH = Path("/Users/Shared/cooking/lunch_state.json")
+INV_PATH  = STATE_DIR / "inventory.json"
+LUNCH_PATH = STATE_DIR / "lunch_state.json"
 SCHED_PATH = HOME / "projects/personal/FamilySchedule/schedule.json"
 PROJECT   = HOME / "projects/personal/MenuBuilder"
 FEEDBACK  = PLANS_DIR / "feedback_current.json"
@@ -246,7 +246,7 @@ def _check_review_server():
         raise AssertionError(f"not reachable on :5051 — is recipe_review_server running?  ({e})")
 
 def _check_mcp_state():
-    state_path = PROJECT / "mcp/menu_activity.json"
+    state_path = STATE_DIR / "menu_activity.json"  # keep in sync with mcp/menu_server.py ACTIVITY_FILE
     if not state_path.exists():
         return "no state file (idle)"
     data = json.loads(state_path.read_text())

@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from datetime import date
 
-INVENTORY_FILE = Path("/Users/Shared/cooking/inventory.json")
+INVENTORY_FILE = Path("/Users/Shared/cooking-state/inventory.json")
 
 # Display order for categories
 CATEGORY_ORDER = ["Proteins", "Produce", "Dairy", "Pantry", "Dry Goods", "Frozen Meals", "Other"]

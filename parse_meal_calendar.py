@@ -8,7 +8,7 @@ from datetime import date, timedelta
 
 
 def find_latest():
-    d = os.path.expanduser("~/Dropbox/LLMContext/cooking/weeklyplan/")
+    d = "/Users/Shared/cooking-state/weeklyplan/"
     plans = sorted(glob.glob(os.path.join(d, "mealplan_*.json")), reverse=True)
     return plans[0] if plans else None
 
@@ -101,7 +101,7 @@ def main():
         ]))
 
     try:
-        with open("/Users/Shared/cooking/lunch_state.json") as f:
+        with open("/Users/Shared/cooking-state/lunch_state.json") as f:
             ls = json.load(f)
         if ls.get("status") == "selected" and ls.get("current_pick"):
             lunch_name = ls["current_pick"]

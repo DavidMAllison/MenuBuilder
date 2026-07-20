@@ -8,16 +8,16 @@ Usage:
 
 Run at the start of the weekly menu workflow, before suggest_meals.py.
 
-Queue file:   /Users/Shared/cooking/feedback_queue.json
-Output:       /Users/Shared/cooking/weeklyplan/feedback_current.json
+Queue file:   /Users/Shared/cooking-state/feedback_queue.json
+Output:       /Users/Shared/cooking-state/weeklyplan/feedback_current.json
 """
 
 import json
 import sys
 from pathlib import Path
 
-QUEUE_PATH = Path("/Users/Shared/cooking/feedback_queue.json")
-FEEDBACK_PATH = Path("/Users/Shared/cooking/weeklyplan/feedback_current.json")
+QUEUE_PATH = Path("/Users/Shared/cooking-state/feedback_queue.json")
+FEEDBACK_PATH = Path("/Users/Shared/cooking-state/weeklyplan/feedback_current.json")
 
 
 def load_queue():
