@@ -29,9 +29,11 @@ import difflib
 import io
 import json
 import os
+import random
 import re
 import subprocess
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -53,29 +55,37 @@ _CONFIG_PATH = MENUBUILDER_DIR / "config.json"
 _CONFIG = json.loads(_CONFIG_PATH.read_text())
 METADATA_PATH = Path(_CONFIG["metadata_path"])
 _CUISINE_FAMILY_MAP: dict[str, str] = _CONFIG.get("cuisine_family_map", {})
-WEEKLYPLAN_DIR = METADATA_PATH.parent / "weeklyplan"
+STATE_DIR = Path(_CONFIG.get("state_dir", "/Users/Shared/cooking-state"))
+WEEKLYPLAN_DIR = STATE_DIR / "weeklyplan"
 RECIPES_DIR = METADATA_PATH.parent / "recipes"
 RECIPE_IMAGES_DIR = METADATA_PATH.parent / "recipe_images"
 CONDIMENTS_PATH   = METADATA_PATH.parent / "condiments.json"
 FEEDBACK_CURRENT_FILE = WEEKLYPLAN_DIR / "feedback_current.json"
 
-ACTIVITY_FILE = MENUBUILDER_DIR / "menu_activity.json"
-OUTBOX_FILE = Path("/Users/Shared/sms-assistant/.outbox.json")
+ACTIVITY_FILE = STATE_DIR / "menu_activity.json"
+OUTBOX_DIR = STATE_DIR / "outbox"
 PENDING_FILE = Path("/Users/Shared/sms-assistant/menu_feedback_pending.json")
-LUNCH_STATE_FILE = Path("/Users/Shared/cooking/lunch_state.json")
+LUNCH_STATE_FILE = STATE_DIR / "lunch_state.json"
 
 PARTNER_HANDLE = _CONFIG.get("partner_handle", "")          # Ashley
 ADMIN_HANDLE = _CONFIG.get("admin_handle", "")              # David (optional in config)
 
-# Ensure files written by this process (davidallison or allisonbot) are group-writable
-# so the other user can update them (meal swaps, plan updates, etc.).
-os.umask(0o000)
 GITHUB_BASE_URL = _CONFIG.get("github_pages_base_url", "")
 DROPBOX_BASE_URL = _CONFIG.get("dropbox_recipe_base_url", "")
 
 DAYS_ORDER = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 ADULT_NAMES = set(n.lower() for n in _CONFIG.get("adult_names", []))
 _GARDEN_HERBS = set(h.lower() for h in _CONFIG.get("garden_herbs", []))
+
+# ---------------------------------------------------------------------------
+# Process staleness detection — this server is a long-lived stdio subprocess
+# per Claude Code session/terminal. If the source file changes on disk after
+# the process started (e.g. a bug fix mid-session), the running process keeps
+# serving the OLD code until it's killed and respawned. get_workflow_state()
+# surfaces this so a stale session is obvious instead of silently confusing.
+# ---------------------------------------------------------------------------
+_SERVER_STARTED_AT = datetime.now().isoformat()
+_SERVER_FILE_MTIME_AT_START = os.path.getmtime(__file__)
 
 # ---------------------------------------------------------------------------
 # Test mode — set via set_test_mode() MCP tool; redirects all file I/O
@@ -901,6 +911,8 @@ def _load_candidates(quick_days: list) -> list:
     for name, r in recipes.items():
         if r.get("status") != "active":
             continue
+        if r.get("recommend_hold"):
+            continue
         if any(h in name.lower() for h in HIATUS_PROTEINS):
             continue
 
@@ -954,10 +966,18 @@ def _load_candidates(quick_days: list) -> list:
             "inv_specific": inv_specific,
             "inv_pantry": inv_pantry,
         }
-        c["score"] = _candidate_score(c)
+        # Small jitter so near-equal candidates rotate week to week instead of
+        # the same argmin winning forever; kept below the health bonus (15) and
+        # far below the never-cooked age bonus (~104) so big factors still rule
+        c["score"] = _candidate_score(c) + random.uniform(-4, 4)
         candidates.append(c)
 
-    return sorted(candidates, key=lambda c: c["score"])
+    # Shuffle before the stable sort so score ties (common among never-cooked
+    # recipes, which share the capped age bonus) don't resolve to metadata file
+    # order and clump by same-cuisine import batch
+    random.shuffle(candidates)
+    candidates.sort(key=lambda c: c["score"])
+    return candidates
 
 
 def _direction_matches_cuisine(cuisine: str, direction_lower: str) -> bool:
@@ -974,6 +994,8 @@ def _parse_cuisine_slots(direction: str) -> dict:
     if not direction:
         return {}
     d_lower = direction.lower()
+    for word, digit in (("two", "2"), ("three", "3"), ("four", "4"), ("five", "5")):
+        d_lower = re.sub(rf"\b{word}\b", digit, d_lower)
     slots: dict = {}
 
     def _set_slot(family: str, count: int) -> None:
@@ -1004,6 +1026,13 @@ def _parse_cuisine_slots(direction: str) -> dict:
 
 # Max meals per protein type per week (all others default to 1)
 _PROTEIN_CAPS = {"Chicken": 2}
+
+# Max meals per cuisine family per week unless the direction explicitly
+# quantifies that family (e.g. "three Mexican") via _parse_cuisine_slots
+_DEFAULT_CUISINE_FAMILY_CAP = 2
+
+# Each day picks randomly among this many top-ranked eligible candidates
+_PICK_CHOICE_SIZE = 3
 
 
 def _parse_eating_out_days(constraints: str, schedule_notes: list) -> list:
@@ -1039,15 +1068,17 @@ def _select_meals(
     recipes = _load_metadata()
     if cuisine_direction and cuisine_direction.lower() not in ("what we've got", ""):
         c_lower = cuisine_direction.lower()
+        new_matches = []
         for name, meta in recipes.items():
             cuisine_val = meta.get("cuisine_type", meta.get("cuisine", ""))
             if (
                 meta.get("times_cooked", 0) == 0
                 and meta.get("status") not in ("disliked", "ignored")
+                and not meta.get("recommend_hold")
                 and _direction_matches_cuisine(cuisine_val, c_lower)
                 and not any(c["name"] == name for c in pool)
             ):
-                pool.insert(0, {
+                new_matches.append({
                     "name": name,
                     "cuisine": meta.get("cuisine_type", meta.get("cuisine", "")),
                     "health": meta.get("health", "Moderate"),
@@ -1058,6 +1089,8 @@ def _select_meals(
                     "meal_type": "Weeknight",
                     "score": -100,
                 })
+        random.shuffle(new_matches)
+        pool[:0] = new_matches
 
     cuisine_slots = _parse_cuisine_slots(cuisine_direction or "")
     quick_set = {d.lower() for d in quick_days}
@@ -1072,6 +1105,9 @@ def _select_meals(
         for day in days_subset:
             if day in selected:
                 continue
+            # Collect the top eligible candidates, then choose one at random —
+            # always taking the first meant the same argmin won every week
+            eligible = []
             for c in pool:
                 if c["name"] in selected.values():
                     continue
@@ -1086,17 +1122,24 @@ def _select_meals(
                 cap = _PROTEIN_CAPS.get(protein, 1)
                 if protein_counts.get(protein, 0) >= cap and len(pool) > len(days_subset) * 2:
                     continue
-                # Enforce per-cuisine slots when direction explicitly quantifies them
+                # Cuisine family cap: default 2/week, overridden when the
+                # direction explicitly quantifies a family ("three Mexican")
                 fam = _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", ""))
-                slot_cap = cuisine_slots.get(fam)
-                if slot_cap is not None and cuisine_family_counts.get(fam, 0) >= slot_cap and len(pool) > len(days_subset) * 2:
+                slot_cap = cuisine_slots.get(fam, _DEFAULT_CUISINE_FAMILY_CAP)
+                if cuisine_family_counts.get(fam, 0) >= slot_cap and len(pool) > len(days_subset) * 2:
                     continue
-                selected[day] = c["name"]
-                protein_counts[protein] = protein_counts.get(protein, 0) + 1
-                cuisine_family_counts[fam] = cuisine_family_counts.get(fam, 0) + 1
-                if c.get("health") == "Indulgent":
-                    indulgent_count += 1
-                break
+                eligible.append(c)
+                if len(eligible) >= _PICK_CHOICE_SIZE:
+                    break
+            if not eligible:
+                continue
+            c = random.choice(eligible)
+            fam = _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", ""))
+            selected[day] = c["name"]
+            protein_counts[c["protein"]] = protein_counts.get(c["protein"], 0) + 1
+            cuisine_family_counts[fam] = cuisine_family_counts.get(fam, 0) + 1
+            if c.get("health") == "Indulgent":
+                indulgent_count += 1
 
     _pick(["Sat", "Sun"], require_weekend=True)
     quick_abbrevs = [a for a in DAYS_ORDER if a.lower() in quick_set or a[:3].lower() in quick_set]
@@ -1179,16 +1222,29 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
         cuisine_bonus = -1 if direction_lower and meta.get("cuisine_type", meta.get("cuisine", "")).lower() in direction_lower else 0
         return (times, cuisine_bonus)
 
+    # Shuffle before the stable sort — idea candidates are all ties (times_cooked
+    # 0), so without this the slice below is just metadata file order and whole
+    # protein/cuisine groups can be missing from the list Haiku picks from
+    random.shuffle(active_candidates)
+    random.shuffle(idea_candidates)
     active_candidates.sort(key=_score)
     idea_candidates.sort(key=_score)
 
-    # Prepend ideas when user signals wanting something new; otherwise append
+    # Lead with ideas when user signals wanting something new; otherwise lead
+    # with actives. Slice both groups so untried recipes are always represented
+    # (a pure [:60] cut left them off the list entirely once actives grew)
     if want_idea:
-        candidates = idea_candidates + active_candidates
+        candidates = idea_candidates[:50] + active_candidates[:50]
     else:
-        candidates = active_candidates + idea_candidates
+        candidates = active_candidates[:50] + idea_candidates[:50]
 
-    candidate_names = [name for name, _ in candidates[:60]]
+    candidate_names = [name for name, _ in candidates]
+
+    protein_counts: dict = {}
+    for m in selected.values():
+        p = _get_protein(m)
+        protein_counts[p] = protein_counts.get(p, 0) + 1
+    protein_summary = ", ".join(f"{p}: {n}" for p, n in sorted(protein_counts.items()))
 
     try:
         client = _anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
@@ -1203,7 +1259,16 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
                     f"User feedback: \"{text}\"\n\n"
                     f"Available replacements (in preference order): {json.dumps(candidate_names)}\n\n"
                     "Identify which meals to replace (by day abbreviation Mon/Tue/Wed/Thu/Fri/Sat/Sun) "
-                    "and choose the best replacement from the available list. "
+                    "and choose the best replacement from the available list.\n"
+                    "Rules:\n"
+                    "- The replacement must be the kind of food the user asked for: if they ask "
+                    "for fish or a specific protein, only pick a dish of that protein — a dish "
+                    "that merely shares a cooking method (e.g. 'grilled') is wrong.\n"
+                    f"- Proteins already in the plan: {protein_summary or 'none'}. Keep variety — "
+                    "avoid pushing chicken above 2 meals or any other protein above 1, unless "
+                    "the user asked for that protein.\n"
+                    '- If nothing in the list fits the request, use "NO_MATCH" as the "to" value '
+                    "for that day.\n\n"
                     "Return JSON array only, no explanation:\n"
                     '[{"day": "Mon", "to": "Replacement Meal Name"}, ...]\n\n'
                     "If the feedback doesn't clearly request any changes, return []."
@@ -1223,6 +1288,10 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
             day = (swap.get("day") or "").strip()
             to_meal = (swap.get("to") or "").strip()
             if day and to_meal and day in new_selected:
+                if to_meal.upper() == "NO_MATCH":
+                    # Nothing in the collection fits the request — surface it
+                    # instead of silently substituting something unrelated
+                    return None
                 to_lower = to_meal.lower()
                 is_placeholder = any(kw in to_lower for kw in _SKIP_FEEDBACK_KEYWORDS)
                 if not is_placeholder and to_lower not in candidate_set:
@@ -1810,11 +1879,16 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
 # ---------------------------------------------------------------------------
 
 def _send_outbox(handle: str, text: str) -> None:
+    # One create-exclusive spool file per message — safe for concurrent writers
+    # across processes and Mac accounts. Keep in sync with sms-assistant
+    # tools.queue_outbox.
     if not handle:
         return
-    outbox = json.loads(OUTBOX_FILE.read_text()) if OUTBOX_FILE.exists() else []
-    outbox.append({"handle": handle, "text": text})
-    OUTBOX_FILE.write_text(json.dumps(outbox))
+    OUTBOX_DIR.mkdir(exist_ok=True)
+    path = OUTBOX_DIR / f"{time.time_ns()}_{os.getpid()}.json"
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps({"handle": handle, "text": text}))
 
 
 # ---------------------------------------------------------------------------
@@ -1907,8 +1981,25 @@ def get_workflow_state() -> dict:
       awaiting_ashley_signoff — sent to Ashley; waiting for her reply
       awaiting_idea_activation — ideas on menu need content before finalizing
       complete                — plan written, apps launched, prep guide sent
+
+    Also includes 'server_started_at' and, if the source file on disk has
+    changed since this process started, 'stale_code_warning' — this process
+    is a long-lived subprocess and won't pick up code edits until restarted
+    (run restart_mcp.sh, or kill the menu_server.py process for this session).
     """
-    return _load_activity()
+    result = _load_activity()
+    result["server_started_at"] = _SERVER_STARTED_AT
+    try:
+        current_mtime = os.path.getmtime(__file__)
+        if current_mtime != _SERVER_FILE_MTIME_AT_START:
+            result["stale_code_warning"] = (
+                "menu_server.py changed on disk since this process started — "
+                "this session is running OLD code. Run restart_mcp.sh (or kill "
+                "the menu_server.py process for this session) to pick up the fix."
+            )
+    except OSError:
+        pass
+    return result
 
 
 @mcp.tool()
@@ -1945,9 +2036,8 @@ def start_menu_workflow(week_start: str = "") -> dict:
 
     # Cross-reference recipe_metadata: add times_cooked and skip feedback for recently logged meals
     try:
-        meta_path = Path("/Users/Shared/cooking/recipe_metadata.json")
-        if meta_path.exists():
-            meta = json.loads(meta_path.read_text())
+        if METADATA_PATH.exists():
+            meta = json.loads(METADATA_PATH.read_text())
             recipes = meta.get("recipes", meta) if isinstance(meta, dict) else meta
             cutoff = (date.today() - timedelta(days=10)).isoformat()
             for meal in meals:
@@ -2087,18 +2177,27 @@ def log_meal_feedback(feedback: str) -> dict:
         }
 
     lowered = feedback.lower()
-    matched = False
+    fb_clean = feedback.strip()
+    # Route to the meal with the most name-word overlap — first-match routing
+    # sent "Cherry Tomato Salad" feedback to "Grilled Chicken and Cherry
+    # Tomatoes" because it appeared earlier in the week
+    best_meal = None
+    best_overlap = 0
     for meal in meals:
         words = [w for w in meal["name"].lower().split() if len(w) > 3]
-        if words and any(w in lowered for w in words):
-            existing = meal.get("sms_feedback") or ""
-            meal["sms_feedback"] = (existing + " " + feedback).strip()
-            matched = True
-            break
+        overlap = sum(1 for w in words if w in lowered)
+        if overlap > best_overlap:
+            best_meal, best_overlap = meal, overlap
 
-    if not matched and meals:
-        existing = meals[-1].get("sms_feedback") or ""
-        meals[-1]["sms_feedback"] = (existing + " " + feedback).strip()
+    if best_meal is None and meals:
+        best_meal = meals[-1]
+
+    if best_meal is not None:
+        existing = best_meal.get("sms_feedback") or ""
+        # The SMS agent replays tool calls across turns — drop exact repeats
+        # instead of appending "Was great Was great Was great"
+        if fb_clean and fb_clean not in existing:
+            best_meal["sms_feedback"] = (existing + " " + fb_clean).strip()
 
     activity["last_week_meals"] = meals
     _save_activity(activity)
@@ -2475,12 +2574,22 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
 
 
 @mcp.tool()
-def approve_menu() -> dict:
+def approve_menu(expected_selected_meals: dict = None) -> dict:
     """
     Send the currently selected meals to Ashley for approval via Keanu.
 
     Calls send_menu_partner.py with the selected_meals from the active workflow.
-    Writes to Keanu's outbox (.outbox.json) and creates menu_feedback_pending.json.
+    Writes to Keanu's outbox spool (cooking-state/outbox/) and creates menu_feedback_pending.json.
+
+    Args:
+        expected_selected_meals: Optional {day: recipe} dict the caller believes
+            is current (e.g. the SMS session's local mirror of the plan it just
+            showed the user). If provided and it doesn't match the actual
+            activity state, the send is refused — this catches a plan getting
+            sent to Ashley that the human never actually saw/confirmed, e.g. if
+            a concurrent process (another debugging session, a duplicate MCP
+            process) wrote to menu_activity.json without the caller's mirror
+            being told to re-sync. Omit only for calls with no local mirror.
 
     Returns:
         {
@@ -2498,6 +2607,19 @@ def approve_menu() -> dict:
     selected = activity.get("selected_meals", {})
     if not selected:
         return {"error": "No meals selected. Call get_meal_suggestions first."}
+
+    if expected_selected_meals is not None and expected_selected_meals != selected:
+        return {
+            "error": "selected_meals_mismatch",
+            "message": (
+                "The plan changed since you last saw it — not sending to Ashley. "
+                "Something else wrote to the workflow state in the meantime. "
+                "Re-fetch with get_workflow_state(), show the user the current "
+                "plan, and confirm before calling approve_menu again."
+            ),
+            "expected": expected_selected_meals,
+            "actual": selected,
+        }
 
     week_start = date.fromisoformat(activity["week_start"])
     day_to_date = _day_date_map(week_start)
@@ -2568,6 +2690,13 @@ def process_recipe_url(url: str, day: str = "", force_add: bool = False) -> dict
           message: summary string,
         }
     """
+    return _process_recipe_url_core(url, day=day, force_add=force_add)
+
+
+def _process_recipe_url_core(url: str, day: str = "", force_add: bool = False) -> dict:
+    """Shared logic behind process_recipe_url — also called directly by
+    handle_ashley_reply so a URL reply can be resolved and swapped in without
+    a caller round-trip."""
     recipes = _load_metadata()
 
     # 1. Lightweight fetch for title (used in similarity check)
@@ -2770,23 +2899,64 @@ def handle_ashley_reply(reply: str) -> dict:
     selected = activity.get("selected_meals", {})
     week_start = date.fromisoformat(activity["week_start"])
 
-    # ── URL in reply — route to process_recipe_url. Checked before
+    # ── URL in reply — resolved directly here so a recipe recommendation
+    # doesn't strand the workflow in awaiting_ashley_signoff. Checked before
     # classification; URLs shouldn't go to the model. ──
     url_match = re.search(r'https?://\S+', reply)
     if url_match:
         url = url_match.group(0).rstrip(".,)")
         extracted_day = _extract_day_from_text(reply)
+
+        if not extracted_day:
+            # Can't safely guess which day she means — ask, don't silently add.
+            return {
+                "parsed": False,
+                "has_url": True,
+                "url": url,
+                "message": (
+                    f"Ashley sent a recipe URL but didn't say which day it's for: {url}. "
+                    "Ask her which day, then call process_recipe_url(url=..., day=...)."
+                ),
+            }
+
+        url_result = _process_recipe_url_core(url, day=extracted_day)
+
+        if url_result.get("status") == "similar_exists":
+            return {
+                "parsed": False,
+                "has_url": True,
+                "url": url,
+                "extracted_day": extracted_day,
+                "message": (
+                    f"Ashley's link for {extracted_day} looks similar to "
+                    f"\"{url_result['recipe']}\" ({url_result['match_score']:.0%} match) "
+                    "already in the collection. Ask which one to use, then call "
+                    f"swap_meal(day='{extracted_day}', replacement=...) or "
+                    "process_recipe_url(..., force_add=True)."
+                ),
+            }
+
+        if "error" in url_result:
+            return {
+                "parsed": False,
+                "has_url": True,
+                "url": url,
+                "message": f"Couldn't fetch Ashley's recipe link for {extracted_day}: {url_result['error']}",
+            }
+
+        # status == "added" — recipe fetched, added, and swapped into the day
+        # by _process_recipe_url_core. Re-send the updated menu and keep
+        # waiting on her final signoff, same as any other swap.
+        activity = _load_activity()
+        new_selected = activity.get("selected_meals", {})
+        meals_json = _resend_menu_to_ashley(new_selected, week_start)
         return {
-            "parsed": False,
-            "has_url": True,
-            "url": url,
-            "extracted_day": extracted_day,
+            **activity,
             "message": (
-                f"Reply contains a recipe URL{' for ' + extracted_day if extracted_day else ''}. "
-                f"Call process_recipe_url(url='{url}'"
-                + (f", day='{extracted_day}'" if extracted_day else "")
-                + ") to check for similar recipes before swapping."
+                f"Added Ashley's recipe '{url_result['recipe']}' for {extracted_day}. "
+                "Updated menu re-sent to her."
             ),
+            "meals_sent": meals_json,
         }
 
     # ── Intent classification — exact-match fast path, else Haiku is authority ──
@@ -2834,11 +3004,16 @@ def handle_ashley_reply(reply: str) -> dict:
             }
         intent = "unclear"  # classifier saw a swap but nothing extractable
 
-    # ── Unclear / unparseable ──
+    # ── Unclear / unparseable / no suitable replacement in collection ──
     return {
         **activity,
         "parsed": False,
-        "message": f"Could not parse Ashley's reply: {reply!r}. Handle manually.",
+        "message": (
+            f"Could not automatically apply Ashley's reply: {reply!r}. "
+            "Either it was unparseable or no recipe in the collection fits the "
+            "request. Tell David what she asked for so he can pick a replacement "
+            "or add a new recipe."
+        ),
     }
 
 
@@ -2969,8 +3144,8 @@ def finalize_plan() -> dict:
     Returns:
         {
           "state": "complete",
-          "plan_path": "/Users/Shared/cooking/weeklyplan/mealplan_YYYY-MM-DD.json",
-          "shopping_path": "/Users/Shared/cooking/weeklyplan/shopping_YYYY-MM-DD.csv",
+          "plan_path": "/Users/Shared/cooking-state/weeklyplan/mealplan_YYYY-MM-DD.json",
+          "shopping_path": "/Users/Shared/cooking-state/weeklyplan/shopping_YYYY-MM-DD.csv",
                            (omitted when shopping_deferred is true)
           "shopping_deferred": true | false
         }
@@ -3525,7 +3700,7 @@ def set_lunch_pick(recipe_name: str) -> dict:
     """
     Record Ashley's lunch pick for the week.
 
-    Writes to /Users/Shared/cooking/lunch_state.json. The shopping list
+    Writes to /Users/Shared/cooking-state/lunch_state.json. The shopping list
     generator reads this file and appends lunch ingredients dated Saturday
     (prep day before the Sunday cook).
 
@@ -3598,7 +3773,7 @@ def log_lunch_feedback(recipe: str, sentiment: str, note: str = "") -> dict:
     if sentiment == "disliked":
         r["lunch_suitable"] = False
 
-    meta_path.write_text(json.dumps(data, indent=2))
+    METADATA_PATH.write_text(json.dumps(data, indent=2))
 
     # Clear pick from state
     if LUNCH_STATE_FILE.exists():
@@ -3682,7 +3857,7 @@ def add_lunch_recipe_url(url: str) -> dict:
             "needs_review":      True,
             "url":               url,
         }
-        meta_path.write_text(json.dumps(data, indent=2))
+        METADATA_PATH.write_text(json.dumps(data, indent=2))
 
     base_url = _CONFIG.get("github_pages_base_url", "https://davidmallison.github.io/menubuilder-recipes")
     gh_url   = f"{base_url.rstrip('/')}/{safe_name}"

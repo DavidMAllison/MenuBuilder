@@ -12,10 +12,12 @@ MenuBuilder deletes the pending file once the menu is confirmed.
 
 import json
 import argparse
+import os
+import time
 from datetime import datetime
 from pathlib import Path
 
-OUTBOX_FILE = Path("/Users/Shared/sms-assistant/.outbox.json")
+OUTBOX_DIR = Path("/Users/Shared/cooking-state/outbox")
 PENDING_FILE = Path("/Users/Shared/sms-assistant/menu_feedback_pending.json")
 
 _config = json.loads((Path(__file__).parent / "config.json").read_text())
@@ -45,9 +47,12 @@ def send_to_ashley(meals: list[dict]) -> None:
     print(message)
     print()
 
-    outbox = json.loads(OUTBOX_FILE.read_text()) if OUTBOX_FILE.exists() else []
-    outbox.append({"handle": ASHLEY_HANDLE, "text": message})
-    OUTBOX_FILE.write_text(json.dumps(outbox))
+    # One create-exclusive spool file — keep in sync with sms-assistant tools.queue_outbox
+    OUTBOX_DIR.mkdir(exist_ok=True)
+    spool_path = OUTBOX_DIR / f"{time.time_ns()}_{os.getpid()}.json"
+    fd = os.open(str(spool_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps({"handle": ASHLEY_HANDLE, "text": message}))
 
     PENDING_FILE.write_text(json.dumps({
         "sent_at": datetime.now().isoformat(),
