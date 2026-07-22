@@ -23,6 +23,7 @@ Tools:
   get_prep_guide           — on-demand prep guide (mode: weekly | tonight | auto)
   sync_atk_recipes         — import new recipes from ATK favorite collections
 """
+# ruff: noqa: E402  -- imports below need MENUBUILDER_DIR on sys.path first
 
 import csv
 import difflib
@@ -46,6 +47,13 @@ MENUBUILDER_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(MENUBUILDER_DIR))
 
 from mcp.server.fastmcp import FastMCP
+
+import candidate_scoring as cs
+from candidate_scoring import (
+    HIATUS_PROTEINS, QUICK_THRESHOLD, INVENTORY_STOPWORDS,
+    resolve_cuisine, resolve_health, parse_minutes as _parse_minutes,
+    protein_label as _get_protein,
+)
 
 # ---------------------------------------------------------------------------
 # Config and paths
@@ -378,8 +386,8 @@ def _classify_and_write(
             "url": source_url,
             "filename": md_path.name,
             "time": time_str,
-            "cuisine_type": fetched_data.get("cuisine", ""),
-            "health_classification": health,
+            "cuisine": fetched_data.get("cuisine", ""),
+            "health": health,
             "meal_type": "Weekend" if mins > 60 else "Weeknight",
             "times_cooked": 0,
             "last_cooked_date": None,
@@ -538,12 +546,9 @@ def _day_date_map(week_start: date) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Candidate loading and scoring  (mirrors suggest_meals.py)
+# Candidate loading and scoring  (shared with suggest_meals.py via candidate_scoring.py)
 # ---------------------------------------------------------------------------
 
-RECENCY_WEEKS = 3
-QUICK_THRESHOLD = 35
-HIATUS_PROTEINS = ["salmon"]
 KNOWN_CUISINES: set[str] = {k.lower() for k in _CUISINE_FAMILY_MAP}
 KNOWN_FAMILIES: set[str] = {v.lower() for v in _CUISINE_FAMILY_MAP.values()}
 
@@ -649,38 +654,9 @@ _CATEGORY_KEYWORDS = {
     "soup": ["soup", "stew", "chili"],
 }
 
-_INVENTORY_STOPWORDS = {
-    "oz", "lb", "lbs", "pkg", "bag", "box", "can", "jar", "bottle", "fresh", "frozen", "dried",
-    "costco", "package", "packages", "individual", "pieces", "piece", "thawed", "homemade",
-    "batch", "bags", "kg", "g", "and", "the", "a", "an", "in", "bone", "boneless", "skinless",
-    "country", "style",
-    # brand names
-    "kroger", "private", "selection", "prego", "cecco", "martins", "rosarita",
-    "driscolls", "fage", "kind", "thomas", "stacys", "lgm", "saint", "humboldt",
-    "pirate", "angel", "food", "chiquita", "stouffers", "mila",
-}
-
-_PANTRY_CATEGORIES = {"Pantry", "Dry Goods", "Dairy"}
-
-
 def _load_inventory_keywords() -> list:
-    """Return list of {name, keywords, category} from inventory.json."""
-    try:
-        inv_path = _CONFIG.get("inventory_path", "")
-        if not inv_path:
-            return []
-        data = json.loads(Path(inv_path).read_text())
-        items = []
-        for item in data.get("items", []):
-            name = item.get("name", "").lower()
-            qty = item.get("quantity", 0)
-            if not name or qty == 0:
-                continue
-            words = [w for w in name.split() if w not in _INVENTORY_STOPWORDS and len(w) > 2]
-            items.append({"name": name, "keywords": words, "category": item.get("category", "")})
-        return items
-    except Exception:
-        return []
+    """Return list of {name, keywords, category, quantity, unit} from inventory.json."""
+    return cs.load_inventory_keywords(_CONFIG.get("inventory_path", ""))
 
 
 def _deduct_inventory_protein(ingredients: list) -> list:
@@ -711,7 +687,7 @@ def _deduct_inventory_protein(ingredients: list) -> list:
         """Extract match-ready keywords: strip stopwords, normalise plurals."""
         words = set()
         for w in name.lower().split():
-            if w in _INVENTORY_STOPWORDS or len(w) <= 2:
+            if w in INVENTORY_STOPWORDS or len(w) <= 2:
                 continue
             words.add(w)
             if w.endswith("s") and len(w) > 4:
@@ -755,45 +731,6 @@ def _deduct_inventory_protein(ingredients: list) -> list:
     return deductions
 
 
-def _inventory_match(recipe_name: str, ingredients: list, inventory: list) -> tuple:
-    """
-    Return (broad_match, protein_specific, pantry_specific) for a recipe.
-      broad_match:      bool — any protein keyword in recipe matches a stocked protein
-      protein_specific: list — protein inventory items with all keywords in recipe
-      pantry_specific:  list — pantry/dry-goods/dairy items with specific match
-    Mirrors inventory_match() in suggest_meals.py exactly.
-    """
-    if not inventory:
-        return False, [], []
-
-    name_lower = recipe_name.lower()
-    ing_text = " ".join(
-        i.get("name", "") if isinstance(i, dict) else str(i) for i in ingredients
-    ).lower()
-    searchable = f"{name_lower} {ing_text}"
-
-    protein_specific = []
-    pantry_specific = []
-    broad = False
-
-    for item in inventory:
-        kws = item["keywords"]
-        if not kws:
-            continue
-        if item["category"] == "Proteins":
-            if all(kw in searchable for kw in kws):
-                protein_specific.append(item["name"])
-            elif any(kw in searchable for kw in kws):
-                broad = True
-        elif item["category"] in _PANTRY_CATEGORIES:
-            if len(kws) >= 2 and all(kw in searchable for kw in kws):
-                pantry_specific.append(item["name"])
-            elif len(kws) == 1 and len(kws[0]) >= 5 and kws[0] in searchable:
-                pantry_specific.append(item["name"])
-
-    return broad, protein_specific, pantry_specific
-
-
 def _inventory_boost(recipe_name: str, ingredients: list, inventory: list) -> int:
     """Return a score bonus (negative = better) if recipe uses inventory items."""
     if not inventory:
@@ -822,7 +759,7 @@ def _plan_tallies(selected: dict, recipes: dict) -> dict:
     for name in selected.values():
         key = _find_recipe_key(name, recipes)
         r = recipes.get(key, {}) if key else {}
-        cuisine = r.get("cuisine_type", r.get("cuisine", "")).lower()
+        cuisine = resolve_cuisine(r, default="").lower()
         if cuisine:
             cuisine_counts[cuisine] = cuisine_counts.get(cuisine, 0) + 1
         name_lower = name.lower()
@@ -831,146 +768,21 @@ def _plan_tallies(selected: dict, recipes: dict) -> dict:
                 category_counts[cat] = category_counts.get(cat, 0) + 1
     return {"cuisine": cuisine_counts, "category": category_counts}
 
-_PROTEIN_KEYWORDS = [
-    ("salmon", "Fish"), ("fish", "Fish"), ("shrimp", "Shrimp"), ("cod", "Fish"),
-    ("tilapia", "Fish"), ("pork", "Pork"), ("lamb", "Lamb"), ("beef", "Beef"),
-    ("chicken", "Chicken"), ("turkey", "Turkey"), ("tofu", "Vegetarian"),
-    ("chickpea", "Vegetarian"), ("mushroom", "Vegetarian"), ("lentil", "Vegetarian"),
-    ("bean", "Vegetarian"), ("vegetarian", "Vegetarian"),
-    ("pasta", "Pasta"), ("spaghetti", "Pasta"), ("noodle", "Pasta"),
-]
-
-
-def _get_protein(name: str) -> str:
-    lower = name.lower()
-    for keyword, label in _PROTEIN_KEYWORDS:
-        if keyword in lower:
-            return label
-    return "Other"
-
-
-def _weeks_since(date_str: Optional[str]) -> float:
-    if not date_str:
-        return 999.0
-    try:
-        cooked = datetime.strptime(date_str, "%Y-%m-%d").date()
-        return (date.today() - cooked).days / 7
-    except Exception:
-        return 999.0
-
-
-def _parse_minutes(time_str: str) -> int:
-    if not time_str:
-        return 999
-    mins = 0
-    h = re.search(r"(\d+)\s*hour", time_str, re.IGNORECASE)
-    if h:
-        mins += int(h.group(1)) * 60
-    m = re.search(r"(\d+)\s*min", time_str, re.IGNORECASE)
-    if m:
-        mins += int(m.group(1))
-    return mins if mins > 0 else 999
-
-
-def _candidate_score(c: dict) -> float:
-    s = 0.0
-    age_weeks = c.get("age_weeks", 0)
-    s -= min(age_weeks, 52) * 2
-    health = c.get("health", "Moderate")
-    if health == "Heart-Healthy":
-        s -= 15
-    elif health == "Indulgent":
-        s += 10
-    s += c.get("times_cooked", 0) * 2
-    if c.get("is_grill") and c.get("is_grill_season"):
-        s -= 4
-    adult_score = c.get("adult_score")
-    if adult_score is not None:
-        if adult_score < 0.5:
-            s += 15
-        elif adult_score >= 0.9:
-            s -= 6
-    if c.get("kid_approved"):
-        s -= 3
-    if c.get("inv_specific"):
-        s -= 7
-    elif c.get("inv_broad"):
-        s -= 3
-    if c.get("inv_pantry"):
-        s -= 2
-    return s
-
-
-def _load_candidates(quick_days: list) -> list:
+def _load_candidates() -> list:
     recipes = _load_metadata()
-    today = date.today()
-    is_grill_season = 4 <= today.month <= 9
     inventory = _load_inventory_keywords()  # loaded once for the whole pass
+    candidates, _ = cs.load_candidates(
+        recipes,
+        adult_names=ADULT_NAMES,
+        garden_herbs=_GARDEN_HERBS,
+        inventory_items=inventory,
+    )
 
-    candidates = []
-    for name, r in recipes.items():
-        if r.get("status") != "active":
-            continue
-        if r.get("recommend_hold"):
-            continue
-        if any(h in name.lower() for h in HIATUS_PROTEINS):
-            continue
-
-        age_weeks = _weeks_since(r.get("last_cooked_date"))
-        if age_weeks < RECENCY_WEEKS:
-            continue
-
-        minutes = _parse_minutes(r.get("time", ""))
-        is_slow = r.get("cooking_method") == "slow_cooker"
-        is_quick = minutes <= QUICK_THRESHOLD or is_slow
-        is_grill = r.get("cooking_method") == "grill"
-        protein = _get_protein(name)
-        feedback = r.get("feedback", [])
-
-        adults = [f for f in feedback if f.get("person", "").lower() in ADULT_NAMES]
-        adult_score = None
-        if adults:
-            liked = sum(1 for f in adults if f.get("sentiment") == "liked")
-            adult_score = liked / len(adults)
-
-        kids = [f for f in feedback if f.get("person", "").lower() not in ADULT_NAMES]
-        kid_friendly = None
-        if kids:
-            liked = sum(1 for f in kids if f.get("sentiment") == "liked")
-            kid_friendly = liked > len(kids) / 2
-        kid_approved = bool(r.get("kid_approved")) or bool(kid_friendly)
-
-        inv_broad, inv_specific, inv_pantry = _inventory_match(
-            name, r.get("ingredients", []), inventory
-        )
-
-        c = {
-            "name": name,
-            "cuisine": r.get("cuisine_type", r.get("cuisine", "Unknown")),
-            "health": r.get("health", "Moderate"),
-            "protein": protein,
-            "minutes": minutes,
-            "time_str": r.get("time", ""),
-            "is_quick": is_quick,
-            "is_grill": is_grill,
-            "is_grill_season": is_grill_season,
-            "times_cooked": r.get("times_cooked", 0),
-            "last_cooked": r.get("last_cooked_date") or "never",
-            "age_weeks": age_weeks,
-            "meal_type": r.get("meal_type", "Weeknight"),
-            "method": r.get("cooking_method", ""),
-            "weeknight_effort": r.get("weeknight_effort", ""),
-            "adult_score": adult_score,
-            "kid_approved": kid_approved,
-            "inv_broad": inv_broad,
-            "inv_specific": inv_specific,
-            "inv_pantry": inv_pantry,
-        }
-        # Small jitter so near-equal candidates rotate week to week instead of
-        # the same argmin winning forever; kept below the health bonus (15) and
-        # far below the never-cooked age bonus (~104) so big factors still rule
-        c["score"] = _candidate_score(c) + random.uniform(-4, 4)
-        candidates.append(c)
+    # Small jitter so near-equal candidates rotate week to week instead of
+    # the same argmin winning forever; kept below the health bonus (15) and
+    # far below the never-cooked age bonus (~104) so big factors still rule
+    for c in candidates:
+        c["score"] = cs.candidate_score(c) + random.uniform(-4, 4)
 
     # Shuffle before the stable sort so score ties (common among never-cooked
     # recipes, which share the capped age bonus) don't resolve to metadata file
@@ -1070,7 +882,7 @@ def _select_meals(
         c_lower = cuisine_direction.lower()
         new_matches = []
         for name, meta in recipes.items():
-            cuisine_val = meta.get("cuisine_type", meta.get("cuisine", ""))
+            cuisine_val = resolve_cuisine(meta, default="")
             if (
                 meta.get("times_cooked", 0) == 0
                 and meta.get("status") not in ("disliked", "ignored")
@@ -1080,7 +892,7 @@ def _select_meals(
             ):
                 new_matches.append({
                     "name": name,
-                    "cuisine": meta.get("cuisine_type", meta.get("cuisine", "")),
+                    "cuisine": resolve_cuisine(meta, default=""),
                     "health": meta.get("health", "Moderate"),
                     "protein": _get_protein(name),
                     "minutes": 30,
@@ -1219,7 +1031,7 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
     def _score(item):
         name, meta = item
         times = meta.get("times_cooked", 0)
-        cuisine_bonus = -1 if direction_lower and meta.get("cuisine_type", meta.get("cuisine", "")).lower() in direction_lower else 0
+        cuisine_bonus = -1 if direction_lower and resolve_cuisine(meta, default="").lower() in direction_lower else 0
         return (times, cuisine_bonus)
 
     # Shuffle before the stable sort — idea candidates are all ties (times_cooked
@@ -1465,7 +1277,7 @@ def _activate_idea_in_metadata(name: str, filename: str, recipe_data: dict,
         "status": "active",
         "filename": filename,
         "time": recipe_data.get("time", recipes[key].get("time", "")),
-        "cuisine": recipe_data.get("cuisine_type", recipe_data.get("cuisine", recipes[key].get("cuisine_type", recipes[key].get("cuisine", "")))),
+        "cuisine": resolve_cuisine(recipe_data, default="") or resolve_cuisine(recipes[key], default=""),
     })
     _save_metadata(recipes)
     return True
@@ -2256,7 +2068,7 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
     )
     activity["eating_out_days"] = eating_out_days
 
-    candidates = _load_candidates(quick_days)
+    candidates = _load_candidates()
     selected = _select_meals(
         candidates,
         quick_days,
@@ -2417,7 +2229,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
     if not replacement:
         # Exclude every recipe already in the plan (including outgoing — we want something different)
         currently_selected = set(selected.values())
-        candidates = _load_candidates(activity.get("quick_days", []))
+        candidates = _load_candidates()
         eligible = [c for c in candidates if c["name"] not in currently_selected]
 
         reason_lower = reason.lower()
@@ -2426,8 +2238,8 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
         want_idea = any(kw in reason_lower for kw in ("idea", "new", "something different", "haven't tried"))
         idea_candidates = [
             {"name": name,
-             "cuisine": r.get("cuisine_type", r.get("cuisine", "Unknown")),
-             "health": r.get("health_classification", r.get("health", "Moderate")),
+             "cuisine": resolve_cuisine(r),
+             "health": resolve_health(r),
              "protein": _get_protein(name),
              "minutes": _parse_minutes(r.get("time", "")),
              "time_str": r.get("time", ""),
@@ -2506,7 +2318,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 rkey = _find_recipe_key(name, all_recipes)
                 if rkey:
                     rfam = _CUISINE_FAMILY_MAP.get(
-                        all_recipes[rkey].get("cuisine_type", all_recipes[rkey].get("cuisine", "")), ""
+                        resolve_cuisine(all_recipes[rkey], default=""), ""
                     )
                     if rfam:
                         current_fam_counts[rfam] = current_fam_counts.get(rfam, 0) + 1

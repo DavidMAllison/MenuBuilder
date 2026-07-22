@@ -28,7 +28,10 @@ from pathlib import Path
 import httpx
 from bs4 import BeautifulSoup
 import anthropic
+from dotenv import load_dotenv
 from yt_utils import enrich_recipe_from_transcript, parse_yt_description, fetch_yt_snippet
+
+load_dotenv(Path(__file__).parent / ".env")
 
 if not os.environ.get("ANTHROPIC_API_KEY"):
     env_path = Path.home() / "projects/personal/sms-assistant/.env"
@@ -49,10 +52,7 @@ _YT_STOP_WORDS     = {"recipe", "recipes", "the", "a", "an", "with", "and", "for
 
 
 def _load_yt_api_key() -> str:
-    try:
-        return json.loads((Path(__file__).parent / "config.json").read_text()).get("youtube_api_key", "")
-    except Exception:
-        return ""
+    return os.environ.get("YOUTUBE_API_KEY", "")
 
 
 def _search_chetna_youtube(title: str) -> str:

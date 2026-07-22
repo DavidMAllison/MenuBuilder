@@ -21,8 +21,11 @@ from datetime import date, timedelta
 from functools import wraps
 from pathlib import Path
 
+from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, request, send_file, send_from_directory, session, url_for
 from werkzeug.security import check_password_hash
+
+load_dotenv(Path(__file__).parent / ".env")
 
 # fill_menu_ideas is in the same directory — import its intake helpers
 sys.path.insert(0, str(Path(__file__).parent))
@@ -40,11 +43,11 @@ _CONFIG = json.loads(_CONFIG_PATH.read_text())
 _GH_PAGES_BASE = _CONFIG.get("github_pages_base_url", "").rstrip("/")
 _GH_REPO_DIR = Path(__file__).parent.parent / "menubuilder-recipes"
 _GENERATE_SCRIPT = Path(__file__).parent / "generate_github_pages_data.py"
-app.secret_key = _CONFIG.get("flask_secret_key", "dev-key-change-me")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-key-change-me")
 app.permanent_session_lifetime = timedelta(days=30)
 
 _REVIEW_USERS = {u["email"]: u["name"] for u in _CONFIG.get("review_users", [])}
-_REVIEW_PW_HASH = _CONFIG.get("review_password_hash", "")
+_REVIEW_PW_HASH = os.environ.get("REVIEW_PASSWORD_HASH", "")
 
 
 def login_required(f):
