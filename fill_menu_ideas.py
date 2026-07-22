@@ -26,9 +26,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-_ROTATION_STATE = Path(__file__).parent / "agent_rotation_state.json"
-
 import anthropic
+
+_ROTATION_STATE = Path(__file__).parent / "agent_rotation_state.json"
 
 # ---------------------------------------------------------------------------
 # Config

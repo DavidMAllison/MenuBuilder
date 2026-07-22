@@ -25,11 +25,11 @@ from pathlib import Path
 # ── Colors (strip when piped to file) ─────────────────────────────────────────
 _COLOR = sys.stdout.isatty()
 def _c(code, s): return f"\033[{code}m{s}\033[0m" if _COLOR else s
-G   = lambda s: _c("92", s)
-R   = lambda s: _c("91", s)
-Y   = lambda s: _c("93", s)
-B   = lambda s: _c("1",  s)
-DIM = lambda s: _c("2",  s)
+def G(s):   return _c("92", s)
+def R(s):   return _c("91", s)
+def Y(s):   return _c("93", s)
+def B(s):   return _c("1",  s)
+def DIM(s): return _c("2",  s)
 
 # ── Canonical paths ────────────────────────────────────────────────────────────
 HOME      = Path.home()
@@ -162,7 +162,7 @@ def _check_github_publish():
     # Several intake paths write .md files but only the Review UI auto-publishes.
     # Any active recipe missing from the Pages repo means a 404 in that week's plan links.
     import unicodedata
-    norm = lambda s: unicodedata.normalize("NFC", s)  # macOS stores filenames NFD
+    def norm(s): return unicodedata.normalize("NFC", s)  # macOS stores filenames NFD
     recipes = json.loads(META_PATH.read_text()).get("recipes", {})
     repo_files = {norm(f.name) for f in GH_REPO.glob("*.md")}
     local_files = {norm(f.name) for f in RECIPES_DIR.glob("*.md")}
@@ -208,7 +208,7 @@ def _check_md_structure():
         if f.name not in active_filenames:
             continue
         lines = f.read_text(encoding="utf-8").splitlines()[:12]
-        if any(metadata_line.match(l) or adapted_line.match(l) for l in lines):
+        if any(metadata_line.match(ln) or adapted_line.match(ln) for ln in lines):
             offenders.append(f.name)
     assert not offenders, (
         f"{len(offenders)} recipe(s) have embedded Time/Servings/Adapted-from lines "
@@ -239,11 +239,11 @@ def _check_calendar_app():
 def _check_cal_helper():
     assert CAL_HELPER.exists(), f"missing {CAL_HELPER}"
     r = subprocess.run([sys.executable, str(CAL_HELPER)], capture_output=True, text=True, timeout=15)
-    lines = [l for l in r.stdout.splitlines() if l.strip()]
+    lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
     if r.returncode != 0 and not lines:
         raise AssertionError(f"script error: {r.stderr[:200]}")
-    dinners = sum(1 for l in lines if l.startswith("DINNER"))
-    lunches = sum(1 for l in lines if l.startswith("LUNCH"))
+    dinners = sum(1 for ln in lines if ln.startswith("DINNER"))
+    lunches = sum(1 for ln in lines if ln.startswith("LUNCH"))
     return f"{dinners} dinners  {lunches} lunches"
 
 def _tcc_query(client_like: str, indirect_obj: str) -> str:
@@ -293,7 +293,7 @@ def _check_mcp_state():
 def _check_suggest_meals():
     r = subprocess.run([sys.executable, str(SUGGEST_SCRIPT)], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, f"exit {r.returncode}: {r.stderr[:200]}"
-    lines = [l for l in r.stdout.splitlines() if l.strip()]
+    lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
     assert lines, "no candidates output"
     if len(lines) < 7:
         raise AssertionError(f"only {len(lines)} candidates — pool is thin (need 7+ for a full week)")
@@ -314,8 +314,10 @@ def simulate_workflow():
         entries = json.loads(FEEDBACK.read_text()).get("entries", []) if FEEDBACK.exists() else []
         disliked = [e.get("recipe_name", "?") for e in entries if e.get("sentiment") == "disliked"]
         mixed    = [e.get("recipe_name", "?") for e in entries if e.get("sentiment") == "mixed"]
-        if disliked: note(f"⚠  Disliked (flagged for tombstone): {disliked}")
-        if mixed:    note(f"⚠  Mixed feedback (surface before planning): {mixed}")
+        if disliked:
+            note(f"⚠  Disliked (flagged for tombstone): {disliked}")
+        if mixed:
+            note(f"⚠  Mixed feedback (surface before planning): {mixed}")
         _results.append((True, "Step 0: drain feedback queue"))
         print(f"  {G('[PASS]')} Queue: {len(entries)} entries ({len(disliked)} disliked, {len(mixed)} mixed)")
     except Exception as e:
@@ -355,13 +357,16 @@ def simulate_workflow():
     step(3, "Run suggest_meals.py  (candidate filter)")
     try:
         r = subprocess.run([sys.executable, str(SUGGEST_SCRIPT)], capture_output=True, text=True, timeout=30)
-        lines = [l for l in r.stdout.splitlines() if l.strip()]
+        lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
         if r.returncode != 0:
             raise AssertionError(r.stderr[:200])
         thin = len(lines) < 7
-        if thin: note(f"⚠  Only {len(lines)} candidates — consider running fill_menu_ideas.py first")
-        for l in lines[:5]: note(l)
-        if len(lines) > 5: note(f"  … and {len(lines)-5} more")
+        if thin:
+            note(f"⚠  Only {len(lines)} candidates — consider running fill_menu_ideas.py first")
+        for ln in lines[:5]:
+            note(ln)
+        if len(lines) > 5:
+            note(f"  … and {len(lines)-5} more")
         _results.append((not thin, "Step 3: candidate filter"))
         status = G("[PASS]") if not thin else Y("[WARN]")
         print(f"  {status} {len(lines)} candidates")
@@ -390,8 +395,10 @@ def simulate_workflow():
         assert meals, "no meals in current plan"
         missing_urls = [m.get("title", "?") for m in meals if not m.get("url")]
         missing_health = [m.get("title", "?") for m in meals if not m.get("health")]
-        if missing_urls:   note(f"⚠  Missing URLs: {missing_urls}")
-        if missing_health: note(f"⚠  Missing health classification: {missing_health}")
+        if missing_urls:
+            note(f"⚠  Missing URLs: {missing_urls}")
+        if missing_health:
+            note(f"⚠  Missing health classification: {missing_health}")
         hh = sum(1 for m in meals if "Heart" in (m.get("health") or ""))
         note(f"Balance: {hh} heart-healthy, {len(meals)-hh} other")
         _results.append((True, "Step 6: plan validation"))
@@ -418,12 +425,13 @@ def simulate_workflow():
     step(8, "Preview calendar events  (parse_meal_calendar.py dry-run)")
     try:
         r = subprocess.run([sys.executable, str(CAL_HELPER)], capture_output=True, text=True, timeout=15)
-        lines = [l for l in r.stdout.splitlines() if l.strip()]
+        lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
         if r.returncode != 0 and not lines:
             raise AssertionError(r.stderr[:200])
-        for l in lines: note(l[:90])
-        dinners = sum(1 for l in lines if l.startswith("DINNER"))
-        lunches = sum(1 for l in lines if l.startswith("LUNCH"))
+        for ln in lines:
+            note(ln[:90])
+        dinners = sum(1 for ln in lines if ln.startswith("DINNER"))
+        lunches = sum(1 for ln in lines if ln.startswith("LUNCH"))
         _results.append((True, "Step 8: calendar preview"))
         print(f"  {G('[PASS]')} Would create {dinners} dinner events + {lunches} lunch events")
     except AssertionError as e:

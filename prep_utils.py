@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """
 prep_utils.py — shared prep-component classification helpers.
 
 Used by fill_menu_ideas.py (at intake) and menu_server.py (at activation
 and on-demand via get_prep_guide).
 """
+from __future__ import annotations
 
 import json
 import os

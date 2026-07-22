@@ -15,12 +15,16 @@ Usage:
 import argparse
 import json
 import os
+import sys
 from datetime import date
 from pathlib import Path
 
 MENUBUILDER = Path(__file__).parent
 METADATA_PATH = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
 RECIPES_DIR   = Path.home() / "Dropbox/LLMContext/cooking/recipes"
+
+sys.path.insert(0, str(MENUBUILDER))
+from prep_utils import classify_prep, parse_md_instructions  # noqa: E402
 
 # Load ANTHROPIC_API_KEY if not set
 if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -30,10 +34,6 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
             if line.startswith("ANTHROPIC_API_KEY="):
                 os.environ["ANTHROPIC_API_KEY"] = line.split("=", 1)[1].strip()
                 break
-
-import sys
-sys.path.insert(0, str(MENUBUILDER))
-from prep_utils import classify_prep, parse_md_instructions
 
 BATCH_SIZE = 15
 

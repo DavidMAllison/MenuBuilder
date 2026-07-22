@@ -605,7 +605,6 @@ def check_semantic(
     orphan_md = []
     missing_md = []
 
-    active_keys = {k for k, _ in active}
     active_filenames = {v.get("filename", "") for _, v in active if v.get("filename")}
 
     for key, r in active:

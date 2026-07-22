@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """
 yt_utils.py — shared YouTube transcript extraction helpers.
 
@@ -11,6 +10,7 @@ Strategy:
   - Instructions: always pull from transcript (richer than description);
     fall back to description instructions only if transcript unavailable
 """
+from __future__ import annotations
 
 import json
 import os
