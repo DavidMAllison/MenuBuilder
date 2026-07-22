@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import importlib.util as _ilu
 import json
 import sys
 from datetime import date
@@ -20,7 +21,6 @@ from pathlib import Path
 
 # Import the server module directly by file path (avoids mcp package conflict)
 PROJECT = Path(__file__).parent
-import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location("menu_server", PROJECT / "mcp" / "menu_server.py")
 srv = _ilu.module_from_spec(_spec)
 sys.modules["menu_server"] = srv
@@ -30,9 +30,9 @@ _spec.loader.exec_module(srv)
 
 _COLOR = sys.stdout.isatty()
 def _c(code, s): return f"\033[{code}m{s}\033[0m" if _COLOR else s
-OK   = lambda s: _c("92", f"  OK  {s}")
-FAIL = lambda s: _c("91", f" FAIL {s}")
-INFO = lambda s: _c("2",  f"      {s}")
+def OK(s):   return _c("92", f"  OK  {s}")
+def FAIL(s): return _c("91", f" FAIL {s}")
+def INFO(s): return _c("2",  f"      {s}")
 
 
 def _check(label, cond, detail=""):

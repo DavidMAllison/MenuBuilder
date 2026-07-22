@@ -270,10 +270,14 @@ def _parse_wprm_ingredients(soup: BeautifulSoup) -> list[str]:
         unit = li.select_one(".wprm-recipe-ingredient-unit")
         name = li.select_one(".wprm-recipe-ingredient-name")
         note = li.select_one(".wprm-recipe-ingredient-notes")
-        if amt:  parts.append(amt.text.strip())
-        if unit: parts.append(unit.text.strip())
-        if name: parts.append(name.text.strip())
-        if note: parts.append(f"({note.text.strip()})")
+        if amt:
+            parts.append(amt.text.strip())
+        if unit:
+            parts.append(unit.text.strip())
+        if name:
+            parts.append(name.text.strip())
+        if note:
+            parts.append(f"({note.text.strip()})")
         return " ".join(parts) if parts else None
 
     groups = soup.select(".wprm-recipe-ingredient-group")

@@ -294,7 +294,7 @@ def _fetch_chetnamakan(url: str, soup: BeautifulSoup) -> dict:
             continue
         section = strong.get_text(strip=True)
         raw = p.get_text(separator="\n", strip=True)
-        lines = [l.strip() for l in raw.splitlines() if l.strip()]
+        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
 
         if section == "Ingredients":
             for line in lines:

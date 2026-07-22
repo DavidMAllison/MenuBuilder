@@ -189,10 +189,10 @@ def _search_playwright(site: dict, query: str, max_results: int) -> List[dict]:
         }}''')
         results = []
         seen = set()
-        for l in links:
-            if l["href"] not in seen and l["text"]:
-                seen.add(l["href"])
-                results.append({"title": l["text"], "url": l["href"]})
+        for link in links:
+            if link["href"] not in seen and link["text"]:
+                seen.add(link["href"])
+                results.append({"title": link["text"], "url": link["href"]})
                 if len(results) >= max_results:
                     break
         return results

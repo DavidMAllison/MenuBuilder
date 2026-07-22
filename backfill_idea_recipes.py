@@ -43,7 +43,6 @@ DOMAIN_AGENT = {
     "www.indianhealthyrecipes.com":"indian_agent",
     "www.seriouseats.com":         "sites_agent",
     "www.washingtontimes.com":     None,  # generic ld+json
-    "www.rickbayless.com":         "mexican_agent",
 }
 
 _agent_cache = {}

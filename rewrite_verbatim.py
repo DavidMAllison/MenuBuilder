@@ -111,8 +111,6 @@ def extract_instructions(content: str) -> tuple[str, int, int]:
 def replace_instructions(content: str, new_instructions: str) -> str:
     lines = content.split("\n")
     _, start, end = extract_instructions(content)
-    # Find the heading line
-    heading_line = lines[start]
     new_lines = lines[: start + 1] + ["", new_instructions, ""] + lines[end:]
     return "\n".join(new_lines)
 

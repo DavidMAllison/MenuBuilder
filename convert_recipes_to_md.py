@@ -51,15 +51,15 @@ def strip_footer(text):
     # Strip URL lines and page indicator lines (e.g. "1/2", "2/2") from anywhere
     lines = text.splitlines()
     cleaned = []
-    for l in lines:
-        s = l.strip()
+    for line in lines:
+        s = line.strip()
         if re.match(r'https?://', s):
             continue
         if re.match(r'^\d+/\d+/\d+,\s', s):  # "2/1/26, 12:02 PM ..."
             continue
         if re.match(r'^\d+/\d+$', s):  # page indicator like "1/2"
             continue
-        cleaned.append(l)
+        cleaned.append(line)
     return '\n'.join(cleaned).strip()
 
 
@@ -68,7 +68,6 @@ def strip_footer(text):
 # ---------------------------------------------------------------------------
 
 def detect_format(text):
-    lines = text.splitlines()
     first300 = text[:400]
     # Type 3: has "INGREDIENTS" alone on a line + dash-prefixed ingredients
     if re.search(r'^INGREDIENTS\s*$', text, re.MULTILINE) and re.search(r'^- ', text, re.MULTILINE):
@@ -168,9 +167,9 @@ def join_prose_lines(raw_lines):
 
 def parse_type1(lines):
     """ATK web scrape: 'Time X', 'Yield X', word-wrapped ingredients."""
-    lines = [l for l in lines if not re.match(r'Published on ', l.strip())]
-    lines = [l for l in lines if not l.strip().startswith('http')]
-    lines = [l for l in lines if not re.match(r'\d+/\d+/\d+,', l.strip())]
+    lines = [ln for ln in lines if not re.match(r'Published on ', ln.strip())]
+    lines = [ln for ln in lines if not ln.strip().startswith('http')]
+    lines = [ln for ln in lines if not re.match(r'\d+/\d+/\d+,', ln.strip())]
 
     i = 0
     while i < len(lines) and not lines[i].strip():
@@ -245,10 +244,8 @@ def parse_type3(lines):
     title_line = lines[i].strip() if i < len(lines) else ''
     i += 1
 
-    # Second line may have subtitle in parens or after |
-    subtitle = ''
+    # Second line may have subtitle in parens or after | -- skip it, not captured
     if i < len(lines) and lines[i].strip() and not re.match(r'^(Source|Time|Prep|INGR)', lines[i].strip()):
-        subtitle = lines[i].strip()
         i += 1
 
     author = source = time_str = yield_str = ''
@@ -341,32 +338,32 @@ def parse_body(raw_lines, fmt):
     ing = sections.get('ingredients', [])
     if fmt == 'type3':
         # Type 3 already has dash-prefixed items; just strip
-        ing = [l.strip() for l in ing if l.strip()]
+        ing = [ln.strip() for ln in ing if ln.strip()]
     elif fmt == 'type2':
-        ing = [l.strip() for l in ing if l.strip()]
+        ing = [ln.strip() for ln in ing if ln.strip()]
         ing = join_ingredient_lines(ing)
         # Normalize: prefix ingredient lines with '- ' so build_markdown can distinguish
         # items from ALL CAPS subsection headers (which already get bolded)
         normalized = []
-        for l in ing:
-            if l.isupper() and len(l) > 2:
-                normalized.append(l)  # header, no prefix
-            elif not l.startswith('- '):
-                normalized.append('- ' + l)
+        for ln in ing:
+            if ln.isupper() and len(ln) > 2:
+                normalized.append(ln)  # header, no prefix
+            elif not ln.startswith('- '):
+                normalized.append('- ' + ln)
             else:
-                normalized.append(l)
+                normalized.append(ln)
         ing = normalized
     else:  # type1
         ing = join_ingredient_lines(ing)
         # Same normalization for type1
         normalized = []
-        for l in ing:
-            if l.isupper() and len(l) > 2:
-                normalized.append(l)
-            elif not l.startswith('- '):
-                normalized.append('- ' + l)
+        for ln in ing:
+            if ln.isupper() and len(ln) > 2:
+                normalized.append(ln)
+            elif not ln.startswith('- '):
+                normalized.append('- ' + ln)
             else:
-                normalized.append(l)
+                normalized.append(ln)
         ing = normalized
     result['ingredients'] = ing
 
@@ -411,17 +408,17 @@ def build_markdown(title, author, source, time_str, yield_str, body):
     if ings:
         md.append('## Ingredients')
         md.append('')
-        for l in ings:
-            if l.isupper() and len(l) > 2:
-                md.append(f'**{l.title()}:**')
-            elif l.startswith('**'):
-                md.append(l)
-            elif l.startswith('- '):
-                md.append(l)
+        for ln in ings:
+            if ln.isupper() and len(ln) > 2:
+                md.append(f'**{ln.title()}:**')
+            elif ln.startswith('**'):
+                md.append(ln)
+            elif ln.startswith('- '):
+                md.append(ln)
             else:
                 # No dash prefix = subsection header (Type 3 style)
-                if l:
-                    md.append(f'**{l}**')
+                if ln:
+                    md.append(f'**{ln}**')
         md.append('')
 
     bfr = body.get('before_you_begin', [])
@@ -435,12 +432,12 @@ def build_markdown(title, author, source, time_str, yield_str, body):
     if insts:
         md.append('## Instructions')
         md.append('')
-        for l in insts:
-            m = re.match(r'^(\d+)[\.\)]\s+(.*)', l, re.DOTALL)
+        for ln in insts:
+            m = re.match(r'^(\d+)[\.\)]\s+(.*)', ln, re.DOTALL)
             if m:
                 md.append(f'{m.group(1)}. {m.group(2)}')
             else:
-                md.append(l)
+                md.append(ln)
         md.append('')
 
     notes = body.get('notes', [])
