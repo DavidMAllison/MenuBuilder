@@ -28,8 +28,11 @@ from pathlib import Path
 
 import httpx
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 import anthropic
 from yt_utils import enrich_recipe_from_transcript
+
+load_dotenv(Path(__file__).parent / ".env")
 
 # Load API key from sms-assistant .env if not already in environment
 if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -89,11 +92,7 @@ _INSTRUCTION_HEADERS = {
 
 
 def _load_yt_api_key() -> str:
-    config_path = Path(__file__).parent / "config.json"
-    try:
-        return json.loads(config_path.read_text(encoding="utf-8")).get("youtube_api_key", "")
-    except Exception:
-        return ""
+    return os.environ.get("YOUTUBE_API_KEY", "")
 
 
 def search_claudia(query: str, max_results: int = 8) -> list[dict]:

@@ -12,13 +12,14 @@ Usage:
     python3 workflow_smoketest.py > report.txt 2>&1   # save to file
 """
 
+import base64
 import json
 import re
 import sqlite3
 import subprocess
 import sys
 import urllib.request
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 # ── Colors (strip when piped to file) ─────────────────────────────────────────
@@ -40,6 +41,7 @@ INV_PATH  = STATE_DIR / "inventory.json"
 LUNCH_PATH = STATE_DIR / "lunch_state.json"
 SCHED_PATH = HOME / "projects/personal/FamilySchedule/schedule.json"
 PROJECT   = HOME / "projects/personal/MenuBuilder"
+CONFIG_PATH = PROJECT / "config.json"
 FEEDBACK  = PLANS_DIR / "feedback_current.json"
 TCC_DB    = HOME / "Library/Application Support/com.apple.TCC/TCC.db"
 
@@ -125,6 +127,36 @@ def _check_schedule():
     data = json.loads(SCHED_PATH.read_text())
     assert data, "schedule file is empty"
     return "readable"
+
+def _jwt_expiry(token: str):
+    """Decode a JWT's payload (no signature check -- informational only)
+    and return its 'exp' claim as a UTC datetime, or None if absent/unparseable."""
+    try:
+        payload_b64 = token.split(".")[1]
+        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        exp = payload.get("exp")
+        return datetime.fromtimestamp(exp, tz=timezone.utc) if exp else None
+    except Exception:
+        return None
+
+def _check_atk_cookie_expiry():
+    if not CONFIG_PATH.exists():
+        return "config.json not found — skipped"
+    cfg = json.loads(CONFIG_PATH.read_text())
+    refresh_token = cfg.get("atk", {}).get("cookies", {}).get("refresh_token", "")
+    if not refresh_token:
+        return "no ATK session cached yet — will login on next atk_agent run"
+
+    expiry = _jwt_expiry(refresh_token)
+    assert expiry, "ATK refresh_token present but not a decodable JWT"
+
+    days_left = (expiry - datetime.now(timezone.utc)).total_seconds() / 86400
+    assert days_left > 0, f"ATK refresh token EXPIRED {abs(days_left):.1f} days ago — atk_agent will need a fresh Playwright login"
+
+    if days_left < 7:
+        return f"⚠ expires in {days_left:.1f} days — re-login will trigger soon"
+    return f"expires in {days_left:.0f} days"
 
 def _check_github_publish():
     # Several intake paths write .md files but only the Review UI auto-publishes.
@@ -417,6 +449,7 @@ def main():
     check("shopping CSV",          _check_shopping_csv)
     check("GitHub Pages publish",  _check_github_publish)
     check("Recipe .md structure",  _check_md_structure)
+    check("ATK session expiry",    _check_atk_cookie_expiry)
 
     section("APP BINARIES")
     check("WeeklyShoppingList.app",  _check_shopping_app)

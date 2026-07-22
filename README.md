@@ -42,7 +42,8 @@ A personal meal planning system built around real family constraints — health 
 
 ```
 suggest_meals.py              # Candidate meal filter — run before each weekly plan
-workflow_smoketest.py         # Pre-flight check — GitHub publish, .md structure, state paths, app binaries, TCC (26 checks)
+candidate_scoring.py          # Shared candidate filtering/scoring/inventory-matching — imported by suggest_meals.py and mcp/menu_server.py so the two paths can't drift
+workflow_smoketest.py         # Pre-flight check — GitHub publish, .md structure, state paths, app binaries, TCC, ATK session expiry (27 checks)
 restart_mcp.sh                # Kill stale menu_server.py MCP subprocess(es) so the next tool call runs current code
 ruff.toml                     # Lint config (pyflakes F + pycodestyle E4/E7/E9)
 requirements.txt              # Pinned dependency versions
@@ -82,8 +83,8 @@ mcp/
   menu_server.py              # MCP server — exposes workflow tools over stdio; get_prep_guide is on-demand with mode=weekly|tonight|auto
   README.md                   # MCP setup and Claude Code wiring instructions
 recipe_metadata.json          # (not committed) Single source of truth for all recipe data
-config.json                   # (not committed) Local paths and settings — see config.example.json
-.env.example                  # Template for secrets (YouTube API key, ATK credentials, Flask secret) — copy to .env
+config.json                   # (not committed) Local paths and settings — no secrets (moved to .env)
+.env.example                  # Template for secrets (YouTube API key, ATK credentials, Flask secret, review password hash) — copy to .env, loaded via python-dotenv
 CLAUDE.md                     # AI assistant context and workflow instructions
 backlog.md                    # Planned features
 release-notes.md              # Shipped features log

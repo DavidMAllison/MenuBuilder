@@ -7,9 +7,10 @@ Pull priority:
      ("Try Out", "Sunday Dinner", "Dinners")
   2. User's top-rated recipes (fallback when collections yield < target new)
 
-Auth: Playwright login on first run (or when cookies expire) → cookies cached
-      in config.json. httpx + cookies for all API and recipe page fetches.
-      Cookies refreshed after 20 hours.
+Auth: credentials (ATK_EMAIL/ATK_PASSWORD) come from .env. Playwright login on
+      first run (or when cookies expire) → cookies cached in config.json.
+      httpx + cookies for all API and recipe page fetches. Cookies refreshed
+      after 20 hours.
 
 Usage:
   python3 atk_agent.py                   # sync, add up to 5 new recipes
@@ -28,9 +29,11 @@ from pathlib import Path
 
 import httpx
 import anthropic
+from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).parent
 CONFIG_PATH  = PROJECT_ROOT / "config.json"
+load_dotenv(PROJECT_ROOT / ".env")
 ATK_BASE     = "https://www.americastestkitchen.com"
 COOKIE_TTL_H = 20   # hours before requiring Playwright re-login
 BATCH_SIZE   = 6    # recipes per Haiku call
@@ -77,8 +80,7 @@ def _login_playwright(cfg):
     """Playwright login → save cookies to config → return cookie dict."""
     from playwright.sync_api import sync_playwright
 
-    atk = cfg["atk"]
-    email, password = atk["email"], atk["password"]
+    email, password = os.environ.get("ATK_EMAIL", ""), os.environ.get("ATK_PASSWORD", "")
     print("  [auth] Opening browser for ATK login...")
 
     cookies = {}
@@ -515,8 +517,8 @@ def sync_atk(target=5, dry_run=False, force_login=False, collection_filter=None,
     """
     cfg = _load_config()
 
-    if "atk" not in cfg or not cfg["atk"].get("email"):
-        raise RuntimeError("ATK credentials not configured in config.json")
+    if not os.environ.get("ATK_EMAIL"):
+        raise RuntimeError("ATK_EMAIL not configured in .env")
 
     metadata_path = Path(cfg["metadata_path"])
     metadata      = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -663,8 +665,8 @@ def run_agent(topic: str = "") -> list[dict]:
     then supplements with saved collections. Writes to Dropbox queue.
     """
     cfg = _load_config()
-    if "atk" not in cfg or not cfg["atk"].get("email"):
-        print("  [!] ATK credentials not configured — skipping")
+    if not os.environ.get("ATK_EMAIL"):
+        print("  [!] ATK_EMAIL not configured in .env — skipping")
         return []
 
     cfg, cookies = _ensure_auth(cfg)
