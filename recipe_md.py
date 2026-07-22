@@ -17,6 +17,8 @@ recipe file, import this.
 
 import re
 
+_SECTION_HEADER_RE = re.compile(r"^\*\*(.+):\*\*$")
+
 
 def build_recipe_md(
     title: str,
@@ -31,7 +33,11 @@ def build_recipe_md(
         title: Recipe title (used for the # heading).
         ingredients: Flat list of ingredient strings. Items prefixed
             "(optional)" (case-insensitive) are split into a separate
-            "Optional / For Serving" section automatically.
+            "Optional / For Serving" section automatically. An item that is
+            itself a bold label ending in a colon (e.g. "**Marinade:**") is
+            rendered as a section sub-header instead of a bulleted line --
+            use this for recipes with multiple components (marinade vs.
+            protein vs. sides) rather than hand-formatting the .md.
         instructions: Ordered list of instruction step strings.
         notes: Family feedback / pre-cook tips, if any. Omitted entirely
             when blank -- empty Notes sections are noise.
@@ -53,8 +59,14 @@ def build_recipe_md(
     optional = [i for i in ingredients if i.lower().startswith("(optional)")]
 
     lines += ["## Ingredients", ""]
-    for ing in required:
-        lines.append(f"- {ing}")
+    for i, ing in enumerate(required):
+        header = _SECTION_HEADER_RE.match(ing.strip())
+        if header:
+            if i > 0:
+                lines.append("")
+            lines.append(ing.strip())
+        else:
+            lines.append(f"- {ing}")
     if optional:
         lines += ["", "**Optional / For Serving:**", ""]
         for ing in optional:
