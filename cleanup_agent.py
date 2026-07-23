@@ -485,12 +485,17 @@ def check_images(
 # ---------------------------------------------------------------------------
 
 def _is_stub_instructions(instructions) -> bool:
-    """True if instructions are missing or too thin to be useful (< 3 steps with real content)."""
+    """True if instructions are missing or too thin to be useful.
+
+    Judges by total content length, not step count — recipes (especially ATK-style)
+    can legitimately be written as 1-2 dense paragraphs rather than 3+ short steps.
+    """
     if not instructions:
         return True
     if isinstance(instructions, list):
         meaningful = [s for s in instructions if isinstance(s, str) and len(s.strip()) > 20]
-        return len(meaningful) < 3
+        total_chars = sum(len(s.strip()) for s in meaningful)
+        return total_chars < 150
     return False
 
 
