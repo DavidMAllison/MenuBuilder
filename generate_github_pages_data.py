@@ -57,7 +57,7 @@ def main():
             "servings": recipe.get("servings", ""),
             "cuisine": recipe.get("cuisine_type") or recipe.get("cuisine", ""),
             "source": recipe.get("source", ""),
-            "source_url": recipe.get("url") or recipe.get("source_url", ""),
+            "source_url": recipe.get("source_url") or recipe.get("url", ""),
             "video_url": recipe.get("video_url", ""),
         }
 

@@ -450,12 +450,14 @@ def add_recipe():
     _register_cuisine(cuisine)
 
     prep_data = prep_map.get(title, {})
+    filename = _title_to_filename(title)
+    gh_url = f"{_GH_PAGES_BASE}/{filename.replace('.md', '')}" if _GH_PAGES_BASE else url
     entry = {
         "title":           title,
-        "filename":        _title_to_filename(title),
+        "filename":        filename,
         "source":          recipe.get("source", ""),
         "source_url":      url,
-        "url":             url,
+        "url":             gh_url,
         "cuisine":         cuisine,
         "meal_type":       _infer_meal_type(r),
         "health":          health_map.get(title, "Moderate"),
