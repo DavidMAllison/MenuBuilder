@@ -55,14 +55,15 @@ def _register_cuisine(cuisine: str) -> None:
 
 # Quality thresholds — entries failing these get needs_review=true
 _HTML_RE        = re.compile(r"<[^>]+>")
-_MIN_STEPS      = 3
+_MIN_TOTAL_CHARS = 150  # total instruction content, not step count — some recipes
+                        # (esp. ATK-style) are legitimately 1-2 dense paragraphs
 _MIN_STEP_LEN   = 30
 _MIN_INGREDIENTS = 4
 
 
 def _quality_check(ingredients_raw: list, instructions: list) -> bool:
     """Return True (needs_review) if content looks auto-generated / incomplete."""
-    if len(instructions) < _MIN_STEPS:
+    if sum(len(s) for s in instructions) < _MIN_TOTAL_CHARS:
         return True
     if any(len(s) < _MIN_STEP_LEN for s in instructions):
         return True
