@@ -276,6 +276,8 @@ def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
             continue
         if is_hiatus(name):
             continue
+        if str(r.get('meal_type', '')).strip().lower() == 'lunch':
+            continue  # lunch-only recipes aren't dinner candidates
 
         age_weeks = weeks_since(r.get('last_cooked_date'))
         if age_weeks < RECENCY_WEEKS:
