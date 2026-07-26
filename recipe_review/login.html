@@ -47,7 +47,7 @@
       margin-bottom: 5px;
     }
 
-    input[type="email"],
+    input[type="text"],
     input[type="password"] {
       width: 100%;
       padding: 10px 12px;
@@ -59,7 +59,7 @@
       transition: border-color 0.15s;
     }
 
-    input[type="email"]:focus,
+    input[type="text"]:focus,
     input[type="password"]:focus {
       border-color: #555;
     }
@@ -117,11 +117,11 @@
     <h1>Recipe Review</h1>
     <p class="subtitle">Allison Family</p>
 
-    <div class="error" id="error-msg" style="display:none">Incorrect email or password.</div>
+    <div class="error" id="error-msg" style="display:none">Incorrect username or password.</div>
 
     <form method="POST" action="/login">
-      <label for="email">Email</label>
-      <input type="email" id="email" name="email" autocomplete="email" required autofocus>
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username" required autofocus>
 
       <label for="password">Password</label>
       <input type="password" id="password" name="password" autocomplete="current-password" required>
