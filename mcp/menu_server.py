@@ -836,9 +836,6 @@ def _parse_cuisine_slots(direction: str) -> dict:
     return slots
 
 
-# Max meals per protein type per week (all others default to 1)
-_PROTEIN_CAPS = {"Chicken": 2}
-
 # Max meals per cuisine family per week unless the direction explicitly
 # quantifies that family (e.g. "three Mexican") via _parse_cuisine_slots
 _DEFAULT_CUISINE_FAMILY_CAP = 2
@@ -910,7 +907,6 @@ def _select_meals(
     quick_set = {d.lower() for d in quick_days}
     # Pre-fill eating-out days so _pick skips them
     selected: dict = {day: "Going Out to Eat" for day in eating_out_set}
-    protein_counts: dict = {}
     cuisine_family_counts: dict = {}
     indulgent_count = 0
 
@@ -936,10 +932,6 @@ def _select_meals(
                 # Cap Indulgent at 1 per week
                 if c.get("health") == "Indulgent" and indulgent_count >= 1:
                     continue
-                protein = c["protein"]
-                cap = _PROTEIN_CAPS.get(protein, 1)
-                if protein_counts.get(protein, 0) >= cap and len(pool) > len(days_subset) * 2:
-                    continue
                 # Cuisine family cap: default 2/week, overridden when the
                 # direction explicitly quantifies a family ("three Mexican")
                 fam = _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", ""))
@@ -954,7 +946,6 @@ def _select_meals(
             c = random.choice(eligible)
             fam = _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", ""))
             selected[day] = c["name"]
-            protein_counts[c["protein"]] = protein_counts.get(c["protein"], 0) + 1
             cuisine_family_counts[fam] = cuisine_family_counts.get(fam, 0) + 1
             if c.get("health") == "Indulgent":
                 indulgent_count += 1
@@ -965,9 +956,10 @@ def _select_meals(
     _pick(DAYS_ORDER)
 
     # Last-resort fill for any day _pick() couldn't satisfy (thin pool after caps).
-    # Relaxes the protein/cuisine caps progressively, but the weekday/weekend
-    # guard is never relaxed — a multi-hour weekend dish should never land on
-    # a weekday no matter how thin the remaining pool is.
+    # Relaxes the cuisine cap as a last resort, but the weekday/weekend guard is
+    # never relaxed — a multi-hour weekend dish should never land on a weekday
+    # no matter how thin the remaining pool is. No protein cap by design —
+    # protein variety is left to natural randomness, not an enforced limit.
     for day in DAYS_ORDER:
         if day in selected:
             continue
@@ -976,30 +968,22 @@ def _select_meals(
         for relax_cuisine in (False, True):
             if chosen:
                 break
-            for relax_protein in (False, True):
-                for c in pool:
-                    if c["name"] in selected.values():
+            for c in pool:
+                if c["name"] in selected.values():
+                    continue
+                meal_type_norm = str(c.get("meal_type", "")).strip().lower()
+                if not is_weekend_day and meal_type_norm == "weekend":
+                    continue
+                if not relax_cuisine:
+                    fam = _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", ""))
+                    slot_cap = cuisine_slots.get(fam, _DEFAULT_CUISINE_FAMILY_CAP)
+                    if cuisine_family_counts.get(fam, 0) >= slot_cap:
                         continue
-                    meal_type_norm = str(c.get("meal_type", "")).strip().lower()
-                    if not is_weekend_day and meal_type_norm == "weekend":
-                        continue
-                    if not relax_protein:
-                        protein = c["protein"]
-                        if protein_counts.get(protein, 0) >= _PROTEIN_CAPS.get(protein, 1):
-                            continue
-                    if not relax_cuisine:
-                        fam = _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", ""))
-                        slot_cap = cuisine_slots.get(fam, _DEFAULT_CUISINE_FAMILY_CAP)
-                        if cuisine_family_counts.get(fam, 0) >= slot_cap:
-                            continue
-                    chosen = c
-                    break
-                if chosen:
-                    break
+                chosen = c
+                break
         if chosen:
             fam = _CUISINE_FAMILY_MAP.get(chosen.get("cuisine", ""), chosen.get("cuisine", ""))
             selected[day] = chosen["name"]
-            protein_counts[chosen["protein"]] = protein_counts.get(chosen["protein"], 0) + 1
             cuisine_family_counts[fam] = cuisine_family_counts.get(fam, 0) + 1
             if chosen.get("health") == "Indulgent":
                 indulgent_count += 1
@@ -2367,28 +2351,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             if non_overloaded:
                 eligible = non_overloaded
 
-        # 5. Weekly protein cap — don't exceed _PROTEIN_CAPS on a swap (e.g. max 2 chicken/week).
-        # Always enforced, unlike the cuisine slot step below which only applies when the
-        # user named an explicit quota — this is what let repeated swaps stack up 4 chicken
-        # dinners in one week despite the initial auto-pick respecting the cap.
-        current_protein_counts: dict = {}
-        for d, name in selected.items():
-            if d == day:
-                continue
-            rkey = _find_recipe_key(name, all_recipes)
-            if rkey:
-                p = _get_protein(rkey)
-                current_protein_counts[p] = current_protein_counts.get(p, 0) + 1
-        protein_ok = [
-            c for c in eligible
-            if current_protein_counts.get(c["protein"], 0) < _PROTEIN_CAPS.get(c["protein"], 1)
-        ]
-        if protein_ok:
-            eligible = protein_ok
-        elif eligible:
-            filter_notes.append("Weekly protein cap already met for every remaining option — picked best alternative")
-
-        # 6. Cuisine slot balance — don't exceed direction-specified quota on a swap
+        # 5. Cuisine slot balance — don't exceed direction-specified quota on a swap
         swap_cuisine_slots = _parse_cuisine_slots(activity.get("cuisine_direction", ""))
         if swap_cuisine_slots:
             current_fam_counts: dict = {}
@@ -2413,7 +2376,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             if balanced:
                 eligible = balanced
 
-        # 7. Cook-time filter — weeknight days default to quick meals
+        # 6. Cook-time filter — weeknight days default to quick meals
         weeknight_days = {"Mon", "Tue", "Wed", "Thu", "Fri"}
         if day in weeknight_days:
             quick_eligible = [c for c in eligible if c.get("minutes", 999) <= QUICK_THRESHOLD
@@ -2421,7 +2384,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             if quick_eligible:
                 eligible = quick_eligible
 
-        # 8. Inventory boost — sort by inventory match, preserving existing order otherwise
+        # 7. Inventory boost — sort by inventory match, preserving existing order otherwise
         inventory = _load_inventory_keywords()
         if inventory:
             def _swap_score(c):
@@ -2432,7 +2395,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 return _inventory_boost(c["name"], ing, inventory)
             eligible.sort(key=_swap_score)
 
-        # 9. meal_type match (weekend vs weeknight) — soft filter, only if pool survives
+        # 8. meal_type match (weekend vs weeknight) — soft filter, only if pool survives
         if outgoing:
             key = _find_recipe_key(outgoing, all_recipes)
             if key:
