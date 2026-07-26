@@ -230,10 +230,10 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
 ## Learned Preferences
 
 ### Variety Rules (enforce at step 4 before proposing)
-- **Protein variety** -- max 2 chicken meals per week; max 1 of every other protein (salmon, pork, beef, shrimp, vegetarian). If the candidate list is heavy on one protein, swap before proposing.
+- **Protein variety** -- intentionally NOT capped (removed Jul 26 2026, see [[bug_candidate_selection_variety_jul26]]/David's explicit call). A hard "max 2 chicken/max 1 other protein" cap was enforced in code, but caused more friction than value (blocked swaps, forced picks toward whatever wasn't capped yet). Protein distribution is left to natural randomness in candidate selection now -- do not re-add a protein cap without checking with David first.
 - **Cuisine variety** -- max 2 meals from the same cuisine family (Asian, Mexican, Italian, etc.) per week. "Asian" counts as one family — Japanese + Korean + Chinese = 3 Asian meals is too many.
 - **New recipe pressure** -- at least 1 meal per week should be a recipe not cooked in the last 6 weeks, ideally from the `idea` list. Agents (mexican_agent, asian_agent, indian_agent, chef_agent) feed the idea pool between cycles — they don't run during planning. Don't default to the same rotation every week.
-- **Cross-check before proposing** -- before presenting the 7-meal list, verify: no protein appears more than the limits above, no cuisine family appears more than twice, at least 1 is relatively new to the rotation.
+- **Cross-check before proposing** -- before presenting the 7-meal list, verify: no cuisine family appears more than twice, at least 1 is relatively new to the rotation. (No protein check -- see above.)
 
 ### Other Preferences
 - **No duplicate proteins in a week** -- e.g., don't put salmon on two nights
