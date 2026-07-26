@@ -46,7 +46,8 @@ _GENERATE_SCRIPT = Path(__file__).parent / "generate_github_pages_data.py"
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-key-change-me")
 app.permanent_session_lifetime = timedelta(days=30)
 
-_REVIEW_USERS = {u["email"]: u["name"] for u in _CONFIG.get("review_users", [])}
+_REVIEW_USERNAME = _CONFIG.get("review_username", "").strip().lower()
+_REVIEW_DISPLAY_NAME = _CONFIG.get("review_display_name", "")
 _REVIEW_PW_HASH = os.environ.get("REVIEW_PASSWORD_HASH", "")
 
 
@@ -64,15 +65,20 @@ def login_required(f):
 @app.route("/login", methods=["GET", "POST"])
 def login_page():
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
+        username = request.form.get("username", "").strip().lower()
         password = request.form.get("password", "")
         remember = request.form.get("remember") == "on"
         raw_next = request.args.get("next") or "/"
         next_url = raw_next if raw_next.startswith("/") else "/"
-        if email in _REVIEW_USERS and _REVIEW_PW_HASH and check_password_hash(_REVIEW_PW_HASH, password):
+        if (
+            username
+            and username == _REVIEW_USERNAME
+            and _REVIEW_PW_HASH
+            and check_password_hash(_REVIEW_PW_HASH, password)
+        ):
             session.permanent = remember
-            session["user"] = email
-            session["name"] = _REVIEW_USERS[email]
+            session["user"] = username
+            session["name"] = _REVIEW_DISPLAY_NAME
             return redirect(next_url)
         error_next = f"&next={next_url}" if next_url != "/" else ""
         return redirect(url_for("login_page") + f"?error=1{error_next}")
@@ -950,7 +956,14 @@ def fill_ideas_status():
 
 if __name__ == "__main__":
     print(f"Aggregating {AGENT_RESULTS_DIR}/*_agent_results.json")
-    print("Open http://localhost:5051")
     # Kick off index build in background so it's ready before first search
     threading.Thread(target=_build_index, daemon=True).start()
-    app.run(host="0.0.0.0", port=5051, debug=False)
+
+    cert_path = Path(__file__).parent / "certs" / "recipe_review.crt"
+    key_path = Path(__file__).parent / "certs" / "recipe_review.key"
+    if cert_path.exists() and key_path.exists():
+        print("Open https://localhost:5051 (self-signed cert — browser will warn once)")
+        app.run(host="0.0.0.0", port=5051, debug=False, ssl_context=(str(cert_path), str(key_path)))
+    else:
+        print("Open http://localhost:5051")
+        app.run(host="0.0.0.0", port=5051, debug=False)

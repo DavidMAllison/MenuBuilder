@@ -3,6 +3,9 @@ config.json
 schedule.md
 recipe_data.txt
 
+# Self-signed TLS cert/key for recipe_review_server.py — regenerate locally, don't commit
+certs/
+
 # One-off batch scripts (not part of the core tool)
 CREATE_ALL_25_RECIPES.py
 create_mediterranean_recipes.py
