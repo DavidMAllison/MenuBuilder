@@ -54,6 +54,7 @@ from candidate_scoring import (
     resolve_cuisine, resolve_health, parse_minutes as _parse_minutes,
     protein_label as _get_protein,
 )
+from gui_launch import request_gui_launch
 
 # ---------------------------------------------------------------------------
 # Config and paths
@@ -1768,7 +1769,7 @@ def _do_finalize(activity: dict) -> dict:
         shopping_path.write_text(_build_shopping_csv(selected, week_start))
         if not _TEST_DIR:
             os.chmod(shopping_path, 0o666)
-            subprocess.Popen(["open", "/Applications/WeeklyShoppingList.app"])
+            request_gui_launch(["WeeklyShoppingList.app"])
 
     # In test mode skip app launches and SMS; log summary to stderr instead
     if _TEST_DIR:
@@ -1776,7 +1777,7 @@ def _do_finalize(activity: dict) -> dict:
         print(f"[TEST MODE] Plan written to {plan_path}\n{summary}", file=sys.stderr)
     else:
         # Always launch calendar app — future events are still useful to see
-        subprocess.Popen(["open", "/Applications/WeeklyMealCalendar.app"])
+        request_gui_launch(["WeeklyMealCalendar.app"])
 
         # Summary notification to admin only
         summary = _plan_summary_text(plan_data)
@@ -2492,6 +2493,26 @@ def approve_menu(expected_selected_meals: dict = None) -> dict:
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode == 2:
+            # send_menu_partner.py no-op'd (e.g. a stale menu_feedback_pending.json
+            # from an earlier/abandoned send) -- exit code 0 either way used to make
+            # this look identical to a real send.
+            pending_info = {}
+            if PENDING_FILE.exists():
+                try:
+                    pending_info = json.loads(PENDING_FILE.read_text())
+                except Exception:
+                    pass
+            return {
+                "error": "menu_already_pending",
+                "message": (
+                    "Nothing was actually sent -- a menu approval is already pending "
+                    "(stale menu_feedback_pending.json). Check whether Ashley already "
+                    "replied to the earlier send; if that pending file is stale/abandoned, "
+                    "delete it, then call approve_menu again."
+                ),
+                "pending_since": pending_info.get("sent_at"),
+            }
         if result.returncode != 0:
             return {"error": f"send_menu_partner.py failed: {result.stderr.strip()}"}
     except Exception as e:

@@ -20,7 +20,6 @@ import csv
 import json
 import os
 import re
-import subprocess
 import sys
 from datetime import date, timedelta
 from io import StringIO
@@ -29,6 +28,8 @@ from typing import Dict, List, Optional, Tuple
 
 import httpx
 from bs4 import BeautifulSoup
+
+from gui_launch import request_gui_launch
 
 # ---------------------------------------------------------------------------
 # Config
@@ -504,9 +505,10 @@ def execute_swap(
     _update_reminder_line(plan_path, day, canonical_name, time_str)
     _log_swap_to_feedback(outgoing_recipe, canonical_name, target)
 
-    # --- Re-run apps ---
-    subprocess.Popen(["open", "/Applications/WeeklyShoppingList.app"])
-    subprocess.Popen(["open", "/Applications/WeeklyMealCalendar.app"])
+    # --- Re-run apps (opened from davidallison's own GUI session via
+    # gui_launch_watcher.py, regardless of which Mac account this process
+    # is running as — see gui_launch.py) ---
+    request_gui_launch(["WeeklyShoppingList.app", "WeeklyMealCalendar.app"])
 
     return {
         "success": True,

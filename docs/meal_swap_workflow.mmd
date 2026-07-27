@@ -26,9 +26,8 @@ flowchart TD
     G --> J[Update shopping CSV:\nRemove outgoing recipe rows\nAdd incoming recipe rows\nUpdate shared items e.g. lemons]
     J --> K[Update mealplan txt:\nSwap recipe name, URL, reminder for that day]
     K --> L[Log outgoing recipe in feedback_current.json:\nsentiment: skipped]
-    L --> M[Re-run WeeklyShoppingList.app]
-    M --> N[Re-run WeeklyMealCalendar.app]
-    N --> O[Flag: old ingredients still open\nin Reminders need manual removal]
+    L --> M[Request GUI app launch\nvia gui_launch.request_gui_launch\n- always opens under David's session,\neven when swap was triggered by SMS/allisonbot]
+    M --> O[Flag: old ingredients still open\nin Reminders need manual removal]
     O --> P([Done])
 
     classDef startEnd fill:#f0fdf4,stroke:#4ade80
@@ -38,7 +37,7 @@ flowchart TD
     classDef human fill:#fdf4ff,stroke:#c084fc,stroke-width:2px,stroke-dasharray:5 5
 
     class A,P startEnd
-    class B,G,H,H3,I,I3,J,K,L,M,N process
+    class B,G,H,H3,I,I3,J,K,L,M process
     class D,F,H2,I2 decision
     class O warning
     class C,E,H4,I4 human
