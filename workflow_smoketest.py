@@ -270,6 +270,37 @@ def _check_tcc_calendar():
 def _check_tcc_reminders():
     return _tcc_query("WeeklyShoppingList", "com.apple.reminders")
 
+def _check_gui_launch_watcher():
+    """
+    App launches route through gui_launch_watcher.py (a LaunchAgent in
+    davidallison's own Aqua session) instead of a direct `open` call, so
+    that SMS/allisonbot-triggered runs still land in David's own iCloud
+    account. If this LaunchAgent isn't loaded, requests just pile up
+    unprocessed -- see gui_launch.py / bug_allisonbot_account_mismatch.
+    """
+    uid = subprocess.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(
+        ["launchctl", "print", f"gui/{uid}/com.menubuilder.guilaunch"],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, (
+        "LaunchAgent not loaded — run:\n"
+        f"       launchctl bootstrap gui/{uid} ~/Library/LaunchAgents/com.menubuilder.guilaunch.plist"
+    )
+    assert "watching = 1" in r.stdout, "loaded but WatchPaths is not registered"
+    return "loaded + watching"
+
+def _check_gui_launch_queue_backlog():
+    reqs_dir = STATE_DIR / "gui_launch_requests"
+    if not reqs_dir.exists():
+        return "no queue dir yet"
+    stuck = list(reqs_dir.glob("*.json"))
+    assert not stuck, (
+        f"{len(stuck)} unprocessed request(s) — watcher may be down: "
+        f"{[f.name for f in stuck]}"
+    )
+    return "queue empty"
+
 def _check_review_server():
     try:
         resp = urllib.request.urlopen("http://localhost:5051/", timeout=3)
@@ -467,6 +498,8 @@ def main():
     section("TCC PERMISSIONS")
     check("WeeklyMealCalendar → Calendar",   _check_tcc_calendar)
     check("WeeklyShoppingList → Reminders",  _check_tcc_reminders)
+    check("gui_launch LaunchAgent",          _check_gui_launch_watcher)
+    check("gui_launch queue backlog",        _check_gui_launch_queue_backlog)
 
     section("SERVER & WORKFLOW STATE")
     check("recipe_review_server  (port 5051)", _check_review_server)

@@ -103,7 +103,13 @@ finalization logic:
    - REMINDERS: generated via Claude Sonnet (falls back to plain day list if
      `ANTHROPIC_API_KEY` not available)
 2. Generate `shopping_YYYY-MM-DD.csv`: Item / Notes (qty+unit) / Date (cook date)
-3. Launch `WeeklyShoppingList.app` and `WeeklyMealCalendar.app` (safe to re-run)
+3. Request launch of `WeeklyShoppingList.app` and `WeeklyMealCalendar.app` via
+   `gui_launch.request_gui_launch()` (safe to re-run). This does not call `open`
+   directly — it writes a spool file that `gui_launch_watcher.py` (a LaunchAgent
+   running only in davidallison's own GUI session) picks up and launches from,
+   so the apps always run under David's account even when this step is
+   triggered by the SMS/Keanu bridge (which runs as a separate macOS user,
+   `allisonbot`, signed into a different iCloud account). See `gui_launch.py`.
 4. Send plan summary to `admin_handle` (David) via Keanu outbox
 5. Send prep guide to both `admin_handle` and `partner_handle` via Keanu outbox
 
