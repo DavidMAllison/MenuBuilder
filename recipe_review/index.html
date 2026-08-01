@@ -1454,7 +1454,7 @@
 
   function updateSubtitle(visibleCount) {
     if (searchMode === 'semantic') {
-      document.getElementById('subtitle').textContent = `${visibleCount} search results`;
+      document.getElementById('subtitle').textContent = `${visibleCount} results (full collection)`;
       return;
     }
     if (searchMode === 'local') {
@@ -1812,7 +1812,7 @@
       }
       const header = document.createElement('div');
       header.className = 'search-results-header';
-      header.textContent = `Semantic results for "${q}"`;
+      header.textContent = `Results from your full collection for "${q}" — searches everywhere, not just ${currentView === 'new' ? 'New' : currentView === 'collection' ? 'Collection' : 'this view'}`;
       main.appendChild(header);
 
       const grid = document.createElement('div');
@@ -1866,7 +1866,11 @@
         + `<div class="card-image-placeholder" style="display:none">🍽</div>`
       : `<div class="card-image-placeholder">🍽</div>`;
 
-    if (recipe.in_collection && currentView !== 'collection') card.classList.add('in-collection');
+    // Skip the overlay in search mode: every /api/search result is already
+    // in_collection (search only covers the collection, not the New queue),
+    // so the checkmark would be on every card and mean nothing there --
+    // the header banner above already explains the scope once, clearly.
+    if (recipe.in_collection && currentView !== 'collection' && !isSearchResult) card.classList.add('in-collection');
 
     const scoreBadge = (isSearchResult && recipe.score != null)
       ? `<span class="score-badge">${Math.round(recipe.score * 100)}%</span>` : '';
