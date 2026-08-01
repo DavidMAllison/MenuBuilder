@@ -821,13 +821,68 @@ def _negation_terms(q: str) -> list[str]:
     return terms
 
 
+def _keyword_search_recipes(q: str) -> list:
+    """
+    Keyword fast-path: same two-pass convention as recipe_agent.py's
+    search_local_collection() (title/cuisine/source, all-terms-match wins
+    outright). A direct query like "chorizo" should return only recipes
+    that actually say chorizo, not whatever the embedding model considers
+    generally nearby -- semantic search has no relevance floor and always
+    returns up to 20 results, which is noisy for exact-word queries.
+
+    Returns [] (not None) when no recipe matches every term, so the caller
+    knows to fall back to semantic search.
+    """
+    terms = [t for t in q.lower().split() if len(t) > 2]
+    if not terms:
+        return []
+
+    recipes = _load_metadata().get("recipes", {})
+    hits = []
+    for key, v in recipes.items():
+        if v.get("status") != "active":
+            continue
+        title = v.get("title") or key
+        searchable = " ".join(filter(None, [
+            title, v.get("cuisine", ""), v.get("source", ""),
+        ])).lower()
+        if all(t in searchable for t in terms):
+            hits.append((title, v))
+
+    if not hits:
+        return []
+
+    return [{
+        "title":        title,
+        "cuisine":      v.get("cuisine", "") or "",
+        "source":       v.get("source", "") or "",
+        "time":         v.get("time", "") or "",
+        "health":       v.get("health", "") or "",
+        "meal_type":    v.get("meal_type", "") or "",
+        "times_cooked": v.get("times_cooked", 0),
+        "image":        v.get("image", "") or "",
+        "url":          (v.get("source_url") or v.get("url") or ""),
+        "ingredients":  (v.get("ingredients_raw") or [])[:12],
+        "instructions": (v.get("instructions") or [])[:6],
+        "in_collection": True,
+        "score":        1.0,
+    } for title, v in hits]
+
+
 @app.route("/api/search")
 @login_required
 def search_recipes():
-    """Semantic search over the full collection using sentence-transformers + ChromaDB."""
+    """Keyword fast-path over title/cuisine/source, falling back to semantic
+    search (sentence-transformers + ChromaDB) when no recipe matches every
+    query term -- same two-pass convention as recipe_agent.py's
+    search_local_collection()."""
     q = (request.args.get("q") or "").strip()
     if not q:
         return jsonify([])
+
+    keyword_hits = _keyword_search_recipes(q)
+    if keyword_hits:
+        return jsonify(keyword_hits)
 
     if not _index_built:
         if _index_building:
@@ -850,10 +905,22 @@ def search_recipes():
 
     exclude = _negation_terms(q)
 
+    # Below this, results are noise, not weak matches -- e.g. "chorizo" with
+    # no chorizo recipe in the collection tops out around 0.336 and decays to
+    # 0.266 by result 20 (checked directly against the live index), while a
+    # real match like "salmon" tops 0.576. Semantic search has no built-in
+    # relevance floor and always pads to n_results regardless of quality, so
+    # without this a query with no real matches still returns 20 recipes
+    # with score badges that look like a ranked list of decent options.
+    _MIN_SEMANTIC_SCORE = 0.35
+
     hits = []
     for meta, dist in zip(results["metadatas"][0], results["distances"][0]):
         title_lower = meta.get("title", "").lower()
         if any(term in title_lower for term in exclude):
+            continue
+        score = round(1 - dist, 3)
+        if score < _MIN_SEMANTIC_SCORE:
             continue
         hits.append({
             "title":        meta.get("title", ""),
@@ -868,7 +935,7 @@ def search_recipes():
             "ingredients":  json.loads(meta.get("ingredients", "[]")),
             "instructions": json.loads(meta.get("instructions", "[]")),
             "in_collection": True,
-            "score":        round(1 - dist, 3),
+            "score":        score,
         })
     return jsonify(hits)
 
