@@ -642,10 +642,58 @@ def _normalize_cuisine_direction(direction: str) -> tuple[str, Optional[str]]:
 _REASON_PROTEIN_MAP = [
     ("grilled fish", "Fish"), ("fish", "Fish"), ("salmon", "Fish"), ("cod", "Fish"),
     ("tilapia", "Fish"), ("seafood", "Fish"), ("shrimp", "Shrimp"),
-    ("chicken", "Chicken"), ("beef", "Beef"), ("pork", "Pork"), ("lamb", "Lamb"),
+    ("chicken", "Chicken"), ("beef", "Beef"), ("pork", "Pork"), ("ribs", "Pork"), ("lamb", "Lamb"),
     ("vegetarian", "Vegetarian"), ("veggie", "Vegetarian"), ("meatless", "Vegetarian"),
     ("pasta", "Pasta"), ("noodle", "Pasta"),
 ]
+
+# Multi-word generic complaints/preferences that carry no dish specifics --
+# stripped out before checking if anything food-specific remains in a reason
+# string. See _text_names_specific_dish().
+_GENERIC_REASON_SIGNALS = (
+    "too much", "too many", "had a lot of", "sick of", "tired of",
+    "low effort", "not too hard", "quick and easy",
+    "something different", "haven't tried", "never had",
+    "change of pace", "switch it up", "more variety", "what we've got",
+)
+
+# Single words that are filler, not dish content, once generic phrases and
+# bare protein-family keywords have already been stripped.
+_DISH_GATE_STOPWORDS = frozenset((
+    "the", "a", "an", "for", "to", "on", "of", "and", "or", "this", "that",
+    "week", "weeks", "day", "days", "please", "want", "swap", "force",
+    "recipe", "meal", "dinner", "instead", "use", "with", "some", "our",
+    "had", "have", "lets", "prefer", "idea", "ideas", "new", "let",
+    *DAY_NAME_MAP.keys(),
+))
+
+
+def _text_names_specific_dish(text: str) -> bool:
+    """
+    Cheap heuristic gate before spending a Haiku call: does `text` plausibly
+    name a specific dish/cut/ingredient (e.g. "pork belly", "country ribs"),
+    vs. a generic complaint/preference with no food specifics (e.g. "too
+    much chicken this week", "something easy", "prefer ideas")?
+
+    Deliberately errs toward True -- a spurious Haiku call costs a fraction
+    of a cent and adds well under a second of latency to an already
+    human-paced SMS exchange; silently ignoring a named dish is the bug
+    this exists to prevent.
+    """
+    t = re.sub(r"[^a-z\s']", " ", (text or "").strip().lower())
+    if not t:
+        return False
+    for sig in _GENERIC_REASON_SIGNALS:
+        t = t.replace(sig, " ")
+    for kw, _ in _REASON_PROTEIN_MAP:
+        t = t.replace(kw, " ")
+    # Deliberately split on apostrophes (not [a-z']) rather than trying to
+    # normalize contractions to match the stopword list's apostrophe-free
+    # spellings -- "we've" -> "we"/"ve", both under the 3-char floor and
+    # dropped, same net effect with less to keep in sync.
+    words = re.findall(r"[a-z]{3,}", t)
+    return any(w not in _DISH_GATE_STOPWORDS for w in words)
+
 
 # Category keywords for plan-wide tally (e.g. pasta-heavy detection)
 _CATEGORY_KEYWORDS = {
@@ -861,11 +909,46 @@ def _parse_eating_out_days(constraints: str, schedule_notes: list) -> list:
     return eating_out
 
 
+def _resolve_dish_boost_names(direction_text: str, candidates: list) -> Optional[list]:
+    """
+    Ask Haiku which real recipe titles match specific dish/protein/cut
+    mentions in `direction_text` (e.g. "pork belly, country ribs, chicken").
+    Searches the full recipe collection, not just this week's scored
+    candidate pool, since matches are often never-cooked ideas that
+    wouldn't otherwise be ranked highly enough to appear there -- mirrors
+    why the cuisine never-cooked splice in _select_meals() re-scans
+    _load_metadata() separately instead of trusting `candidates`.
+
+    Returns matching titles (order is not meaningful here -- the caller
+    uses this as a pool-wide boost set, not a single ranked pick) or None
+    if nothing specific was named, nothing matched, or the call failed.
+    """
+    if not direction_text or not _text_names_specific_dish(direction_text):
+        return None
+    recipes = _load_metadata()
+    pool_names = {c["name"] for c in candidates}
+    eligible_names = [
+        name for name, meta in recipes.items()
+        if meta.get("status") not in ("disliked", "ignored")
+        and not meta.get("recommend_hold")
+        and str(meta.get("meal_type", "")).strip().lower() != "lunch"
+        and not any(h in name.lower() for h in HIATUS_PROTEINS)
+    ]
+    random.shuffle(eligible_names)
+    # Prioritize names already in this week's candidate pool, then everything
+    # else, capped so the prompt stays a reasonable size (mirrors _claude_swap's
+    # 50+50 split for the same reason).
+    pool_first = [n for n in eligible_names if n in pool_names][:75]
+    other = [n for n in eligible_names if n not in pool_names][:75]
+    return _match_named_dishes(direction_text, pool_first + other)
+
+
 def _select_meals(
     candidates: list,
     quick_days: list,
     cuisine_direction: Optional[str],
     eating_out_days: Optional[list] = None,
+    dish_boost_names: Optional[list] = None,
 ) -> dict:
     pool = list(candidates)
     eating_out_set = set(eating_out_days or [])
@@ -903,6 +986,49 @@ def _select_meals(
                 })
         random.shuffle(new_matches)
         pool[:0] = new_matches
+
+    # Boost recipes matching specific dishes/proteins named in the request
+    # (e.g. "pork belly, country ribs, chicken") -- mirrors the cuisine splice
+    # above but keyed off dish_boost_names resolved by the caller via Haiku
+    # (_resolve_dish_boost_names). This is a pool-wide boost, not a per-day
+    # guarantee -- exact placement is what swap_meal()'s dish matching is for.
+    dish_boost_set = {n.lower() for n in (dish_boost_names or [])}
+    if dish_boost_set:
+        new_dish_matches = []
+        for name, meta in recipes.items():
+            if (
+                name.lower() in dish_boost_set
+                and meta.get("times_cooked", 0) == 0
+                and meta.get("status") not in ("disliked", "ignored")
+                and not meta.get("recommend_hold")
+                and str(meta.get("meal_type", "")).strip().lower() != "lunch"
+                and not any(c["name"] == name for c in pool)
+            ):
+                minutes = _parse_minutes(meta.get("time", ""))
+                new_dish_matches.append({
+                    "name": name,
+                    "cuisine": resolve_cuisine(meta, default=""),
+                    "health": meta.get("health", "Moderate"),
+                    "protein": _get_protein(name),
+                    "minutes": minutes,
+                    "time_str": meta.get("time", ""),
+                    "is_quick": minutes <= QUICK_THRESHOLD or meta.get("cooking_method") == "slow_cooker",
+                    "meal_type": meta.get("meal_type", "Weeknight"),
+                    "score": -100,
+                })
+        random.shuffle(new_dish_matches)
+        pool[:0] = new_dish_matches
+
+        # Explicit re-sort (unlike the cuisine splice above, which relies on
+        # splice order alone): if both splices fire, whichever ran last would
+        # otherwise silently bury the other at the pool's true front. This
+        # makes precedence deterministic: dish match > cuisine match > score.
+        c_lower = (cuisine_direction or "").lower()
+        pool.sort(key=lambda c: (
+            0 if c["name"].lower() in dish_boost_set else 1,
+            0 if _direction_matches_cuisine(c.get("cuisine", ""), c_lower) else 1,
+            c["score"],
+        ))
 
     cuisine_slots = _parse_cuisine_slots(cuisine_direction or "")
     quick_set = {d.lower() for d in quick_days}
@@ -1138,6 +1264,87 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
                 new_selected[day] = "Going Out to Eat" if is_placeholder else to_meal
                 changed = True
         return new_selected if changed else None
+    except Exception:
+        return None
+
+
+def _match_named_dishes(
+    query_text: str,
+    candidate_names: list,
+    max_tokens: int = 400,
+) -> Optional[list]:
+    """
+    Use Claude Haiku to find which of `candidate_names` are the actual
+    dish(es) named in `query_text` -- e.g. query_text="force pork belly for
+    Sunday" should match "Chairman Mao's Red Braised Pork Belly", not
+    "Herb-Marinated Lamb Rib Chops" or a generic "Pork Tenderloin".
+
+    Same house pattern as _claude_swap(): closed candidate set spelled out
+    in the prompt, explicit "must actually match the food, not just its
+    family/method" instruction, NO_MATCH sentinel, every returned name
+    validated against candidate_names before being trusted, bare
+    try/except degrading to None. This function is purely additive -- None
+    means "no signal," and callers must fall back to whatever they would
+    have done without it, never treat None as an error.
+
+    Returns a list of matching names from candidate_names, ranked
+    best-match-first (may include matches for more than one distinct food
+    if query_text names several), or None if nothing was named, nothing
+    in candidate_names matched, or the call/parse failed.
+    """
+    import anthropic as _anthropic
+
+    if not query_text or not candidate_names:
+        return None
+
+    prompt = (
+        "A user described a specific dish, ingredient, or protein they "
+        f"want for dinner: \"{query_text}\"\n\n"
+        f"Available recipes: {json.dumps(candidate_names)}\n\n"
+        "Identify which of the available recipes actually match what the "
+        "user described.\n"
+        "Rules:\n"
+        "- Match the specific food, not just its protein family or cooking "
+        "method. If the user said \"pork belly\", only pork belly dishes "
+        "qualify — a pork tenderloin, pork chop, or pulled pork recipe is "
+        "NOT a match even though it's also pork.\n"
+        "- If the user named more than one dish/protein (e.g. \"pork "
+        "belly, country ribs, and chicken\"), return matches for every one "
+        "they named, not just the first.\n"
+        "- Order the results best-match-first.\n"
+        "- Return at most 15 matches total, even if more would technically "
+        "qualify — pick the best representatives, not an exhaustive list.\n"
+        "- If nothing in the list matches any food the user named, or the "
+        "text doesn't actually name a specific dish/ingredient/protein at "
+        "all (e.g. a general complaint like \"too much chicken\" or a "
+        "vague preference like \"something easy\"), return exactly "
+        "[\"NO_MATCH\"].\n\n"
+        "Return a JSON array of recipe names only, no explanation:\n"
+        '["Recipe Name 1", "Recipe Name 2"]'
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        raw = re.sub(r"^```[a-z]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        matches = json.loads(raw)
+        if not isinstance(matches, list) or not matches:
+            return None
+        if any(str(m).strip().upper() == "NO_MATCH" for m in matches):
+            return None
+        candidate_lookup = {n.lower(): n for n in candidate_names}
+        validated = []
+        for m in matches:
+            real_name = candidate_lookup.get(str(m).strip().lower())
+            if real_name and real_name not in validated:
+                validated.append(real_name)
+        return validated or None
     except Exception:
         return None
 
@@ -2059,7 +2266,10 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
 
     Args:
         cuisine_direction: Cuisine preference (e.g. "Mediterranean", "Asian",
-                           "Mexican", "Indian"). Empty = no preference.
+                           "Mexican", "Indian"). Empty = no preference. May also
+                           name specific proteins/dishes (e.g. "pork belly") --
+                           these are used as a soft boost across the week, not a
+                           per-day guarantee; use swap_meal() for exact placement.
         constraints: Schedule notes (e.g. "practice Monday and Wednesday, game Friday").
                      Days mentioned with activity keywords become quick-meal slots.
 
@@ -2079,6 +2289,8 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
     activity = _load_activity()
     if activity.get("state") == "idle":
         return {"error": "No active workflow. Call start_menu_workflow first."}
+
+    raw_cuisine_direction = cuisine_direction  # capture before normalization mutates it
 
     cuisine_note = None
     if cuisine_direction:
@@ -2105,11 +2317,19 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
     activity["eating_out_days"] = eating_out_days
 
     candidates = _load_candidates()
+    dish_boost_names = _resolve_dish_boost_names(raw_cuisine_direction, candidates)
+    dish_note = None
+    if dish_boost_names is None and raw_cuisine_direction and _text_names_specific_dish(raw_cuisine_direction):
+        dish_note = (
+            f"Couldn't confidently match a specific dish in '{raw_cuisine_direction}' "
+            "— used cuisine/general preferences instead."
+        )
     selected = _select_meals(
         candidates,
         quick_days,
         cuisine_direction or activity.get("cuisine_direction"),
         eating_out_days=eating_out_days,
+        dish_boost_names=dish_boost_names,
     )
     activity["selected_meals"] = selected
     activity["state"] = "awaiting_meal_approval"
@@ -2138,6 +2358,8 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
     }
     if cuisine_note:
         result["cuisine_direction_note"] = cuisine_note
+    if dish_note:
+        result["dish_direction_note"] = dish_note
     return result
 
 
@@ -2204,7 +2426,9 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
 
     Args:
         day: Day abbreviation (Mon, Tue, Wed, Thu, Fri, Sat, Sun).
-        reason: Natural language reason (e.g. "we've had too much chicken").
+        reason: Natural language reason (e.g. "we've had too much chicken"). Also
+                resolves specific named dishes/cuts (e.g. "pork belly"), not just
+                protein family.
         replacement: Optional explicit recipe name. If empty, auto-picks from candidates.
         cuisine_direction: Optional cuisine preference to override activity state (e.g. "Asian", "Indian").
 
@@ -2311,6 +2535,24 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 eligible = protein_filtered
             else:
                 filter_notes.append(f"No {reason_protein.lower()} recipes available in the pool right now")
+
+        # 1b. Specific dish/cut match via Haiku — narrows further than the coarse
+        # protein-bucket filter above can (e.g. "pork belly" vs. any pork dish),
+        # and covers cuts/dishes the bucket map doesn't know at all (e.g. "ribs").
+        # Only called when `reason` names something beyond a generic complaint,
+        # to avoid a network call on every swap.
+        if _text_names_specific_dish(reason):
+            dish_matches = _match_named_dishes(reason, [c["name"] for c in eligible][:120])
+            if dish_matches:
+                match_rank = {n.lower(): i for i, n in enumerate(dish_matches)}
+                dish_filtered = [c for c in eligible if c["name"].lower() in match_rank]
+                if dish_filtered:
+                    dish_filtered.sort(key=lambda c: match_rank[c["name"].lower()])
+                    eligible = dish_filtered
+            else:
+                filter_notes.append(
+                    f"Couldn't find a specific match for \"{reason}\" — picked best alternative"
+                )
 
         # 2. Cuisine filter from reason (tight), else fall back to cuisine_direction
         reason_cuisine = next((c for c in KNOWN_CUISINES | KNOWN_FAMILIES if c in reason_lower), None)

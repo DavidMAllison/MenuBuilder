@@ -59,6 +59,45 @@ def check(label, cond, detail=""):
     return ok
 
 
+def check_dish_gate():
+    """Pure-function checks for _text_names_specific_dish — no setup needed."""
+    cases = [
+        ("force pork belly for Sunday", True),
+        ("swap to use country ribs", True),
+        ("we've had too much chicken this week", False),
+        ("prefer ideas", False),
+        ("Cuisine open, let's use pork belly, country ribs, chicken", True),
+    ]
+    for text, expected in cases:
+        got = srv._text_names_specific_dish(text)
+        check(f"_text_names_specific_dish({text!r})", got == expected, f"got {got}, want {expected}")
+
+
+def check_dish_boost():
+    """
+    _select_meals' dish_boost_names wiring, tested directly (bypassing
+    _resolve_dish_boost_names/Haiku entirely) with an otherwise-empty
+    candidate pool so the single boosted entry is deterministically picked
+    — no dependency on random.choice luck across multiple options.
+    """
+    recipes = srv._load_metadata()
+    target = next(
+        (name for name, meta in recipes.items()
+         if meta.get("times_cooked", 0) == 0
+         and meta.get("status") not in ("disliked", "ignored")
+         and not meta.get("recommend_hold")
+         and str(meta.get("meal_type", "")).strip().lower() not in ("lunch", "weekend")),
+        None,
+    )
+    if target is None:
+        check("_select_meals surfaces dish_boost_names entry", False,
+              "no eligible never-cooked recipe found to test with")
+        return
+    selected = srv._select_meals([], [], None, dish_boost_names=[target])
+    check("_select_meals surfaces dish_boost_names entry",
+          target in selected.values(), f"target={target!r} selected={selected}")
+
+
 # ── Main test ─────────────────────────────────────────────────────────────────
 
 def run(week_start_str: str, keep: bool) -> int:
@@ -103,6 +142,38 @@ def run(week_start_str: str, keep: bool) -> int:
     check("selected_meals has at least 5 days", len(selected) >= 5)
     check("state is awaiting_meal_approval",
           json.loads((test_dir / "menu_activity.json").read_text()).get("state") == "awaiting_meal_approval")
+
+    # 4b. Dish/protein matching wiring (mocked Haiku call — deterministic, no network)
+    check_dish_gate()
+    check_dish_boost()
+
+    # Weekday-safe only: swap_meal excludes "weekend" meal_type candidates
+    # before step 1b ever runs when swap_day isn't Sat/Sun, so a target with
+    # meal_type == "weekend" would get filtered out regardless of the Haiku
+    # match, making this flaky if picked at random.
+    eligible_names = [
+        c["name"] for c in srv._load_candidates()
+        if c["name"] not in selected.values()
+        and str(c.get("meal_type", "")).strip().lower() != "weekend"
+    ]
+    swap_day = next((d for d in selected if d not in ("Sat", "Sun")), None)
+    if swap_day and len(eligible_names) >= 1:
+        target = eligible_names[-1]
+        orig_match = srv._match_named_dishes
+        try:
+            srv._match_named_dishes = lambda *a, **k: [target]
+            result = srv.swap_meal(day=swap_day, reason="give me the zzzznarwhal dish")
+            check("swap_meal uses matched dish when Haiku matches",
+                  result.get("new_recipe") == target, str(result))
+
+            srv._match_named_dishes = lambda *a, **k: None
+            result2 = srv.swap_meal(day=swap_day, reason="give me the zzzznarwhal dish again")
+            check("swap_meal falls back cleanly when Haiku finds no match",
+                  bool(result2.get("new_recipe")) and "note" in result2, str(result2))
+        finally:
+            srv._match_named_dishes = orig_match
+    else:
+        check("swap_meal dish-matching wiring", False, "no eligible day/candidate to test with")
 
     # 5. finalize_plan
     result = srv.finalize_plan()
