@@ -2513,6 +2513,11 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             and not any(h in name.lower() for h in HIATUS_PROTEINS)
             and str(r.get("meal_type", "")).strip().lower() != "lunch"
         ]
+        # Shuffle before use — idea candidates are all ties (times_cooked 0),
+        # so without this "something new" always deterministically returns
+        # whatever's first in metadata file order instead of a random pick.
+        # Same fix as _claude_swap's identical idea_candidates construction.
+        random.shuffle(idea_candidates)
         eligible = (idea_candidates + eligible) if want_idea else (eligible + idea_candidates)
 
         # Weekend-only dishes (multi-hour, high-effort) never belong on a weekday,
