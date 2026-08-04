@@ -177,6 +177,35 @@ def load_inventory_keywords(inventory_path: str) -> list:
     return items
 
 
+def load_family_preferences(preferences_path: str) -> list:
+    """Return the raw list of {date, person, preference} entries from
+    family_preferences.json, or [] if the file is missing/unreadable."""
+    if not preferences_path:
+        return []
+    try:
+        with open(preferences_path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def preference_flags_recipe(recipe_name: str, preferences: list) -> bool:
+    """True if any family_preferences.json entry names this recipe by title.
+
+    Deliberately a plain substring check, not fuzzy/NLP matching -- the
+    convention (see CLAUDE.md) is that an "avoid this recipe" preference
+    names the recipe's exact title in the preference text. A preference like
+    "can we have less pasta" won't match anything here, which is correct:
+    it's a category-level note, not a specific-recipe avoid signal."""
+    name_lower = recipe_name.lower()
+    for entry in preferences:
+        note = str(entry.get('preference', '')).lower()
+        if name_lower in note:
+            return True
+    return False
+
+
 def inventory_match(recipe_name: str, ingredients: list, inventory_items: list) -> tuple:
     """
     Check if a recipe matches any inventory items.
@@ -254,11 +283,17 @@ def candidate_score(c: dict) -> float:
     # Garden herb bonus (free fresh herb from garden)
     if c.get('garden_herbs'):
         s -= 4
+    # Family preference says to avoid this specific recipe (family_preferences.json).
+    # A strong penalty rather than a hard exclude -- so it all but never gets picked
+    # while the preference stands, but doesn't silently vanish forever if the
+    # preference entry is stale and nobody's pruned it yet.
+    if c.get('preference_flagged'):
+        s += 25
     return s
 
 
 def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
-                     inventory_items: list) -> tuple:
+                     inventory_items: list, family_preferences: list = None) -> tuple:
     """Build the filtered candidate list from recipe_metadata.json's 'recipes' dict.
 
     Returns (candidates, is_grill_season). Candidates are NOT jitter-shuffled,
@@ -267,6 +302,7 @@ def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
     score so near-equal candidates rotate week to week)."""
     today = date.today()
     is_grill_season = SPRING_SUMMER[0] <= today.month <= SPRING_SUMMER[1]
+    family_preferences = family_preferences or []
 
     candidates = []
     for name, r in recipes.items():
@@ -297,6 +333,7 @@ def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
         ingredients = r.get('ingredients', [])
         inv_broad, inv_specific, inv_pantry = inventory_match(name, ingredients, inventory_items)
         garden = herbs_in_recipe(r, garden_herbs)
+        preference_flagged = preference_flags_recipe(name, family_preferences)
 
         candidates.append({
             'name': name,
@@ -320,6 +357,7 @@ def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
             'inv_specific': inv_specific,
             'inv_pantry': inv_pantry,
             'garden_herbs': garden,
+            'preference_flagged': preference_flagged,
         })
 
     return candidates, is_grill_season

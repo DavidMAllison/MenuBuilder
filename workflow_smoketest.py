@@ -343,8 +343,8 @@ def simulate_workflow():
     step(0, "Drain SMS feedback queue")
     try:
         entries = json.loads(FEEDBACK.read_text()).get("entries", []) if FEEDBACK.exists() else []
-        disliked = [e.get("recipe_name", "?") for e in entries if e.get("sentiment") == "disliked"]
-        mixed    = [e.get("recipe_name", "?") for e in entries if e.get("sentiment") == "mixed"]
+        disliked = [e.get("recipe", "?") for e in entries if e.get("sentiment") == "disliked"]
+        mixed    = [e.get("recipe", "?") for e in entries if e.get("sentiment") == "mixed"]
         if disliked:
             note(f"⚠  Disliked (flagged for tombstone): {disliked}")
         if mixed:
