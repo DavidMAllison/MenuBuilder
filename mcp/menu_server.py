@@ -475,11 +475,12 @@ _SKIP_FEEDBACK_KEYWORDS = frozenset([
 
 
 def _parse_last_plan() -> list:
-    if not WEEKLYPLAN_DIR.exists():
+    plan_dir = (_TEST_DIR / "weeklyplan") if _TEST_DIR else WEEKLYPLAN_DIR
+    if not plan_dir.exists():
         return []
     today = date.today()
     dated = []
-    for f in WEEKLYPLAN_DIR.glob("mealplan_*.json"):
+    for f in plan_dir.glob("mealplan_*.json"):
         try:
             d = date.fromisoformat(f.stem.replace("mealplan_", ""))
             dated.append((d, f))
@@ -525,6 +526,23 @@ def _merge_feedback(meals: list) -> list:
     except Exception:
         pass
     return meals
+
+
+def _subtract_entries(current: list, snapshot: list) -> list:
+    """Remove one occurrence of each snapshot entry from current (multiset diff).
+
+    Used to clear only the feedback entries that existed when the workflow
+    started, so anything appended afterward (e.g. by the hourly feedbacksync
+    job, or a live SMS message arriving mid-conversation) survives instead of
+    being silently wiped by an unconditional clear.
+    """
+    remaining = list(current)
+    for entry in snapshot:
+        for i, r in enumerate(remaining):
+            if r == entry:
+                del remaining[i]
+                break
+    return remaining
 
 
 # ---------------------------------------------------------------------------
@@ -716,10 +734,13 @@ def _deduct_inventory_protein(ingredients: list) -> list:
 
     Returns list of {"item", "from_qty", "to_qty"} for each deduction made.
     """
-    inv_path_str = _CONFIG.get("inventory_path", "")
-    if not inv_path_str:
-        return []
-    inv_path = Path(inv_path_str)
+    if _TEST_DIR:
+        inv_path = _TEST_DIR / "inventory_test.json"
+    else:
+        inv_path_str = _CONFIG.get("inventory_path", "")
+        if not inv_path_str:
+            return []
+        inv_path = Path(inv_path_str)
     if not inv_path.exists():
         return []
 
@@ -820,11 +841,13 @@ def _plan_tallies(selected: dict, recipes: dict) -> dict:
 def _load_candidates() -> list:
     recipes = _load_metadata()
     inventory = _load_inventory_keywords()  # loaded once for the whole pass
+    family_preferences = cs.load_family_preferences(_CONFIG.get("family_preferences_path", ""))
     candidates, _ = cs.load_candidates(
         recipes,
         adult_names=ADULT_NAMES,
         garden_herbs=_GARDEN_HERBS,
         inventory_items=inventory,
+        family_preferences=family_preferences,
     )
 
     # Small jitter so near-equal candidates rotate week to week instead of
@@ -2080,6 +2103,17 @@ def start_menu_workflow(week_start: str = "") -> dict:
 
     meals = _merge_feedback(_parse_last_plan())
 
+    # Snapshot feedback_current.json as it stood at workflow start, so log_meal_feedback("done")
+    # can clear only these entries later rather than blindly wiping the file -- anything appended
+    # in between (hourly feedbacksync job, a live SMS message) survives into the next cycle.
+    try:
+        feedback_snapshot = (
+            json.loads(FEEDBACK_CURRENT_FILE.read_text()).get("entries", [])
+            if FEEDBACK_CURRENT_FILE.exists() else []
+        )
+    except Exception:
+        feedback_snapshot = []
+
     # Cross-reference recipe_metadata: add times_cooked and skip feedback for recently logged meals
     try:
         if METADATA_PATH.exists():
@@ -2116,6 +2150,7 @@ def start_menu_workflow(week_start: str = "") -> dict:
         "week_start": ws.isoformat(),
         "week_label": week_label,
         "last_week_meals": meals,
+        "feedback_snapshot": feedback_snapshot,
         "schedule_notes": [],
         "cuisine_direction": None,
         "selected_meals": {},
@@ -2211,7 +2246,12 @@ def log_meal_feedback(feedback: str) -> dict:
         _save_metadata(recipes)
 
         if FEEDBACK_CURRENT_FILE.exists():
-            FEEDBACK_CURRENT_FILE.write_text(json.dumps({"entries": []}, indent=2))
+            try:
+                current_entries = json.loads(FEEDBACK_CURRENT_FILE.read_text()).get("entries", [])
+            except Exception:
+                current_entries = []
+            remaining = _subtract_entries(current_entries, activity.get("feedback_snapshot", []))
+            FEEDBACK_CURRENT_FILE.write_text(json.dumps({"entries": remaining}, indent=2))
             try:
                 FEEDBACK_CURRENT_FILE.chmod(0o666)
             except Exception:
@@ -4221,6 +4261,13 @@ def set_test_mode(enabled: bool) -> dict:
         test_copy = test_dir / "recipe_metadata_test.json"
         if not test_copy.exists():
             test_copy.write_text(METADATA_PATH.read_text())
+        inv_path_str = _CONFIG.get("inventory_path", "")
+        if inv_path_str:
+            inv_test_copy = test_dir / "inventory_test.json"
+            if not inv_test_copy.exists():
+                inv_source = Path(inv_path_str)
+                if inv_source.exists():
+                    inv_test_copy.write_text(inv_source.read_text())
         _TEST_DIR = test_dir
         return {"ok": True, "mode": "test", "test_dir": str(test_dir)}
     else:

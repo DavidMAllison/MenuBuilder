@@ -87,6 +87,12 @@
 
 ## Dietary Preferences & Restrictions
 
+### Standing "Avoid/Prefer X" Facts
+- **File**: `~/Dropbox/LLMContext/cooking/family_preferences.json` — flat `{date, person, preference}` list
+- **Live-written by Keanu**: sms-assistant's `save_preference()` appends here automatically when a text matches its preference-signal keywords; `_load_preferences()` feeds the last 20 entries into Keanu's own SMS conversation context
+- **Also the durable home for anything told directly in a MenuBuilder desktop session** ("stop suggesting X", "we've had too much Y") — append an entry here yourself rather than only noting it in Claude auto-memory, which can silently fall out of the memory index over time
+- **Wired into candidate selection** (Aug 4 2026): `candidate_scoring.py`'s `load_family_preferences()`/`preference_flags_recipe()` matches a preference's text against recipe titles (plain substring match — the preference note must name the recipe by its exact title) and applies a +25 score penalty in `candidate_score()`, used by both `suggest_meals.py` and `mcp/menu_server.py`. It's a soft penalty, not a hard exclude, so a stale preference doesn't silently make a recipe permanently unpickable. For a harder, permanent-until-lifted exclude, set `recommend_hold: true` directly on the recipe's `recipe_metadata.json` entry instead (pre-existing mechanism, e.g. used for Pescado Agridulce).
+
 ### Health Requirements (PRIORITY)
 - **Adult 1**: Managing cholesterol
   - Focus on: Lean proteins, fiber-rich foods, healthy fats (olive oil, avocado)
@@ -169,7 +175,7 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
 - **How it works**: Python polling script against `chat.db`; sends replies via AppleScript. No Twilio, ngrok, or FastAPI involved.
 - **To start**: `cd /Users/Shared/sms-assistant && ./start.sh`
 - **Guardrails**: Phone number whitelist in `config/settings.yaml`. System prompt in `system_prompts/menu.txt`. Neither can be changed via SMS.
-- **Feedback queue**: Keanu writes recipe feedback to `/Users/Shared/cooking/feedback_queue.json`. Drained at the start of each menu workflow (step 0) by `process_feedback_queue.py`.
+- **Feedback queue**: Keanu writes recipe feedback to `/Users/Shared/cooking-state/feedback_queue.json`. Drained into `feedback_current.json` by `process_feedback_queue.py`, run at the start of each menu workflow (step 0) AND hourly via the `com.menubuilder.feedbacksync` LaunchAgent -- keeps SMS feedback in sync with any feedback given directly in a session, rather than sitting in the queue until Sunday. The hourly sync only drains the queue; it does not apply feedback to `recipe_metadata.json` -- that still happens at the Sunday review step per the rules below.
 - **Menu approval**: After sending the weekly menu via `send_menu_partner.py`, Keanu captures Ashley's reply and writes it to `/Users/Shared/sms-assistant/menu_feedback_response.json`. MenuBuilder reads this file after approval.
 
 ## Meal Plan Generation Rules
@@ -206,7 +212,7 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
 - `awaiting_meal_approval` → pick up at step 4
 - `awaiting_ashley_signoff` → pick up at step 6
 
-0. **Drain SMS feedback queue** -- `python3 ~/projects/personal/MenuBuilder/process_feedback_queue.py`. This reads `/Users/Shared/cooking/feedback_queue.json` and appends entries to `feedback_current.json`, then empties the queue. Run this before step 1 so queue feedback is available during meal logging. If the queue is empty, move on.
+0. **Drain SMS feedback queue** -- `python3 ~/projects/personal/MenuBuilder/process_feedback_queue.py`. This reads `/Users/Shared/cooking-state/feedback_queue.json` and appends entries to `feedback_current.json`, then empties the queue. Run this before step 1 so queue feedback is available during meal logging. If the queue is empty, move on. (An hourly LaunchAgent already keeps this drained day-to-day -- this step is a final guarantee of freshness right before meal logging.)
    - Entries with `sentiment: "disliked"` should be flagged during step 1.
    - Entries with `sentiment: "mixed"` should be surfaced for review before including the recipe this week.
 1. **Log last week's meals** -- read `feedback_current.json` and the previous week's `mealplan_YYYY-MM-DD.txt`. Process each meal using these rules:
@@ -214,7 +220,7 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
    - **`disliked` in feedback_current.json** → flag for tombstone discussion (do not auto-delete); confirm with user, then delete `.md` file and set `status: "disliked"` in JSON
    - **First-cook recipe (`times_cooked == 0`) with no feedback entry** → ask: "You tried [recipe] for the first time — what did you think? Keep it in rotation?" Yes → log as cooked. No → tombstone after confirmation.
    - **All other meals** (established recipes, no feedback entry) → auto-log as cooked: increment `times_cooked`, set `last_cooked_date`. No prompting.
-   After processing all meals, clear `feedback_current.json` to `{"entries": []}`.
+   Finalize by calling `log_meal_feedback("done")` -- it clears only the `feedback_current.json` entries that existed when `start_menu_workflow` ran (snapshotted then, diffed at clear time), so anything appended mid-conversation (hourly `com.menubuilder.feedbacksync` job, a live SMS) survives into the next cycle instead of being silently wiped. Don't hand-edit `feedback_current.json` to "clear" it -- always go through this tool.
    - **Do not ask for feedback on established recipes** — if they have something to share they'll bring it up.
 2. **Check schedule** -- read `~/projects/personal/FamilySchedule/schedule.json` and review `weekly_overrides` for the upcoming week. Identify any evening events that run into dinner time — those nights need quick-cook meals (slow cooker, ≤35 min, or leftovers). Ask the user about any one-off changes not yet in the file.
 3. **Run candidate filter** -- `python3 ~/projects/personal/MenuBuilder/suggest_meals.py`. Based on the schedule review in step 2, pass `--quick` for any evenings with late-running events (e.g. `--quick tue,thu`). The script filters by `last_cooked_date`, health balance, protein variety, cuisine variety, and seasonal method. Use its output as the candidate pool -- do not re-scan the JSON manually.

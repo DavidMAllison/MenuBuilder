@@ -21,7 +21,8 @@ from collections import Counter, defaultdict
 import candidate_scoring as cs
 from candidate_scoring import (
     RECENCY_WEEKS, TRACKED_FRESH_HERBS, PANTRY_CATEGORIES,
-    herbs_in_recipe, load_inventory_keywords, candidate_score as score,
+    herbs_in_recipe, load_inventory_keywords, load_family_preferences,
+    candidate_score as score,
 )
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.json')
@@ -30,6 +31,7 @@ with open(_CONFIG_PATH) as _f:
 
 METADATA_PATH = os.path.expanduser(_CONFIG['metadata_path'])
 INVENTORY_PATH = os.path.expanduser(_CONFIG.get('inventory_path', ''))
+FAMILY_PREFERENCES_PATH = os.path.expanduser(_CONFIG.get('family_preferences_path', ''))
 ADULT_NAMES = set(name.lower() for name in _CONFIG['adult_names'])
 BUDGET_PATH = os.path.expanduser('~/Dropbox/LLMContext/Personal/grocery_budget_status.json')
 GARDEN_HERBS = [h.lower() for h in _CONFIG.get('garden_herbs', [])]
@@ -87,11 +89,13 @@ def load_candidates(quick_nights=False):
     recipes = data['recipes']
 
     inventory_items = load_inventory_keywords(INVENTORY_PATH)
+    family_preferences = load_family_preferences(FAMILY_PREFERENCES_PATH)
     candidates, is_grill_season = cs.load_candidates(
         recipes,
         adult_names=ADULT_NAMES,
         garden_herbs=GARDEN_HERBS,
         inventory_items=inventory_items,
+        family_preferences=family_preferences,
     )
     for c in candidates:
         r = recipes[c['name']]
@@ -118,6 +122,7 @@ def print_group(title, items, limit=6):
         grill_tag = ' [GRILL]' if c['is_grill'] else ''
         new_tag = ' [NEW]' if c['times_cooked'] == 0 else ''
         kid_tag = ' [KID ✓]' if c.get('kid_approved') else ''
+        pref_tag = ' [FAMILY: AVOID]' if c.get('preference_flagged') else ''
         adult_score = c.get('adult_score')
         score_tag = f' [ADULT:{adult_score:.0%}]' if adult_score is not None else ''
         if c.get('inv_specific'):
@@ -131,7 +136,7 @@ def print_group(title, items, limit=6):
         else:
             pantry_tag = ''
         fam_tag = cuisine_family(c['cuisine'])
-        print(f"    - {c['name']}{effort_tag}{garden_tag}{grill_tag}{new_tag}{kid_tag}{score_tag}{stock_tag}{pantry_tag} | {c['cuisine']}{fam_tag} | {c['health']} | {time_str} | {last_str}")
+        print(f"    - {c['name']}{effort_tag}{garden_tag}{grill_tag}{new_tag}{kid_tag}{pref_tag}{score_tag}{stock_tag}{pantry_tag} | {c['cuisine']}{fam_tag} | {c['health']} | {time_str} | {last_str}")
 
 
 def main():
