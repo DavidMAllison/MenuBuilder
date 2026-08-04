@@ -13,6 +13,7 @@ MenuBuilder deletes the pending file once the menu is confirmed.
 import json
 import argparse
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -33,14 +34,15 @@ def format_message(meals: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def send_to_ashley(meals: list[dict]) -> None:
+def send_to_ashley(meals: list[dict]) -> bool:
+    """Returns True if a message was actually sent, False if it no-op'd."""
     if PENDING_FILE.exists():
         print("A menu approval is already pending. Check if Ashley has replied before sending again.")
-        return
+        return False
 
     if not meals:
         print("No meals provided.")
-        return
+        return False
 
     message = format_message(meals)
     print("Sending to Ashley:\n")
@@ -60,6 +62,7 @@ def send_to_ashley(meals: list[dict]) -> None:
     }))
 
     print("Menu sent to Ashley via Keanu. Waiting for her reply.")
+    return True
 
 
 def main():
@@ -68,7 +71,12 @@ def main():
     args = parser.parse_args()
 
     meals = json.loads(args.meals)
-    send_to_ashley(meals)
+    sent = send_to_ashley(meals)
+    # Exit code 2 signals a no-op (e.g. stale pending file) so callers like
+    # approve_menu() can distinguish "didn't send" from "sent successfully" --
+    # this script always used to exit 0 either way, which made approve_menu()
+    # silently report success on a swallowed send.
+    sys.exit(0 if sent else 2)
 
 
 if __name__ == "__main__":
