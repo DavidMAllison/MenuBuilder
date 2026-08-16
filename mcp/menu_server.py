@@ -665,6 +665,30 @@ _REASON_PROTEIN_MAP = [
     ("pasta", "Pasta"), ("noodle", "Pasta"),
 ]
 
+# Multi-word phrases that flip a _REASON_PROTEIN_MAP match from "give me this" to
+# "not this again" — e.g. "too much shrimp" still contains "shrimp" but means the
+# opposite. Safe as plain substrings (multi-word, low false-positive risk).
+_PROTEIN_NEGATION_PHRASES = (
+    "too much", "too many", "no more", "not more",
+    "sick of", "tired of", "avoid", "no thanks",
+    "not again", "had enough", "already had", "already have",
+)
+# Single negation words ("no shrimp", "not shrimp", "don't want shrimp", "skip the
+# shrimp") are common enough as bare words that a plain substring check would
+# false-positive constantly (e.g. "no" inside "Monday"), so these need \b word
+# boundaries — and are only checked within the clause that actually names the
+# protein, so an unrelated negation elsewhere in the sentence ("not too hard,
+# chicken please") doesn't wrongly exclude the protein actually being requested.
+_PROTEIN_NEGATION_WORDS = re.compile(r"\b(no|not|don'?t|dont|skip|without)\b")
+
+
+def _reason_negates_protein(reason_lower: str, protein_kw: str) -> bool:
+    clauses = re.split(r"[,.;]", reason_lower)
+    target_clause = next((c for c in clauses if protein_kw in c), reason_lower)
+    if any(p in target_clause for p in _PROTEIN_NEGATION_PHRASES):
+        return True
+    return bool(_PROTEIN_NEGATION_WORDS.search(target_clause))
+
 # Multi-word generic complaints/preferences that carry no dish specifics --
 # stripped out before checking if anything food-specific remains in a reason
 # string. See _text_names_specific_dish().
@@ -2572,14 +2596,38 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
 
         filter_notes = []  # collects messages about unmet filters for the caller
 
-        # 1. Protein/method filter from reason (highest priority — "grilled fish Monday")
-        reason_protein = next((label for kw, label in _REASON_PROTEIN_MAP if kw in reason_lower), None)
-        if reason_protein:
+        # 1. Protein/method filter from reason (highest priority — "grilled fish Monday").
+        # A negation cue ("too much shrimp", "sick of shrimp") flips this from a
+        # request FOR that protein to a request to EXCLUDE it — without this check,
+        # "too much shrimp" still contains "shrimp" and the old code filtered the
+        # candidate pool down to shrimp-only, guaranteeing another shrimp dish back.
+        reason_match = next(((kw, label) for kw, label in _REASON_PROTEIN_MAP if kw in reason_lower), None)
+        reason_protein = reason_match[1] if reason_match else None
+        is_negated = _reason_negates_protein(reason_lower, reason_match[0]) if reason_match else False
+        if reason_protein and is_negated:
+            protein_filtered = [c for c in eligible if _get_protein(c["name"]) != reason_protein]
+            if protein_filtered:
+                eligible = protein_filtered
+        elif reason_protein:
             protein_filtered = [c for c in eligible if _get_protein(c["name"]) == reason_protein]
             if protein_filtered:
                 eligible = protein_filtered
             else:
                 filter_notes.append(f"No {reason_protein.lower()} recipes available in the pool right now")
+
+        # 1b. Protein diversity — deprioritise proteins already used elsewhere this
+        # week by default (not just when the reason names them), so a plain "swap
+        # Thu, want something simple" doesn't hand back a protein that's already on
+        # 2+ other days. Reason-requested proteins (step 1 above) always override this.
+        if not reason_protein:
+            other_proteins = [
+                _get_protein(name) for d, name in selected.items() if d != day
+            ]
+            overused = {p for p in other_proteins if other_proteins.count(p) >= 2 and p != "Other"}
+            if overused:
+                diverse = [c for c in eligible if _get_protein(c["name"]) not in overused]
+                if diverse:
+                    eligible = diverse
 
         # 1b. Specific dish/cut match via Haiku — narrows further than the coarse
         # protein-bucket filter above can (e.g. "pork belly" vs. any pork dish),
@@ -2674,13 +2722,15 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
 
         # 7. Inventory boost — sort by inventory match, preserving existing order otherwise
         inventory = _load_inventory_keywords()
+        def _swap_score(c):
+            if not inventory:
+                return 0
+            ing = c.get("ingredients", [])
+            if not ing:
+                key = _find_recipe_key(c["name"], all_recipes)
+                ing = all_recipes[key].get("ingredients", []) if key else []
+            return _inventory_boost(c["name"], ing, inventory)
         if inventory:
-            def _swap_score(c):
-                ing = c.get("ingredients", [])
-                if not ing:
-                    key = _find_recipe_key(c["name"], all_recipes)
-                    ing = all_recipes[key].get("ingredients", []) if key else []
-                return _inventory_boost(c["name"], ing, inventory)
             eligible.sort(key=_swap_score)
 
         # 8. meal_type match (weekend vs weeknight) — soft filter, only if pool survives
@@ -2692,7 +2742,13 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 if same_type:
                     eligible = same_type
 
-        replacement = eligible[0]["name"]
+        # Random pick among whatever ties for the best score (all tied at 0 when
+        # there's no inventory boost, i.e. true random) — previously always took
+        # eligible[0], so retrying a swap with the same reason deterministically
+        # handed back the exact same recipe every time instead of a fresh option.
+        best_score = _swap_score(eligible[0])
+        top_tier = [c for c in eligible if _swap_score(c) == best_score]
+        replacement = random.choice(top_tier)["name"]
 
     selected[day] = replacement
     activity["selected_meals"] = selected
