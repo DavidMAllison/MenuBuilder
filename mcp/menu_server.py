@@ -2198,6 +2198,22 @@ def get_workflow_state() -> dict:
 
 
 @mcp.tool()
+def cancel_workflow() -> dict:
+    """
+    Cancel the in-progress menu workflow and reset to idle.
+
+    Use when the admin wants to abandon a build started by mistake, or when
+    a plan was already put together through another channel (e.g. the
+    MenuBuilder CLI directly) and the SMS-triggered workflow needs to stand
+    down. Idempotent — safe to call even when already idle.
+
+    Returns {"ok": True, "state": "idle"}.
+    """
+    _save_activity({"state": "idle"})
+    return {"ok": True, "state": "idle"}
+
+
+@mcp.tool()
 def start_menu_workflow(week_start: str = "") -> dict:
     """
     Initialize a new weekly menu build workflow.
