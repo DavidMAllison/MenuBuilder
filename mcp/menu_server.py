@@ -525,7 +525,7 @@ def _parse_last_plan() -> list:
             continue
         if any(kw in name.lower() for kw in _SKIP_FEEDBACK_KEYWORDS):
             continue
-        meals.append({"name": name, "day": m.get("day", ""), "sms_feedback": None})
+        meals.append({"name": name, "day": m.get("day", ""), "date": m.get("date", ""), "sms_feedback": None})
     return meals
 
 
@@ -2250,8 +2250,14 @@ def start_menu_workflow(week_start: str = "") -> dict:
                 rkey = _find_recipe_key(meal["name"], recipes)
                 if rkey:
                     meal["times_cooked"] = recipes[rkey].get("times_cooked", 0)
-                    if not meal.get("sms_feedback") and recipes[rkey].get("last_cooked_date", "") >= cutoff:
-                        meal["sms_feedback"] = "already logged"
+                    # Recency check must fire regardless of whether feedback text also
+                    # arrived (e.g. via SMS) -- otherwise a meal already logged directly
+                    # (outside this workflow) gets double-counted the moment any feedback
+                    # text is merged in for it.
+                    if recipes[rkey].get("last_cooked_date", "") >= cutoff:
+                        meal["already_logged"] = True
+                        if not meal.get("sms_feedback"):
+                            meal["sms_feedback"] = "already logged"
     except Exception:
         pass
 
@@ -2341,12 +2347,18 @@ def log_meal_feedback(feedback: str) -> dict:
                 or "not cooked" in fb
                 or "did not make" in fb
                 or "did not cook" in fb
+                or "did not eat" in fb
                 or "didn't make" in fb
                 or "didn't cook" in fb
+                or "didn't eat" in fb
                 or "didnt cook" in fb
                 or "didnt make" in fb
+                or "didnt eat" in fb
             )
-            is_already_logged = fb == "already logged"
+            # Recency-based flag set in start_menu_workflow -- fires independently of
+            # whether feedback text also came in, so a meal already logged outside this
+            # workflow (e.g. logged directly mid-week) never gets double-counted here.
+            is_already_logged = fb == "already logged" or meal.get("already_logged")
             is_disliked = fb.startswith("disliked")
 
             if is_not_cooked or is_already_logged:
@@ -2360,7 +2372,7 @@ def log_meal_feedback(feedback: str) -> dict:
 
             was_first_cook = recipes[key].get("times_cooked", 0) == 0
             recipes[key]["times_cooked"] = recipes[key].get("times_cooked", 0) + 1
-            recipes[key]["last_cooked_date"] = today_str
+            recipes[key]["last_cooked_date"] = meal.get("date") or today_str
             logged_count += 1
 
             if was_first_cook:
