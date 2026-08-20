@@ -72,9 +72,14 @@ trigger_lunch_nudge.py        # launchd Saturday 6 PM: nudges if Ashley hasn't p
 save_to_recipeideas.py        # Save agent results to the recipeideas inbox
 generate_github_pages_data.py # Generate _data/recipes.json for GitHub Pages — run after metadata changes
 migrate_plan_to_json.py       # One-shot (re-runnable) migration of mealplan_*.txt → mealplan_*.json
-recipe_review_server.py       # Local recipe review web UI server (port 5051) — Flask, session auth, metadata cache, RAG search
+meal_costing.py               # Estimates avg_cost_per_serving for a recipe from grocery price history; conservative unit-family matching + ingredient_portion_overrides for bulk/portioned items
+compute_meal_costs.py         # Runs meal_costing across every active recipe, writes avg_cost_per_serving + coverage stats into recipe_metadata.json — rerun manually after new receipts land
+pick_ashley_batch.py          # Selects 5 fresh idea-queue candidates for Ashley's SMS batch review, excluding anything already sent or in the collection
+refresh_ashley_queue_worker.py # Background worker spawned by the refresh_ashley_recipe_queue MCP tool — runs all 6 recipe agents, then texts a fresh batch when done
+build_weekly_recipe_email.py  # Builds and sends the weekly 10-pick recipe-idea email via SMTP — no LLM call in the send path
+recipe_review_server.py       # Local recipe review web UI server (port 5051) — Flask, session auth, metadata cache, RAG search, Queue tab, Ashley batch review, email-action click-through
 recipe_review/
-  index.html                  # Recipe review UI — This Week grid, Full Collection, New Recipes views; semantic search; Type filter (Dinner/Lunch/Condiment)
+  index.html                  # Recipe review UI — This Week grid, Full Collection, New Recipes, Queue views; semantic search; Type filter (Dinner/Lunch/Condiment)
   login.html                  # Login page for recipe review UI
 eval_mexican_agent.py         # Eval harness for mexican_agent
 eval_chef_agent.py            # Eval harness for chef_agent
@@ -92,12 +97,14 @@ release-notes.md              # Shipped features log
 
 ## MCP Server
 
-`mcp/menu_server.py` exposes the weekly menu workflow as 18 tools callable from Claude Code
-or any MCP-compatible client (e.g. Keanu via SMS):
+`mcp/menu_server.py` exposes the weekly menu workflow as 29 tools callable from Claude Code
+or any MCP-compatible client (e.g. Keanu via SMS). The table below covers the core workflow;
+not every tool is listed.
 
 | Tool | What it does |
 |---|---|
 | `get_workflow_state` | Returns current workflow step and state data; flags `stale_code_warning` if `menu_server.py` changed on disk since this process started (run `restart_mcp.sh`) |
+| `cancel_workflow` | Resets an in-progress workflow to idle — abandon a build started by mistake, or stand down when a plan was already built through another channel. Idempotent |
 | `start_menu_workflow` | Drains feedback queue, loads last week, initializes activity |
 | `log_meal_feedback` | Records last-week ratings; `"done"` finalizes and advances state |
 | `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week |
@@ -115,6 +122,8 @@ or any MCP-compatible client (e.g. Keanu via SMS):
 | `add_lunch_recipe_url` | Fetches a URL, parses it into a lunch-suitable recipe entry |
 | `process_recipe_url` | Check for a similar existing recipe by URL or fuzzy title, add if new, optionally swap into a plan day; `force_add=true` skips similarity check |
 | `process_recipe_image` | Extract a recipe from a photo (cookbook page) via Claude vision and add to the collection; `force_add=true` re-runs with same image after user confirms |
+| `send_ashley_recipe_batch` | Picks 5 fresh idea-queue candidates (favoring quick cook times) and builds a text + review link for Keanu to send Ashley |
+| `refresh_ashley_recipe_queue` | Kicks off all 6 recipe agents in a detached background worker, then texts a fresh batch to `notify_handle` once it finishes |
 
 Runtime state written by both this project and the SMS assistant (`menu_activity.json`,
 the weekly plan/shopping CSV, `lunch_state.json`, `feedback_queue.json`, the outbox spool)
