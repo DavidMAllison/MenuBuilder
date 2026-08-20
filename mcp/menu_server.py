@@ -75,6 +75,7 @@ ACTIVITY_FILE = STATE_DIR / "menu_activity.json"
 OUTBOX_DIR = STATE_DIR / "outbox"
 PENDING_FILE = Path("/Users/Shared/sms-assistant/menu_feedback_pending.json")
 LUNCH_STATE_FILE = STATE_DIR / "lunch_state.json"
+MENU_QUEUE_FILE = STATE_DIR / "menu_queue.json"
 
 PARTNER_HANDLE = _CONFIG.get("partner_handle", "")          # Ashley
 ADMIN_HANDLE = _CONFIG.get("admin_handle", "")              # David (optional in config)
@@ -182,6 +183,27 @@ def _load_activity() -> dict:
 def _save_activity(activity: dict) -> None:
     path = (_TEST_DIR / "menu_activity.json") if _TEST_DIR else ACTIVITY_FILE
     path.write_text(json.dumps(activity, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Menu queue I/O — Ashley-facing "prioritize for next week" list, managed from
+# the Recipe Review UI (recipe_review_server.py owns the write path there;
+# this side only reads it during plan generation and prunes it at finalize).
+# ---------------------------------------------------------------------------
+
+def _load_menu_queue() -> list:
+    path = (_TEST_DIR / "menu_queue.json") if _TEST_DIR else MENU_QUEUE_FILE
+    if path.exists():
+        try:
+            return json.loads(path.read_text()).get("queue", [])
+        except Exception:
+            pass
+    return []
+
+
+def _save_menu_queue(queue: list) -> None:
+    path = (_TEST_DIR / "menu_queue.json") if _TEST_DIR else MENU_QUEUE_FILE
+    path.write_text(json.dumps({"queue": queue}, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -996,7 +1018,8 @@ def _select_meals(
     cuisine_direction: Optional[str],
     eating_out_days: Optional[list] = None,
     dish_boost_names: Optional[list] = None,
-) -> dict:
+) -> tuple[dict, list]:
+    """Returns (selected_meals, queue_recipe_names_placed)."""
     pool = list(candidates)
     eating_out_set = set(eating_out_days or [])
 
@@ -1084,6 +1107,61 @@ def _select_meals(
     cuisine_family_counts: dict = {}
     indulgent_count = 0
 
+    # Queue-priority placement — recipes explicitly queued via the Recipe Review
+    # UI (Ashley's "prioritize for next week" flow) get first claim on an open
+    # day slot, before the normal randomized _pick() loop below runs. Only the
+    # hard weekday/weekend rule applies here; the softer cuisine-family and
+    # indulgent caps are intentionally skipped — a queued recipe is an explicit
+    # request, not a candidate being balanced against others. Bookkeeping
+    # (cuisine_family_counts, indulgent_count) is still updated so the caps DO
+    # apply correctly to the remaining open days.
+    #
+    # Entries can be pinned to a specific day ("day": "Wed") or left unassigned
+    # ("day": "" — the Review UI's default "Unassigned" bucket). Day-pinned
+    # entries are placed first, each only trying its own exact day — if that
+    # day's already taken or the dish is weekend-only but pinned to a weekday,
+    # it's simply left in the queue rather than silently placed elsewhere
+    # against the explicit choice. Unassigned entries then fill any open day,
+    # same as before day-pinning existed.
+    queue_placed_names: list = []
+
+    def _try_place_queue_entry(entry: dict, candidate_days: list) -> None:
+        nonlocal indulgent_count
+        q_title = entry.get("title", "")
+        if not q_title:
+            return
+        rkey = _find_recipe_key(q_title, recipes)
+        if not rkey or rkey in selected.values():
+            return
+        meta = recipes[rkey]
+        if meta.get("status") in ("disliked", "ignored") or meta.get("recommend_hold"):
+            return
+        if str(meta.get("meal_type", "")).strip().lower() == "lunch":
+            return
+        is_weekend_dish = str(meta.get("meal_type", "")).strip().lower() == "weekend"
+        for day in candidate_days:
+            if day in selected:
+                continue
+            if is_weekend_dish and day not in ("Sat", "Sun"):
+                continue
+            selected[day] = rkey
+            queue_placed_names.append(rkey)
+            fam = _CUISINE_FAMILY_MAP.get(resolve_cuisine(meta, default=""), resolve_cuisine(meta, default=""))
+            cuisine_family_counts[fam] = cuisine_family_counts.get(fam, 0) + 1
+            if meta.get("health") == "Indulgent":
+                indulgent_count += 1
+            return
+        # No valid day among candidates -- entry stays in the queue, unplaced this week.
+
+    menu_queue = _load_menu_queue()
+    for entry in menu_queue:
+        day = entry.get("day", "")
+        if day in DAYS_ORDER:
+            _try_place_queue_entry(entry, [day])
+    for entry in menu_queue:
+        if not entry.get("day", ""):
+            _try_place_queue_entry(entry, DAYS_ORDER)
+
     def _pick(days_subset, require_quick=False, require_weekend=False):
         nonlocal indulgent_count
         for day in days_subset:
@@ -1162,7 +1240,7 @@ def _select_meals(
             if chosen.get("health") == "Indulgent":
                 indulgent_count += 1
 
-    return selected
+    return selected, queue_placed_names
 
 
 # ---------------------------------------------------------------------------
@@ -2003,6 +2081,28 @@ def _do_finalize(activity: dict) -> dict:
     week_start = date.fromisoformat(activity["week_start"])
     schedule_notes = activity.get("schedule_notes", [])
 
+    # Prune the menu queue now that this week's menu is built. Two different
+    # rules depending on whether an entry was day-pinned:
+    #   - Day-pinned ("Wed", etc.) entries are always cleared, whether or not
+    #     the pin actually landed a recipe in the plan. The pin was a request
+    #     for THIS week's Wednesday specifically -- once the week is built,
+    #     that reference is stale (next week's Wednesday is a different day),
+    #     so there's nothing meaningful left for it to mean.
+    #   - Unassigned ("day": "") entries are the general backlog/wishlist, not
+    #     tied to a particular week -- only removed once a recipe actually
+    #     lands in a finalized plan ("once pulled into a weekly menu they
+    #     should be removed from the queue"). One that was placed by
+    #     queue-priority but then swapped away before finalize never reaches
+    #     here, so it correctly stays queued for a future week.
+    plan_titles = set(selected.values())
+    queue = _load_menu_queue()
+    remaining_queue = [
+        q for q in queue
+        if not q.get("day", "") and q.get("title", "") not in plan_titles
+    ]
+    if len(remaining_queue) != len(queue):
+        _save_menu_queue(remaining_queue)
+
     # Defer shopping for plans built more than 7 days in advance
     days_until_week = (week_start - date.today()).days
     defer_shopping = days_until_week > 7
@@ -2388,7 +2488,7 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
             f"Couldn't confidently match a specific dish in '{raw_cuisine_direction}' "
             "— used cuisine/general preferences instead."
         )
-    selected = _select_meals(
+    selected, queue_recipes_included = _select_meals(
         candidates,
         quick_days,
         cuisine_direction or activity.get("cuisine_direction"),
@@ -2424,6 +2524,8 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
         result["cuisine_direction_note"] = cuisine_note
     if dish_note:
         result["dish_direction_note"] = dish_note
+    if queue_recipes_included:
+        result["queue_recipes_included"] = queue_recipes_included
     return result
 
 
@@ -4342,7 +4444,8 @@ def cleanup_test_data() -> dict:
     """
     Wipe test_output/ data and reset test mode to disabled.
 
-    Removes test_output/weeklyplan/ and test_output/menu_activity.json.
+    Removes test_output/weeklyplan/, test_output/menu_activity.json, and
+    test_output/menu_queue.json.
     Leaves test_output/recipe_metadata_test.json in place (re-copied fresh
     the next time set_test_mode(True) is called and the file is absent).
 
@@ -4365,6 +4468,11 @@ def cleanup_test_data() -> dict:
     if activity.exists():
         activity.unlink()
         removed.append(str(activity))
+
+    queue = test_dir / "menu_queue.json"
+    if queue.exists():
+        queue.unlink()
+        removed.append(str(queue))
 
     return {"ok": True, "cleaned": removed}
 

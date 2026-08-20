@@ -93,7 +93,7 @@ def check_dish_boost():
         check("_select_meals surfaces dish_boost_names entry", False,
               "no eligible never-cooked recipe found to test with")
         return
-    selected = srv._select_meals([], [], None, dish_boost_names=[target])
+    selected, _ = srv._select_meals([], [], None, dish_boost_names=[target])
     check("_select_meals surfaces dish_boost_names entry",
           target in selected.values(), f"target={target!r} selected={selected}")
 
