@@ -96,6 +96,11 @@ DISMISSED_FILE = Path(f"/tmp/dismissed_{UID}.json")
 AGENT_RESULTS_DIR = Path.home() / "Dropbox/LLMContext/cooking/agent_results"
 METADATA_PATH    = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
 CONDIMENTS_PATH  = Path.home() / "Dropbox/LLMContext/cooking/condiments.json"
+ASHLEY_BATCH_PATH = Path("/Users/Shared/cooking-state/ashley_recipe_batch.json")
+EMAIL_TOKENS_PATH = Path("/Users/Shared/cooking-state/email_action_tokens.json")
+EMAIL_TOKEN_TTL_DAYS = 30
+MENU_QUEUE_PATH = Path("/Users/Shared/cooking-state/menu_queue.json")
+QUEUE_DAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")  # "" = unassigned/"any day"
 IMG_CACHE_DIR = Path.home() / ".cache" / "recipe_images"
 IMG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -130,6 +135,22 @@ def _save_metadata(data: dict) -> None:
     METADATA_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False))
     _metadata_mtime = METADATA_PATH.stat().st_mtime
     _metadata_cache = data
+
+
+def _load_queue() -> list:
+    """Ordered list of {"title", "added_date"} — index 0 is highest priority.
+    Also read by mcp/menu_server.py during plan generation/finalize."""
+    if not MENU_QUEUE_PATH.exists():
+        return []
+    try:
+        return json.loads(MENU_QUEUE_PATH.read_text()).get("queue", [])
+    except Exception:
+        return []
+
+
+def _save_queue(queue: list) -> None:
+    MENU_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MENU_QUEUE_PATH.write_text(json.dumps({"queue": queue}, indent=2))
 
 # Semantic search index — built lazily in a background thread on first request
 _chroma_client = None
@@ -309,9 +330,7 @@ def me():
     return jsonify({"name": session.get("name", ""), "email": session.get("user", "")})
 
 
-@app.route("/api/recipes")
-@login_required
-def recipes():
+def _get_annotated_candidates() -> list:
     dismissed: set = set()
     if DISMISSED_FILE.exists():
         try:
@@ -345,7 +364,7 @@ def recipes():
         except Exception:
             pass
     if not candidates:
-        return jsonify([])
+        return []
 
     existing_urls, existing_norm = _existing_sets()
     health_map = _health_cache_lookup(candidates)
@@ -372,7 +391,34 @@ def recipes():
             "kid_friendly":  kid_map.get(r.get("title", ""), False),
         })
 
-    return jsonify(annotated)
+    return annotated
+
+
+@app.route("/api/recipes")
+@login_required
+def recipes():
+    return jsonify(_get_annotated_candidates())
+
+
+@app.route("/api/batch/<batch_id>")
+@login_required
+def batch_recipes(batch_id):
+    """Filtered view for the weekly Ashley batch link -- only the picks from
+    ashley_recipe_batch.json, not the full New queue. Expires as soon as a
+    newer batch is generated (the state file gets overwritten each run)."""
+    if not ASHLEY_BATCH_PATH.exists():
+        return jsonify({"error": "no_batch"}), 404
+    try:
+        batch = json.loads(ASHLEY_BATCH_PATH.read_text())
+    except Exception:
+        return jsonify({"error": "no_batch"}), 404
+    if batch.get("batch_id") != batch_id:
+        return jsonify({"error": "batch_expired"}), 404
+
+    pick_urls = {(p.get("url", "") or "").rstrip("/") for p in batch.get("picks", [])}
+    all_candidates = _get_annotated_candidates()
+    matched = [c for c in all_candidates if (c.get("url", "") or "").rstrip("/") in pick_urls]
+    return jsonify(matched)
 
 
 def _sync_recipe_to_github(filename: str) -> None:
@@ -417,12 +463,16 @@ def _sync_recipe_to_github(filename: str) -> None:
         print(f"[github-sync] error: {e}", flush=True)
 
 
-@app.route("/api/add", methods=["POST"])
-@login_required
-def add_recipe():
-    recipe = request.get_json()
+def _classify_and_add_recipe(recipe: dict) -> tuple[dict | None, tuple | None]:
+    """Classify + write a New-queue idea into the collection: Haiku classification
+    (health/prep/effort/structured ingredients), .md write, metadata write, background
+    GitHub push. Shared by /api/add and the email one-click action route -- both need
+    the exact same idea-to-collection pipeline.
+
+    Returns (entry, None) on success, or (None, (json_body, status_code)) on failure.
+    """
     if not recipe or not recipe.get("title"):
-        return jsonify({"error": "No recipe data"}), 400
+        return None, ({"error": "No recipe data"}, 400)
 
     title = recipe["title"].strip()
 
@@ -431,7 +481,7 @@ def add_recipe():
     url = (recipe.get("url", "") or "").rstrip("/")
     norm = _normalize_title(title)
     if (url and url in existing_urls) or (norm and norm in existing_norm):
-        return jsonify({"error": "already_exists", "title": title}), 409
+        return None, ({"error": "already_exists", "title": title}, 409)
 
     # Haiku classification — health, prep, effort, structured ingredients
     r = {
@@ -507,7 +557,190 @@ def add_recipe():
     t = threading.Thread(target=_sync_recipe_to_github, args=(entry["filename"],), daemon=True)
     t.start()
 
-    return jsonify({"success": True, "title": title, "health": entry["health"]})
+    return entry, None
+
+
+@app.route("/api/add", methods=["POST"])
+@login_required
+def add_recipe():
+    entry, err = _classify_and_add_recipe(request.get_json())
+    if err:
+        body, status = err
+        return jsonify(body), status
+    return jsonify({"success": True, "title": entry["title"], "health": entry["health"]})
+
+
+def _load_email_tokens() -> dict:
+    if not EMAIL_TOKENS_PATH.exists():
+        return {}
+    try:
+        return json.loads(EMAIL_TOKENS_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_email_tokens(tokens: dict) -> None:
+    EMAIL_TOKENS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    EMAIL_TOKENS_PATH.write_text(json.dumps(tokens, indent=2, ensure_ascii=False))
+    try:
+        EMAIL_TOKENS_PATH.chmod(0o666)
+    except Exception:
+        pass
+
+
+def _lookup_email_token(token: str) -> tuple[dict | None, str | None]:
+    """Returns (record, None) if usable, or (record, reason) if not --
+    reason is one of 'not_found', 'expired', 'used'. The record is still
+    returned (not None) for 'used'/'expired' so callers can show the recipe's
+    title/image and, for 'used', which action actually consumed the token --
+    all three action buttons on a card share one token (see build_weekly_
+    recipe_email.py), so whichever action is in the *current* link may not be
+    the one that already fired."""
+    tokens = _load_email_tokens()
+    rec = tokens.get(token)
+    if not rec:
+        return None, "not_found"
+    if rec.get("used"):
+        return rec, "used"
+    try:
+        created = date.fromisoformat(rec.get("created_at", ""))
+    except ValueError:
+        created = date.today()
+    if date.today() > created + timedelta(days=EMAIL_TOKEN_TTL_DAYS):
+        return rec, "expired"
+    return rec, None
+
+
+_EMAIL_ACTION_COPY = {
+    "save":   ("Save to Collection", "Add this recipe to your collection?"),
+    "queue":  ("Add to Queue", "Add this recipe to your collection and this week's menu queue?"),
+    "remove": ("Not Interested", "Remove this recipe from future recipe idea batches?"),
+}
+
+# The same email (same tokens) goes to both David and Ashley, so a token can
+# legitimately get "used" by whichever of them clicks first -- worded as a
+# normal outcome, not a broken-link error, for whoever clicks second.
+_EMAIL_ACTION_USED_COPY = {
+    "save":   "Someone already added this to the collection.",
+    "queue":  "Someone already added this to the collection and queue.",
+    "remove": "Someone already removed this.",
+}
+
+
+def _email_action_page(title: str, image: str, heading: str, body_text: str, form_html: str = "") -> str:
+    img_html = f'<img src="{image}" alt="" style="max-width:100%;border-radius:8px;margin:16px 0;">' if image else ""
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{heading}</title></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:480px;margin:40px auto;padding:0 20px;color:#222;">
+<h2 style="margin-bottom:4px;">{heading}</h2>
+<p style="color:#555;">{title}</p>
+{img_html}
+<p>{body_text}</p>
+{form_html}
+</body></html>"""
+
+
+@app.route("/api/email_action", methods=["GET"])
+def email_action_confirm():
+    """Landing page for a one-click email action link. GET never mutates state --
+    only renders a confirmation page with a single button that POSTs -- so an
+    email client's link-safety prescan (which fetches GET links to check them)
+    can't accidentally trigger a save/queue/remove."""
+    token  = request.args.get("token", "")
+    action = request.args.get("action", "")
+    if action not in _EMAIL_ACTION_COPY:
+        return _email_action_page("", "", "Invalid link", "This action isn't recognized."), 400
+
+    rec, reason = _lookup_email_token(token)
+    label, prompt = _EMAIL_ACTION_COPY[action]
+    if reason:
+        title = rec["title"] if rec else ""
+        image = rec.get("image", "") if rec else ""
+        if reason == "used":
+            used_action = rec.get("used_action", action)
+            used_label, _ = _EMAIL_ACTION_COPY.get(used_action, (label, ""))
+            return _email_action_page(title, image, used_label, _EMAIL_ACTION_USED_COPY[used_action]), 410
+        msg = {
+            "not_found": "This link isn't valid.",
+            "expired":   "This link has expired -- the recipe idea it pointed to may no longer be fresh.",
+        }[reason]
+        return _email_action_page(title, image, label, msg), 410 if reason != "not_found" else 404
+
+    form = f"""<form method="POST" action="/api/email_action?token={token}&action={action}">
+<button type="submit" style="font-size:16px;padding:10px 20px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;">Confirm</button>
+</form>"""
+    return _email_action_page(rec["title"], rec.get("image", ""), label, prompt, form)
+
+
+@app.route("/api/email_action", methods=["POST"])
+def email_action_confirm_submit():
+    token  = request.args.get("token", "")
+    action = request.args.get("action", "")
+    if action not in _EMAIL_ACTION_COPY:
+        return _email_action_page("", "", "Invalid link", "This action isn't recognized."), 400
+
+    rec, reason = _lookup_email_token(token)
+    label, _ = _EMAIL_ACTION_COPY[action]
+    if reason:
+        title = rec["title"] if rec else ""
+        image = rec.get("image", "") if rec else ""
+        if reason == "used":
+            used_action = rec.get("used_action", action)
+            used_label, _ = _EMAIL_ACTION_COPY.get(used_action, (label, ""))
+            return _email_action_page(title, image, used_label, _EMAIL_ACTION_USED_COPY[used_action]), 410
+        msg = {
+            "not_found": "This link isn't valid.",
+            "expired":   "This link has expired -- the recipe idea it pointed to may no longer be fresh.",
+        }[reason]
+        return _email_action_page(title, image, label, msg), 410 if reason != "not_found" else 404
+
+    recipe = {
+        "title":        rec["title"],
+        "url":          rec.get("url", ""),
+        "source":       rec.get("source", ""),
+        "time":         rec.get("time", ""),
+        "image":        rec.get("image", ""),
+        "ingredients":  rec.get("ingredients", []),
+        "instructions": rec.get("instructions", []),
+        "cuisine":      rec.get("cuisine", ""),
+        "yield":        rec.get("yield", ""),
+        "video_url":    rec.get("video_url", ""),
+    }
+
+    if action == "remove":
+        url = (rec.get("url", "") or "").rstrip("/")
+        dismissed: list = []
+        if DISMISSED_FILE.exists():
+            try:
+                dismissed = json.loads(DISMISSED_FILE.read_text())
+            except Exception:
+                pass
+        if url and url not in dismissed:
+            dismissed.append(url)
+            DISMISSED_FILE.write_text(json.dumps(dismissed))
+        result_text = f'"{rec["title"]}" won\'t be suggested again.'
+    else:
+        entry, err = _classify_and_add_recipe(recipe)
+        if err and err[0].get("error") != "already_exists":
+            body, status = err
+            return _email_action_page(rec["title"], rec.get("image", ""), label, f"Something went wrong: {body.get('error')}"), status
+        title = entry["title"] if entry else rec["title"]
+        result_text = f'"{title}" is in your collection.'
+        if action == "queue":
+            queue = _load_queue()
+            if not any(q.get("title") == title for q in queue):
+                queue.append({"title": title, "added_date": date.today().isoformat(), "day": ""})
+                _save_queue(queue)
+            result_text = f'"{title}" is in your collection and this week\'s queue.'
+
+    tokens = _load_email_tokens()
+    if token in tokens:
+        tokens[token]["used"] = True
+        tokens[token]["used_action"] = action
+        _save_email_tokens(tokens)
+
+    return _email_action_page(rec["title"], rec.get("image", ""), f"Done -- {label}", result_text)
 
 
 @app.route("/api/this_week")
@@ -792,6 +1025,134 @@ def remove_recipe():
     return jsonify({"outcome": outcome, "title": title, "times_cooked": times_cooked})
 
 
+@app.route("/api/queue")
+@login_required
+def get_queue():
+    """Ordered menu queue, enriched with recipe display data.
+
+    Self-healing: entries whose recipe no longer exists (or is no longer
+    active) are dropped silently and the pruned list is persisted.
+    """
+    queue = _load_queue()
+    recipes = _load_metadata().get("recipes", {})
+    result = []
+    pruned = False
+    for entry in queue:
+        title = entry.get("title", "")
+        v = recipes.get(title)
+        if not v or v.get("status") != "active":
+            pruned = True
+            continue
+        fname = v.get("filename", "")
+        gh_url = f"{_GH_PAGES_BASE}/{fname[:-3]}" if fname and _GH_PAGES_BASE else ""
+        result.append({
+            "title":        title,
+            "cuisine":      v.get("cuisine", ""),
+            "source":       v.get("source", ""),
+            "url":          gh_url or v.get("source_url", "") or v.get("url", ""),
+            "time":         v.get("time", ""),
+            "health":       v.get("health", ""),
+            "image":        v.get("image", ""),
+            "times_cooked": v.get("times_cooked", 0),
+            "added_date":   entry.get("added_date", ""),
+            "day":          entry.get("day", "") if entry.get("day") in QUEUE_DAYS else "",
+        })
+    if pruned:
+        _save_queue([{"title": r["title"], "added_date": r["added_date"], "day": r["day"]} for r in result])
+    return jsonify(result)
+
+
+@app.route("/api/queue/add", methods=["POST"])
+@login_required
+def add_to_queue():
+    body  = request.get_json() or {}
+    title = (body.get("title", "") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+
+    recipes = _load_metadata().get("recipes", {})
+    v = recipes.get(title)
+    if not v or v.get("status") != "active":
+        return jsonify({"error": "not_in_collection", "title": title}), 404
+
+    queue = _load_queue()
+    if not any(q.get("title") == title for q in queue):
+        queue.append({"title": title, "added_date": date.today().isoformat(), "day": ""})
+        _save_queue(queue)
+    return jsonify({"success": True, "title": title, "position": len(queue)})
+
+
+@app.route("/api/queue/remove", methods=["POST"])
+@login_required
+def remove_from_queue():
+    body  = request.get_json() or {}
+    title = (body.get("title", "") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+
+    queue = _load_queue()
+    new_queue = [q for q in queue if q.get("title") != title]
+    if len(new_queue) == len(queue):
+        return jsonify({"error": "not_in_queue", "title": title}), 404
+    _save_queue(new_queue)
+    return jsonify({"success": True, "title": title})
+
+
+@app.route("/api/queue/set_day", methods=["POST"])
+@login_required
+def set_queue_item_day():
+    body  = request.get_json() or {}
+    title = (body.get("title", "") or "").strip()
+    day   = body.get("day", "")
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    if day not in QUEUE_DAYS and day != "":
+        return jsonify({"error": f"day must be one of {QUEUE_DAYS} or '' for unassigned"}), 400
+
+    queue = _load_queue()
+    entry = next((q for q in queue if q.get("title") == title), None)
+    if entry is None:
+        return jsonify({"error": "not_in_queue", "title": title}), 404
+
+    entry["day"] = day
+    _save_queue(queue)
+    return jsonify({"success": True, "title": title, "day": day})
+
+
+@app.route("/api/queue/move", methods=["POST"])
+@login_required
+def move_queue_item():
+    body      = request.get_json() or {}
+    title     = (body.get("title", "") or "").strip()
+    direction = body.get("direction", "")
+    if not title or direction not in ("up", "down"):
+        return jsonify({"error": "title and direction ('up'/'down') required"}), 400
+
+    queue = _load_queue()
+    idx = next((i for i, q in enumerate(queue) if q.get("title") == title), None)
+    if idx is None:
+        return jsonify({"error": "not_in_queue", "title": title}), 404
+
+    # Scoped to the same day group (or the unassigned group) — with day
+    # sections in the UI, "up"/"down" means "within this section", not
+    # "adjacent in the raw list", since other days' entries may be
+    # interleaved in the underlying array.
+    day = queue[idx].get("day", "")
+    if direction == "up":
+        group_idxs = [i for i in range(0, idx) if queue[i].get("day", "") == day]
+        swap_idx = group_idxs[-1] if group_idxs else None
+    else:
+        group_idxs = [i for i in range(idx + 1, len(queue)) if queue[i].get("day", "") == day]
+        swap_idx = group_idxs[0] if group_idxs else None
+
+    if swap_idx is None:
+        return jsonify({"success": True, "title": title, "moved": False})
+
+    queue[idx], queue[swap_idx] = queue[swap_idx], queue[idx]
+    _save_queue(queue)
+    return jsonify({"success": True, "title": title, "moved": True})
+
+
 @app.route("/api/dismiss", methods=["POST"])
 @login_required
 def dismiss_recipe():
@@ -1030,7 +1391,7 @@ if __name__ == "__main__":
     key_path = Path(__file__).parent / "certs" / "recipe_review.key"
     if cert_path.exists() and key_path.exists():
         print("Open https://localhost:5051 (self-signed cert — browser will warn once)")
-        app.run(host="0.0.0.0", port=5051, debug=False, ssl_context=(str(cert_path), str(key_path)))
+        app.run(host="0.0.0.0", port=5051, debug=False, threaded=True, ssl_context=(str(cert_path), str(key_path)))
     else:
         print("Open http://localhost:5051")
-        app.run(host="0.0.0.0", port=5051, debug=False)
+        app.run(host="0.0.0.0", port=5051, debug=False, threaded=True)

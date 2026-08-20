@@ -382,6 +382,11 @@
     .modal-action.remove-btn { color: #c0392b; }
     .modal-action.remove-btn span { color: #c0392b; }
 
+    .modal-action.queue-add-btn { color: #8e44ad; }
+    .modal-action.queue-add-btn span { color: #8e44ad; }
+    .modal-action.queue-add-btn.queued { color: #8e44ad; }
+    .modal-action.queue-add-btn.queued span { color: #8e44ad; }
+
     .modal-action.visit-btn { color: #2980b9; }
     .modal-action.visit-btn span { color: #2980b9; }
     .modal-action.source-btn { color: #7f8c8d; }
@@ -782,6 +787,130 @@
       font-size: 14px;
     }
 
+    /* Menu queue */
+    .queue-wrap {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 8px 24px 36px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .queue-row {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 10px;
+    }
+
+    .queue-rank {
+      width: 22px;
+      flex-shrink: 0;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 800;
+      color: #bbb;
+    }
+
+    .queue-thumb {
+      width: 48px;
+      height: 48px;
+      border-radius: 8px;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+
+    .queue-thumb-placeholder {
+      width: 48px;
+      height: 48px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #e8e8e8, #d0d0d0);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+
+    .queue-info { flex: 1; min-width: 0; }
+
+    .queue-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #222;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .queue-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 3px;
+      font-size: 11px;
+      color: #999;
+    }
+
+    .queue-controls {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+
+    .queue-btn {
+      border: none;
+      background: none;
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 6px;
+      color: #888;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .queue-btn:hover { background: #f5f5f5; color: #333; }
+    .queue-btn:disabled { opacity: 0.3; cursor: default; }
+    .queue-btn:disabled:hover { background: none; }
+    .queue-btn.queue-remove-btn:hover { background: #fdecea; color: #c0392b; }
+
+    .queue-empty {
+      text-align: center;
+      padding: 80px 24px;
+      color: #aaa;
+      font-size: 14px;
+    }
+
+    .queue-day-header {
+      padding: 16px 2px 4px;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: #bbb;
+    }
+
+    .queue-wrap .queue-day-header:first-child { padding-top: 2px; }
+
+    .queue-day-select {
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      padding: 5px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #555;
+      background: #fff;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
     /* Lunch tile */
     .lunch-wrap {
       max-width: 1400px;
@@ -980,6 +1109,7 @@
   </button>
   <button class="view-btn" onclick="setView('new', this)">New</button>
   <button class="view-btn" onclick="setView('collection', this)">Collection</button>
+  <button class="view-btn" onclick="setView('queue', this)">Queue</button>
   <button class="filter-toggle" id="filter-btn" onclick="openFilterSheet()" style="display:none" title="Filters">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
     <span class="filter-badge" id="filter-badge" style="display:none">0</span>
@@ -1027,7 +1157,8 @@
   let lunchPick  = null;
   let currentIdx = null;
   let _savedScrollY = 0;
-  let currentView = localStorage.getItem('menubuilder_view') || 'week';
+  const batchId = new URLSearchParams(location.search).get('batch');
+  let currentView = batchId ? 'new' : (localStorage.getItem('menubuilder_view') || 'week');
   let searchMode = null;   // null = off, 'local' = live filter, 'semantic' = results
   let searchResults = [];  // semantic results
   let searchIndexReady = false;
@@ -1423,10 +1554,36 @@
     return sourceColorCache[src];
   }
 
+  let queuedTitleSet = new Set();
+
+  async function _refreshQueuedTitles() {
+    try {
+      const res = await fetch('/api/queue');
+      const items = await res.json();
+      queuedTitleSet = new Set(items.map(i => i.title));
+    } catch (e) { /* best-effort — worst case the toggle button starts as "Add" */ }
+  }
+
   async function load() {
     showLoading();
-    const endpoint = currentView === 'collection' ? '/api/collection' : '/api/recipes';
-    const res = await fetch(endpoint);
+    const endpoint = batchId ? `/api/batch/${encodeURIComponent(batchId)}`
+      : currentView === 'collection' ? '/api/collection' : '/api/recipes';
+    const [res] = await Promise.all([fetch(endpoint), _refreshQueuedTitles()]);
+
+    if (batchId && (res.status === 404)) {
+      const body = await res.json().catch(() => ({}));
+      renderFilters();
+      document.getElementById('main').innerHTML = `
+        <div class="empty-state">
+          <div style="font-size:48px">🍝</div>
+          <p>${body.error === 'batch_expired'
+            ? "This batch has already been replaced by a newer one — ask David for a fresh link."
+            : "No batch found — ask David to send a fresh link."}</p>
+        </div>`;
+      document.getElementById('subtitle').textContent = '';
+      return;
+    }
+
     allRecipes = await res.json();
 
     if (!Array.isArray(allRecipes) || allRecipes.length === 0) {
@@ -1434,7 +1591,9 @@
       document.getElementById('main').innerHTML = `
         <div class="empty-state">
           <div style="font-size:48px">🍝</div>
-          <p>${currentView === 'new'
+          <p>${batchId
+            ? "All picks from this batch have been cleared out already."
+            : currentView === 'new'
             ? 'No new candidates. Run an agent first:<br><code>python3 fill_menu_ideas.py --dry-run --agents italian</code>'
             : 'No recipes in the collection yet.'}</p>
         </div>`;
@@ -1459,12 +1618,12 @@
     }
     if (searchMode === 'local') {
       const total = allRecipes.length;
-      const label = currentView === 'collection' ? 'in collection' : 'new candidates';
+      const label = batchId ? 'picks' : currentView === 'collection' ? 'in collection' : 'new candidates';
       document.getElementById('subtitle').textContent = `${visibleCount} of ${total} ${label}`;
       return;
     }
     const total = allRecipes.length;
-    const label = currentView === 'collection' ? 'in collection' : 'new candidates';
+    const label = batchId ? 'picks left to review' : currentView === 'collection' ? 'in collection' : 'new candidates';
     const suffix = visibleCount < total ? ` of ${total}` : '';
     document.getElementById('subtitle').textContent = `${visibleCount}${suffix} ${label}`;
   }
@@ -1489,6 +1648,10 @@
       filterBtn.style.display = 'none';
       agentBtn.style.display  = 'none';
       await loadWeek();
+    } else if (v === 'queue') {
+      filterBtn.style.display = 'none';
+      agentBtn.style.display  = 'none';
+      await loadQueue();
     } else {
       filterBtn.style.display = '';
       agentBtn.style.display  = v === 'new' ? '' : 'none';
@@ -1662,6 +1825,168 @@
     }
 
     main.appendChild(lunchWrap);
+  }
+
+  let queueItems = [];
+
+  async function loadQueue() {
+    showLoading();
+    const res = await fetch('/api/queue');
+    queueItems = await res.json();
+    document.getElementById('subtitle').textContent =
+      queueItems.length ? `${queueItems.length} queued for next week` : 'Menu queue';
+    renderQueueList();
+  }
+
+  const _QUEUE_DAY_LABELS = {
+    Sun: 'Sunday', Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday',
+    Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday',
+  };
+  const _QUEUE_DAY_ORDER = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', ''];
+
+  function _queueDaySelectHtml(idx, currentDay) {
+    const opts = _QUEUE_DAY_ORDER.map(d =>
+      `<option value="${d}" ${d === currentDay ? 'selected' : ''}>${d ? _QUEUE_DAY_LABELS[d] : 'Unassigned'}</option>`
+    ).join('');
+    return `<select class="queue-day-select" onclick="event.stopPropagation()" onchange="setQueueItemDay(${idx}, this.value)">${opts}</select>`;
+  }
+
+  function renderQueueList() {
+    const main = document.getElementById('main');
+    if (!queueItems.length) {
+      main.innerHTML = `<div class="queue-empty">No recipes queued yet — add some from Collection or New.</div>`;
+      return;
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'queue-wrap';
+
+    _QUEUE_DAY_ORDER.forEach(day => {
+      const groupItems = queueItems
+        .map((item, idx) => ({ item, idx }))
+        .filter(({ item }) => (item.day || '') === day);
+      if (!groupItems.length) return;
+
+      const header = document.createElement('div');
+      header.className = 'queue-day-header';
+      header.textContent = day ? _QUEUE_DAY_LABELS[day] : 'Unassigned';
+      wrap.appendChild(header);
+
+      groupItems.forEach(({ item, idx }, posInGroup) => {
+        const row = document.createElement('div');
+        row.className = 'queue-row';
+
+        const thumbHtml = item.image
+          ? `<img class="queue-thumb" src="/api/img?url=${encodeURIComponent(item.image)}"
+                 alt="${escHtml(item.title)}" loading="lazy"
+                 onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+            + `<div class="queue-thumb-placeholder" style="display:none">🍽</div>`
+          : `<div class="queue-thumb-placeholder">🍽</div>`;
+
+        const pClass = healthPillClass(item.health);
+
+        row.innerHTML = `
+          <div class="queue-rank">${posInGroup + 1}</div>
+          ${thumbHtml}
+          <div class="queue-info">
+            <div class="queue-title">${escHtml(item.title)}</div>
+            <div class="queue-meta">
+              ${item.health ? `<span class="health-pill ${pClass}">${escHtml(item.health)}</span>` : ''}
+              ${item.time ? `<span>${escHtml(item.time)}</span>` : ''}
+            </div>
+          </div>
+          ${_queueDaySelectHtml(idx, item.day || '')}
+          <div class="queue-controls">
+            <button class="queue-btn" title="Move up" ${posInGroup === 0 ? 'disabled' : ''}
+                    onclick="moveQueueItem(${idx}, 'up')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+            </button>
+            <button class="queue-btn" title="Move down" ${posInGroup === groupItems.length - 1 ? 'disabled' : ''}
+                    onclick="moveQueueItem(${idx}, 'down')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <button class="queue-btn queue-remove-btn" title="Remove from queue" onclick="removeQueueItem(${idx})">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        `;
+        wrap.appendChild(row);
+      });
+    });
+
+    main.innerHTML = '';
+    main.appendChild(wrap);
+  }
+
+  async function moveQueueItem(idx, direction) {
+    const day = queueItems[idx].day || '';
+    const title = queueItems[idx].title;
+    // Optimistic reorder, scoped to the same day group (mirrors the backend's
+    // group-scoped swap) — snap back on failure.
+    const prev = queueItems.slice();
+    let swapIdx = null;
+    if (direction === 'up') {
+      for (let i = idx - 1; i >= 0; i--) {
+        if ((queueItems[i].day || '') === day) { swapIdx = i; break; }
+      }
+    } else {
+      for (let i = idx + 1; i < queueItems.length; i++) {
+        if ((queueItems[i].day || '') === day) { swapIdx = i; break; }
+      }
+    }
+    if (swapIdx === null) return;
+    [queueItems[idx], queueItems[swapIdx]] = [queueItems[swapIdx], queueItems[idx]];
+    renderQueueList();
+
+    try {
+      const res = await fetch('/api/queue/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, direction }),
+      });
+      if (!res.ok) throw new Error('move failed');
+    } catch (e) {
+      queueItems = prev;
+      renderQueueList();
+    }
+  }
+
+  async function setQueueItemDay(idx, day) {
+    const title = queueItems[idx].title;
+    const prev = queueItems.slice();
+    queueItems[idx] = { ...queueItems[idx], day };
+    renderQueueList();
+
+    try {
+      const res = await fetch('/api/queue/set_day', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, day }),
+      });
+      if (!res.ok) throw new Error('set_day failed');
+    } catch (e) {
+      queueItems = prev;
+      renderQueueList();
+    }
+  }
+
+  async function removeQueueItem(idx) {
+    const title = queueItems[idx].title;
+    const prev = queueItems.slice();
+    queueItems.splice(idx, 1);
+    renderQueueList();
+
+    try {
+      const res = await fetch('/api/queue/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) throw new Error('remove failed');
+    } catch (e) {
+      queueItems = prev;
+      renderQueueList();
+    }
   }
 
   function _closeBtnHtml() {
@@ -1900,6 +2225,7 @@
            </svg>
            <span>Add</span>
          </button>
+         ${_queueButtonHtml(idx, r.title, true)}
          <button class="modal-action dismiss-btn" onclick="dismissRecipe(${idx})" title="Remove from New queue">
            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -1907,7 +2233,8 @@
            <span>Remove</span>
          </button>`
       : currentView === 'collection' && r.record_type !== 'condiment'
-      ? `<button class="modal-action remove-btn" onclick="removeFromCollection(${idx})" title="Remove from collection">
+      ? `${_queueButtonHtml(idx, r.title, false)}
+         <button class="modal-action remove-btn" onclick="removeFromCollection(${idx})" title="Remove from collection">
            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
              <path d="M10 11v6"/><path d="M14 11v6"/>
@@ -1938,6 +2265,113 @@
       badgeSecondary: r.cuisine || '',
       toolbarHtml:    `${actionHtml}${visitHtml}${_closeBtnHtml()}`,
     });
+  }
+
+  function _queueButtonHtml(idx, title, fromIdea) {
+    // Idea cards haven't been added to the collection yet, so they can never
+    // already be queued — always render the un-queued "Add" state there;
+    // clicking chains add-to-collection then queue-add (addToQueueFromIdea).
+    const queued = !fromIdea && queuedTitleSet.has(title);
+    const onclick = fromIdea ? `addToQueueFromIdea(${idx})` : `toggleQueue(${idx})`;
+    const label = queued ? 'Queued' : 'Queue';
+    const cls = queued ? 'modal-action queue-add-btn queued' : 'modal-action queue-add-btn';
+    const icon = queued
+      ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`
+      : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+    const title_ = queued ? 'Remove from menu queue' : 'Add to menu queue';
+    return `<button class="${cls}" onclick="${onclick}" title="${title_}">${icon}<span>${label}</span></button>`;
+  }
+
+  async function toggleQueue(idx) {
+    const r = allRecipes[idx];
+    const btn = document.querySelector('.modal-action.queue-add-btn');
+    const wasQueued = queuedTitleSet.has(r.title);
+    if (btn) btn.disabled = true;
+
+    try {
+      const res = await fetch(wasQueued ? '/api/queue/remove' : '/api/queue/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: r.title }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(`Error: ${data.error || res.statusText}`);
+        if (btn) btn.disabled = false;
+        return;
+      }
+      if (wasQueued) queuedTitleSet.delete(r.title);
+      else queuedTitleSet.add(r.title);
+      if (btn) btn.outerHTML = _queueButtonHtml(idx, r.title, false);
+    } catch (e) {
+      alert('Network error.');
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function addToQueueFromIdea(idx) {
+    const btn = document.querySelector('.modal-action.queue-add-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             style="animation:spin 1s linear infinite">
+          <circle cx="12" cy="12" r="10" stroke-dasharray="31" stroke-dashoffset="10"/>
+        </svg>
+        <span>Adding...</span>`;
+    }
+
+    const errState = (msg) => {
+      if (!btn) return;
+      btn.innerHTML = `
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span>${msg}</span>`;
+      btn.disabled = false;
+      btn.onclick = () => addToQueueFromIdea(idx);
+    };
+
+    try {
+      const addRes = await fetch('/api/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(allRecipes[idx]),
+      });
+      const addData = await addRes.json();
+      if (!addRes.ok) {
+        errState(addData.error === 'already_exists' ? 'Exists' : 'Error');
+        return;
+      }
+
+      const qRes = await fetch('/api/queue/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: addData.title }),
+      });
+
+      if (btn) {
+        if (qRes.ok) {
+          btn.classList.add('queued');
+          btn.innerHTML = `
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span>Queued</span>`;
+        } else {
+          // Added to the collection successfully even though the queue step
+          // failed — still a net-positive outcome, just say so plainly.
+          btn.innerHTML = `<span>Added, queue failed</span>`;
+        }
+        btn.onclick = null;
+      }
+      // Either way it's been added to the collection, so it leaves the New view.
+      allRecipes.splice(idx, 1);
+      setTimeout(() => { closeModal(); renderGrid(); }, 700);
+    } catch (e) {
+      errState('Error');
+    }
   }
 
   function closeModal() {
@@ -2088,8 +2522,13 @@
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  // Restore saved view (or default to week)
-  {
+  // Restore saved view (or default to week) -- unless a batch link, which
+  // always forces the filtered "your picks" view regardless of last-used tab.
+  if (batchId) {
+    document.querySelector('.view-bar').style.display = 'none';
+    document.querySelector('header h1').textContent = "This Week's Picks";
+    load();
+  } else {
     const savedBtn = [...document.querySelectorAll('.view-btn')]
       .find(b => b.getAttribute('onclick')?.includes(`'${currentView}'`));
     if (savedBtn) {
