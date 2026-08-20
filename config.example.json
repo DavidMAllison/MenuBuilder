@@ -4,5 +4,6 @@
   "github_pages_base_url": "https://yourusername.github.io/your-recipes-repo",
   "dropbox_recipe_base_url": "https://www.dropbox.com/...",
   "partner_handle": "+15550000000",
-  "admin_handle": "+15550000001"
+  "admin_handle": "+15550000001",
+  "review_ui_base_url": "https://your-mac.local:5051"
 }
