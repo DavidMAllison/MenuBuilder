@@ -220,8 +220,13 @@
 - Pre-create plan files as `davidallison`-owned on the console path, let SMS update in place
 - Check `/Users/Shared/cooking/` directory-level permissions (`ls -la /Users/Shared/cooking/`) — may need `chmod g+w` on the directory itself, not just the files
 
-### Meal Costing (Long-Term)
-- Once price history accumulates, cost recipes using `ingredients` array + price-per-unit averages from `price_history.json`
-- MenuBuilder will skip entries missing `price_per_unit` gracefully
-- **Owner**: GroceryAgent pipeline feeds the data; MenuBuilder is the consumer
-- **Hold until**: ~Sep 15 2026 — need 3 more months of receipt data before price_history has enough coverage to be useful
+### Meal Costing
+**Status**: Built Aug 4 2026 — no longer on hold. `meal_costing.py` + `compute_meal_costs.py` write `avg_cost_per_serving` (+ coverage stats) onto every active recipe in `recipe_metadata.json`, sourced from `/Users/Shared/grocery/price_history.json` plus a manually-maintained `protein_portion_overrides` table in `config.json` for bulk/portioned proteins (chicken thighs/breast, pork cuts, ribs, shrimp, etc. — see [[project_meal_costing]] memory for the full list and the matching bugs that were found/fixed along the way). Rerun `compute_meal_costs.py` manually after new receipts or override entries land — not wired into the Sunday workflow.
+- Coverage as of Aug 4 2026: no recipe yet clears the 50% threshold needed for a confident `avg_cost_per_serving` (best is ~33-49%) — Produce and Proteins are the best-covered categories, Spices/Herbs and Dry Goods are 0% by design (see below).
+
+### Spice/Condiment Pricing via Web Search or API
+**Status**: Planned (idea from David, Aug 4 2026).
+- Today, `meal_costing.py` deliberately excludes Spices/Herbs and Pantry/Asian categories from cost matching — a receipt only records the price of a whole purchased container (e.g. a $2.69 salt box), and a recipe only uses a pinch/teaspoon/tablespoon of it, so there's no way to derive a real per-recipe-use cost from receipt data alone.
+- Idea: instead of relying on receipts for these, look up typical unit prices (e.g. "$/oz for ground cumin," "$/fl oz for soy sauce") via a web search or grocery pricing API, and use that alongside the recipe's actual called-for quantity (which IS known and reasonably precise for spices — "1 tsp cumin" etc.) to compute a real per-use cost.
+- Would need: a source (web search, a grocery API, or a small manually-curated reference table similar to `protein_portion_overrides`), and a place to cache looked-up prices so it isn't a live search on every cost computation.
+- Not started — no research done yet on which API/search approach is most reliable or cheap to run at this scale (~680 Spices/Herbs + ~750 Pantry/Asian ingredient line items across the collection).
