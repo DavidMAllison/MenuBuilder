@@ -887,6 +887,7 @@ def _plan_tallies(selected: dict, recipes: dict) -> dict:
 def _load_candidates() -> list:
     recipes = _load_metadata()
     inventory = _load_inventory_keywords()  # loaded once for the whole pass
+    out_of_stock = cs.load_out_of_stock_proteins(_CONFIG.get("inventory_path", ""))
     family_preferences = cs.load_family_preferences(_CONFIG.get("family_preferences_path", ""))
     candidates, _ = cs.load_candidates(
         recipes,
@@ -894,6 +895,7 @@ def _load_candidates() -> list:
         garden_herbs=_GARDEN_HERBS,
         inventory_items=inventory,
         family_preferences=family_preferences,
+        out_of_stock_items=out_of_stock,
     )
 
     # Small jitter so near-equal candidates rotate week to week instead of

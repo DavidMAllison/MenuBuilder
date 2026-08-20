@@ -58,7 +58,7 @@ INVENTORY_STOPWORDS = {
     "pirate", "angel", "food", "chiquita", "stouffers", "mila",
 }
 
-PANTRY_CATEGORIES = {"Pantry", "Dry Goods", "Dairy"}
+PANTRY_CATEGORIES = {"Pantry", "Pantry/Asian", "Dry Goods", "Dairy"}
 
 
 def resolve_cuisine(r: dict, default: str = 'Unknown') -> str:
@@ -177,6 +177,33 @@ def load_inventory_keywords(inventory_path: str) -> list:
     return items
 
 
+def load_out_of_stock_proteins(inventory_path: str) -> list:
+    """Return list of {name, keywords} for Proteins-category inventory items sitting
+    at quantity 0 -- e.g. chicken breast explicitly zeroed out in a recount, not just
+    absent from the file. Used to deprioritize recipes whose protein isn't actually
+    available, distinct from load_inventory_keywords() which only returns in-stock
+    items (and would otherwise silently drop this zeroed-out signal)."""
+    if not inventory_path:
+        return []
+    try:
+        with open(inventory_path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+
+    items = []
+    for item in data.get('items', []):
+        if item.get('category') != 'Proteins' or item.get('quantity', 0) != 0:
+            continue
+        name = item.get('name', '').lower()
+        if not name:
+            continue
+        words = [w for w in name.split() if w not in INVENTORY_STOPWORDS and len(w) > 2]
+        if words:
+            items.append({'name': name, 'keywords': words})
+    return items
+
+
 def load_family_preferences(preferences_path: str) -> list:
     """Return the raw list of {date, person, preference} entries from
     family_preferences.json, or [] if the file is missing/unreadable."""
@@ -206,16 +233,21 @@ def preference_flags_recipe(recipe_name: str, preferences: list) -> bool:
     return False
 
 
-def inventory_match(recipe_name: str, ingredients: list, inventory_items: list) -> tuple:
+def inventory_match(recipe_name: str, ingredients: list, inventory_items: list,
+                     out_of_stock_items: list = None) -> tuple:
     """
     Check if a recipe matches any inventory items.
-    Returns (broad_match: bool, protein_specific: list[str], pantry_specific: list[str])
+    Returns (broad_match, protein_specific, pantry_specific, protein_out_of_stock)
       - broad_match: recipe protein category matches a stocked protein type
       - protein_specific: protein inventory items that specifically match (e.g. 'pork tenderloin')
       - pantry_specific: pantry/dry goods/dairy items that match (e.g. 'rigatoni', 'heavy cream')
+      - protein_out_of_stock: zeroed-out protein inventory items that specifically match
+        (e.g. recipe calls for 'chicken breast' and that's explicitly at qty 0) -- only
+        meaningful when broad_match/protein_specific are both empty, i.e. no stocked
+        form of the protein was found either
     """
     if not inventory_items:
-        return False, [], []
+        return False, [], [], []
 
     name_lower = recipe_name.lower()
     ing_text = ' '.join(
@@ -244,7 +276,14 @@ def inventory_match(recipe_name: str, ingredients: list, inventory_items: list) 
             elif len(keywords) == 1 and len(keywords[0]) >= 5 and keywords[0] in searchable:
                 pantry_specific.append(item['name'])
 
-    return broad, protein_specific, pantry_specific
+    protein_out_of_stock = []
+    if not protein_specific and not broad:
+        for item in (out_of_stock_items or []):
+            keywords = item['keywords']
+            if keywords and all(kw in searchable for kw in keywords):
+                protein_out_of_stock.append(item['name'])
+
+    return broad, protein_specific, pantry_specific, protein_out_of_stock
 
 
 def candidate_score(c: dict) -> float:
@@ -280,6 +319,11 @@ def candidate_score(c: dict) -> float:
         s -= 3    # broad protein match (e.g. any chicken recipe when chicken is stocked)
     if c.get('inv_pantry'):
         s -= 2    # pantry/dry goods match (e.g. rigatoni or heavy cream in stock)
+    # Recipe's protein is explicitly zeroed out in the freezer (and no other stocked
+    # form of it was found) -- deprioritize rather than recommending something that
+    # would require an unplanned grocery trip.
+    if c.get('protein_out_of_stock'):
+        s += 8
     # Garden herb bonus (free fresh herb from garden)
     if c.get('garden_herbs'):
         s -= 4
@@ -293,7 +337,8 @@ def candidate_score(c: dict) -> float:
 
 
 def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
-                     inventory_items: list, family_preferences: list = None) -> tuple:
+                     inventory_items: list, family_preferences: list = None,
+                     out_of_stock_items: list = None) -> tuple:
     """Build the filtered candidate list from recipe_metadata.json's 'recipes' dict.
 
     Returns (candidates, is_grill_season). Candidates are NOT jitter-shuffled,
@@ -331,7 +376,8 @@ def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
         kid_approved = bool(r.get('kid_approved')) or bool(kid_friendly)
 
         ingredients = r.get('ingredients', [])
-        inv_broad, inv_specific, inv_pantry = inventory_match(name, ingredients, inventory_items)
+        inv_broad, inv_specific, inv_pantry, protein_out_of_stock = inventory_match(
+            name, ingredients, inventory_items, out_of_stock_items)
         garden = herbs_in_recipe(r, garden_herbs)
         preference_flagged = preference_flags_recipe(name, family_preferences)
 
@@ -356,6 +402,7 @@ def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
             'inv_broad': inv_broad,
             'inv_specific': inv_specific,
             'inv_pantry': inv_pantry,
+            'protein_out_of_stock': protein_out_of_stock,
             'garden_herbs': garden,
             'preference_flagged': preference_flagged,
         })

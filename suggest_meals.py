@@ -21,8 +21,8 @@ from collections import Counter, defaultdict
 import candidate_scoring as cs
 from candidate_scoring import (
     RECENCY_WEEKS, TRACKED_FRESH_HERBS, PANTRY_CATEGORIES,
-    herbs_in_recipe, load_inventory_keywords, load_family_preferences,
-    candidate_score as score,
+    herbs_in_recipe, load_inventory_keywords, load_out_of_stock_proteins,
+    load_family_preferences, candidate_score as score,
 )
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.json')
@@ -89,6 +89,7 @@ def load_candidates(quick_nights=False):
     recipes = data['recipes']
 
     inventory_items = load_inventory_keywords(INVENTORY_PATH)
+    out_of_stock_items = load_out_of_stock_proteins(INVENTORY_PATH)
     family_preferences = load_family_preferences(FAMILY_PREFERENCES_PATH)
     candidates, is_grill_season = cs.load_candidates(
         recipes,
@@ -96,6 +97,7 @@ def load_candidates(quick_nights=False):
         garden_herbs=GARDEN_HERBS,
         inventory_items=inventory_items,
         family_preferences=family_preferences,
+        out_of_stock_items=out_of_stock_items,
     )
     for c in candidates:
         r = recipes[c['name']]
@@ -129,6 +131,8 @@ def print_group(title, items, limit=6):
             stock_tag = f" [IN STOCK: {c['inv_specific'][0]}]"
         elif c.get('inv_broad'):
             stock_tag = ' [IN STOCK]'
+        elif c.get('protein_out_of_stock'):
+            stock_tag = f" [OUT OF STOCK: {c['protein_out_of_stock'][0]}]"
         else:
             stock_tag = ''
         if c.get('inv_pantry'):
