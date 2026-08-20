@@ -4,7 +4,7 @@
 
 ### Perishable Herb/Produce Pairing
 **Status**: COMPLETE Jun 15 2026.
-- `garden_herbs: ["basil", "thyme", "rosemary"]` in `config.json` (update each spring/fall)
+- `garden_herbs: ["rosemary"]` in `config.json` (update each spring/fall as what's actually growing changes)
 - Garden herb recipes get -4 score bonus in `suggest_meals.py` (free herb = slight preference) + `[GARDEN: X]` tag in output
 - Shopping CSV (`_build_shopping_csv` in `menu_server.py`) skips garden herb ingredients — they never appear on the shopping list
 - Purchased herb pairing note: if cilantro, mint, dill, parsley, tarragon, or chives appear in 3+ candidates, `suggest_meals.py` prints "FRESH HERB PAIRING" section at bottom — pick 2 recipes to use the bunch
