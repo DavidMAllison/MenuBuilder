@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -475,7 +476,14 @@ def _quality_issues(recipe):
 
 
 def _slug_filename(title):
-    return re.sub(r"[^\w\s-]", "", title).strip().replace(" ", "_") + ".md"
+    # Plain [^\w\s-] strips Unicode combining marks (category Mn/Mc) along with
+    # punctuation, since \w doesn't include them -- silently mangles Thai/Vietnamese/
+    # Devanagari titles (e.g. "ผัดซีอิ้ว" -> "ผดซอว"). Keep marks explicitly.
+    kept = "".join(
+        c for c in title
+        if c.isalnum() or c in " -_" or unicodedata.category(c) in ("Mn", "Mc")
+    )
+    return kept.strip().replace(" ", "_") + ".md"
 
 
 def _build_md(title, recipe, needs_review):

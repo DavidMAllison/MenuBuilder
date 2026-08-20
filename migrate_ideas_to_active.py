@@ -17,6 +17,7 @@ Usage:
 import argparse
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 METADATA_PATH = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
@@ -46,8 +47,14 @@ def _quality_issues(ingredients_raw: list, instructions: list) -> list[str]:
 
 
 def _title_to_filename(title: str) -> str:
-    safe = re.sub(r"[^\w\s\-]", "", title).strip().replace(" ", "_")
-    return safe + ".md"
+    # Plain [^\w\s-] strips Unicode combining marks (category Mn/Mc) along with
+    # punctuation, since \w doesn't include them -- silently mangles Thai/Vietnamese/
+    # Devanagari titles (e.g. "ผัดซีอิ้ว" -> "ผดซอว"). Keep marks explicitly.
+    safe = "".join(
+        c for c in title
+        if c.isalnum() or c in " -_" or unicodedata.category(c) in ("Mn", "Mc")
+    )
+    return safe.strip().replace(" ", "_") + ".md"
 
 
 def _build_md(title: str, entry: dict, needs_review: bool) -> str:

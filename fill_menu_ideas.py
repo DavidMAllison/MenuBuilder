@@ -23,6 +23,7 @@ import random
 import re
 import subprocess
 import sys
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -614,7 +615,13 @@ def _save_agent_condiment(recipe: dict) -> None:
 
 def _title_to_filename(title: str) -> str:
     """Convert a recipe title to a filename slug."""
-    slug = re.sub(r"[^\w\s-]", "", title)
+    # Plain [^\w\s-] strips Unicode combining marks (category Mn/Mc) along with
+    # punctuation, since \w doesn't include them -- silently mangles Thai/Vietnamese/
+    # Devanagari titles (e.g. "ผัดซีอิ้ว" -> "ผดซอว"). Keep marks explicitly.
+    slug = "".join(
+        c for c in title
+        if c.isalnum() or c in " -_" or unicodedata.category(c) in ("Mn", "Mc")
+    )
     slug = re.sub(r"\s+", "_", slug.strip())
     return f"{slug}.md"
 
