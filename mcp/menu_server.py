@@ -2615,25 +2615,15 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             else:
                 filter_notes.append(f"No {reason_protein.lower()} recipes available in the pool right now")
 
-        # 1b. Protein diversity — deprioritise proteins already used elsewhere this
-        # week by default (not just when the reason names them), so a plain "swap
-        # Thu, want something simple" doesn't hand back a protein that's already on
-        # 2+ other days. Reason-requested proteins (step 1 above) always override this.
-        if not reason_protein:
-            other_proteins = [
-                _get_protein(name) for d, name in selected.items() if d != day
-            ]
-            overused = {p for p in other_proteins if other_proteins.count(p) >= 2 and p != "Other"}
-            if overused:
-                diverse = [c for c in eligible if _get_protein(c["name"]) not in overused]
-                if diverse:
-                    eligible = diverse
-
         # 1b. Specific dish/cut match via Haiku — narrows further than the coarse
         # protein-bucket filter above can (e.g. "pork belly" vs. any pork dish),
         # and covers cuts/dishes the bucket map doesn't know at all (e.g. "ribs").
+        # Runs before the protein-diversity heuristic below so a specifically
+        # named dish always wins over the soft "don't repeat this protein"
+        # preference — same precedence as an explicit protein request in step 1.
         # Only called when `reason` names something beyond a generic complaint,
         # to avoid a network call on every swap.
+        dish_matched = False
         if _text_names_specific_dish(reason):
             dish_matches = _match_named_dishes(reason, [c["name"] for c in eligible][:120])
             if dish_matches:
@@ -2642,10 +2632,26 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 if dish_filtered:
                     dish_filtered.sort(key=lambda c: match_rank[c["name"].lower()])
                     eligible = dish_filtered
+                    dish_matched = True
             else:
                 filter_notes.append(
                     f"Couldn't find a specific match for \"{reason}\" — picked best alternative"
                 )
+
+        # 1c. Protein diversity — deprioritise proteins already used elsewhere this
+        # week by default (not just when the reason names them), so a plain "swap
+        # Thu, want something simple" doesn't hand back a protein that's already on
+        # 2+ other days. A reason-requested protein (step 1) or a specifically
+        # named dish (step 1b above) always overrides this.
+        if not reason_protein and not dish_matched:
+            other_proteins = [
+                _get_protein(name) for d, name in selected.items() if d != day
+            ]
+            overused = {p for p in other_proteins if other_proteins.count(p) >= 2 and p != "Other"}
+            if overused:
+                diverse = [c for c in eligible if _get_protein(c["name"]) not in overused]
+                if diverse:
+                    eligible = diverse
 
         # 2. Cuisine filter from reason (tight), else fall back to cuisine_direction
         reason_cuisine = next((c for c in KNOWN_CUISINES | KNOWN_FAMILIES if c in reason_lower), None)
