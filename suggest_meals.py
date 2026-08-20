@@ -33,7 +33,7 @@ METADATA_PATH = os.path.expanduser(_CONFIG['metadata_path'])
 INVENTORY_PATH = os.path.expanduser(_CONFIG.get('inventory_path', ''))
 FAMILY_PREFERENCES_PATH = os.path.expanduser(_CONFIG.get('family_preferences_path', ''))
 ADULT_NAMES = set(name.lower() for name in _CONFIG['adult_names'])
-BUDGET_PATH = os.path.expanduser('~/Dropbox/LLMContext/Personal/grocery_budget_status.json')
+BUDGET_PATH = '/Users/Shared/grocery/grocery_budget_status.json'
 GARDEN_HERBS = [h.lower() for h in _CONFIG.get('garden_herbs', [])]
 
 _CONDIMENT_TERMINAL = {
