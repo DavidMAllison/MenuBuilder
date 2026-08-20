@@ -321,7 +321,7 @@ def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
 
         minutes = parse_minutes(r.get('time', ''))
         is_slow = r.get('cooking_method') == 'slow_cooker'
-        is_quick = minutes <= QUICK_THRESHOLD or is_slow
+        is_quick = (minutes <= QUICK_THRESHOLD or is_slow) and r.get('weeknight_effort') == 'low'
         is_grill = r.get('cooking_method') == 'grill'
         protein = protein_label(name)
         feedback = r.get('feedback', [])
