@@ -4507,5 +4507,108 @@ def cleanup_test_data() -> dict:
     return {"ok": True, "cleaned": removed}
 
 
+@mcp.tool()
+def send_ashley_recipe_batch() -> dict:
+    """
+    Pick 5 fresh recipe candidates from the idea queue (favoring quick cook
+    times, since Ashley is time-focused) and build a text + review link for
+    Keanu to send her. Excludes anything already in the collection or sent
+    in a prior batch.
+
+    Callable by both David and Ashley (idea_submitters) via the SMS bridge —
+    the caller is responsible for actually sending the returned "message"
+    text (this tool does not send iMessages itself, that only works from
+    inside the sms-assistant process).
+
+    Returns:
+        {"batch_id": "...", "picks": [...], "review_url": "...", "message": "..."}
+        or {"error": "queue_empty"} if there's nothing fresh to send.
+    """
+    import pick_ashley_batch
+    batch = pick_ashley_batch.generate_batch()
+    if batch is None:
+        return {"error": "queue_empty"}
+
+    base_url = _CONFIG.get("review_ui_base_url", "").rstrip("/")
+    review_url = f"{base_url}/?batch={batch['batch_id']}"
+
+    lines = [
+        f"{i+1}. {p['title']}" + (f" ({p['time']})" if p["time"] else "")
+        for i, p in enumerate(batch["picks"])
+    ]
+    message = (
+        "5 new recipe ideas to look through when you get a sec:\n"
+        + "\n".join(lines)
+        + f"\n{review_url}"
+    )
+
+    return {
+        "batch_id": batch["batch_id"],
+        "picks": batch["picks"],
+        "review_url": review_url,
+        "message": message,
+    }
+
+
+@mcp.tool()
+def refresh_ashley_recipe_queue(notify_handle: str) -> dict:
+    """
+    Kick off a fresh idea-queue refresh (all 6 recipe agents) in the
+    background, then text notify_handle a new Ashley batch once it finishes.
+
+    Returns almost instantly rather than waiting for the refresh -- the SMS
+    bridge that calls this has a 60s timeout, but fill_menu_ideas.py takes
+    much longer than that. The actual work happens in a detached worker
+    process (refresh_ashley_queue_worker.py) that this function spawns and
+    does not wait for; that worker writes the resulting batch straight into
+    Keanu's outbox spool when it's done, with no callback into this process
+    or Keanu's needed.
+
+    Args:
+        notify_handle: iMessage handle to text once the refresh finishes and
+                       produces a batch. Passed in by Keanu at call time --
+                       Ashley's number lives in its config, not here.
+
+    Returns:
+        {"status": "started"} once the background worker is launched, or
+        {"status": "already_running"} if a refresh is already in flight.
+    """
+    lock_path = Path("/Users/Shared/cooking-state/ashley_refresh.lock")
+
+    if lock_path.exists():
+        try:
+            pid = int(lock_path.read_text().strip())
+            os.kill(pid, 0)  # raises if not alive (or not ours to signal)
+            return {"status": "already_running"}
+        except ProcessLookupError:
+            pass  # stale lock, dead pid -- fall through and clean it up
+        except PermissionError:
+            # process exists, just owned by a different account -- still
+            # running, don't clobber someone else's in-flight refresh
+            return {"status": "already_running"}
+        except (ValueError, OSError):
+            pass  # unreadable/garbage lock file -- treat as stale
+        lock_path.unlink(missing_ok=True)
+
+    worker = MENUBUILDER_DIR / "refresh_ashley_queue_worker.py"
+    log_path = MENUBUILDER_DIR / "refresh_ashley_queue.log"
+    with open(log_path, "a") as log_f:
+        proc = subprocess.Popen(
+            [sys.executable, str(worker), notify_handle],
+            cwd=str(MENUBUILDER_DIR),
+            start_new_session=True,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+        )
+
+    lock_path.write_text(str(proc.pid))
+    try:
+        lock_path.chmod(0o666)
+    except Exception:
+        pass
+
+    return {"status": "started"}
+
+
 if __name__ == "__main__":
     mcp.run()
