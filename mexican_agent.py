@@ -647,6 +647,10 @@ def fetch_recipe(url: str) -> dict:
                         if text:
                             instructions.append(text)
 
+            recipe_yield = item.get("recipeYield", "")
+            if isinstance(recipe_yield, list):
+                recipe_yield = recipe_yield[-1] if recipe_yield else ""
+
             return {
                 "url": url,
                 "title": item.get("name", "").strip(),
@@ -654,7 +658,7 @@ def fetch_recipe(url: str) -> dict:
                 "prep_time": item.get("prepTime", ""),
                 "cook_time": item.get("cookTime", ""),
                 "total_time": item.get("totalTime", ""),
-                "yield": str(item.get("recipeYield", "")),
+                "yield": str(recipe_yield).strip(),
                 "ingredients": item.get("recipeIngredient", []),
                 "instructions": instructions,
                 "cuisine": item.get("recipeCuisine", "Mexican"),

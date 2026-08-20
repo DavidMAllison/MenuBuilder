@@ -143,10 +143,14 @@ def _fetch_recipe(url: str) -> Optional[dict]:
                 (s.get("text", "") if isinstance(s, dict) else s).strip()
                 for s in item.get("recipeInstructions", [])
             ]
+            recipe_yield = item.get("recipeYield", "")
+            if isinstance(recipe_yield, list):
+                recipe_yield = recipe_yield[-1] if recipe_yield else ""
+
             return {
                 "title": item.get("name", "").strip(),
                 "time": _parse_duration(item.get("totalTime") or item.get("cookTime", "")),
-                "servings": str(item.get("recipeYield", "")),
+                "servings": str(recipe_yield).strip(),
                 "ingredients": item.get("recipeIngredient", []),
                 "instructions": instructions,
                 "cuisine": item.get("recipeCuisine", ""),
