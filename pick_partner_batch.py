@@ -63,7 +63,10 @@ def _clean_source_name(source: str) -> str:
 
 
 def _normalize_title(title: str) -> str:
-    t = re.sub(r"[^\w\s]", "", title.lower())
+    # Punctuation becomes a space, not deleted -- "Chorizo-Potato" must split
+    # into "chorizo"/"potato" the same way "Chorizo Potato" does, or hyphenated
+    # titles silently dodge fuzzy-duplicate matching against spaced ones.
+    t = re.sub(r"[^\w\s]", " ", title.lower())
     return " ".join(w for w in t.split() if w not in _TITLE_STOP)
 
 
