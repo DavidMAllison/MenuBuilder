@@ -496,11 +496,23 @@ def _classify_and_add_recipe(recipe: dict) -> tuple[dict | None, tuple | None]:
     if (url and url in existing_urls) or (norm and norm in existing_norm):
         return None, ({"error": "already_exists", "title": title}, 409)
 
+    # Guard against paywalled/JS-rendered sources that yield a 200 fetch with a
+    # title but placeholder/empty ingredients or instructions (e.g. ATK ld+json
+    # ships instruction objects with empty text for non-subscribers) -- don't
+    # write a naked stub. See bug_recipe_intake_naked_stub_aug22 memory.
+    ingredients_clean  = [i.strip() for i in recipe.get("ingredients", []) if (i or "").strip()]
+    instructions_clean = [i.strip() for i in recipe.get("instructions", []) if (i or "").strip()]
+    if len(ingredients_clean) < 2 or len(instructions_clean) < 2:
+        return None, ({"error": (
+            "Fetched the page but couldn't find full ingredients/instructions "
+            "(site may be paywalled or JS-rendered). Not adding a partial entry."
+        )}, 422)
+
     # Haiku classification — health, prep, effort, structured ingredients
     r = {
         "title": title,
-        "ingredients": recipe.get("ingredients", []),
-        "instructions": recipe.get("instructions", []),
+        "ingredients": ingredients_clean,
+        "instructions": instructions_clean,
         "time": recipe.get("time", ""),
         "source": recipe.get("source", ""),
         "url": recipe.get("url", ""),
@@ -534,19 +546,16 @@ def _classify_and_add_recipe(recipe: dict) -> tuple[dict | None, tuple | None]:
         "time":            recipe.get("time", ""),
         "servings":        recipe.get("yield", ""),
         "status":          "active",
-        "cooking_method":  _infer_cooking_method(title, recipe.get("instructions", [])),
+        "cooking_method":  _infer_cooking_method(title, instructions_clean),
         "is_soup":         _infer_is_soup(title),
         "last_cooked_date": None,
-        "ingredients_raw": recipe.get("ingredients", []),
-        "instructions":    recipe.get("instructions", []),
+        "ingredients_raw": ingredients_clean,
+        "instructions":    instructions_clean,
         "ingredients":     ing_map.get(title, []),
         "prep_components": prep_data.get("prep_components", []),
         "prep_notes":      prep_data.get("prep_notes", ""),
         "weeknight_effort": effort_map.get(title, ""),
-        "needs_review":    _quality_check(
-                               recipe.get("ingredients", []),
-                               recipe.get("instructions", []),
-                           ),
+        "needs_review":    _quality_check(ingredients_clean, instructions_clean),
         "image":           recipe.get("image", ""),
         "video_url":       recipe.get("video_url", ""),
         "kid_approved":    False,
@@ -766,7 +775,7 @@ def email_action_confirm_submit():
 @login_required
 def this_week():
     """Return current week's meals with recipe detail from metadata."""
-    weeklyplan_dir = METADATA_PATH.parent / "weeklyplan"
+    weeklyplan_dir = Path("/Users/Shared/cooking-state/weeklyplan")
     if not weeklyplan_dir.exists():
         return jsonify({"found": False, "meals": []})
 

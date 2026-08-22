@@ -582,6 +582,14 @@
 
     .week-icon { display: none; }
 
+    .view-count {
+      text-align: right;
+      padding: 4px 12px 0;
+      font-size: 11px;
+      color: #999;
+      background: #fff;
+    }
+
     /* Filter button — icon-only, visually distinct from view pills */
     .filter-toggle {
       flex: 0 0 38px;
@@ -1119,6 +1127,8 @@
   </button>
 </div>
 
+<div class="view-count" id="view-count" style="display:none"></div>
+
 <main id="main"></main>
 
 <div class="fs-overlay" id="fs-overlay" style="display:none" onclick="handleFsOverlayClick(event)">
@@ -1604,6 +1614,7 @@
             : 'No recipes in the collection yet.'}</p>
         </div>`;
       document.getElementById('subtitle').textContent = '0 results';
+      updateViewCount();
       return;
     }
 
@@ -1617,7 +1628,20 @@
     renderGrid();
   }
 
+  function updateViewCount() {
+    const el = document.getElementById('view-count');
+    if (!el) return;
+    if (batchId || (currentView !== 'new' && currentView !== 'collection')) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = '';
+    const n = allRecipes.length;
+    el.textContent = `${n} recipe${n === 1 ? '' : 's'}`;
+  }
+
   function updateSubtitle(visibleCount) {
+    updateViewCount();
     if (searchMode === 'semantic') {
       document.getElementById('subtitle').textContent = `${visibleCount} results (full collection)`;
       return;
@@ -1647,6 +1671,8 @@
     document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('subtitle').textContent = 'Loading…';
+    document.getElementById('view-count').style.display = (v === 'new' || v === 'collection') ? '' : 'none';
+    document.getElementById('view-count').textContent = '';
 
     const filterBtn = document.getElementById('filter-btn');
     const agentBtn  = document.getElementById('agent-btn');

@@ -475,6 +475,23 @@ def _full_recipe_add(url: str, fetched_data: Optional[dict]) -> dict:
     if not fetched_data or not fetched_data.get("title"):
         return {"error": "Could not determine recipe title from page"}
 
+    # Guard against paywalled/JS-rendered pages that return a 200 with a title
+    # but no real recipe content (e.g. ATK ld+json ships instruction objects
+    # with empty text for non-subscribers) -- don't write a naked stub. Filter
+    # blank entries before counting -- a list can be non-empty while every
+    # element is "" (that's the exact shape ATK's ld+json returns), so a raw
+    # len() check alone is not a reliable guard.
+    ingredients_clean  = [i.strip() for i in (fetched_data.get("ingredients") or []) if (i or "").strip()]
+    instructions_clean = [i.strip() for i in (fetched_data.get("instructions") or []) if (i or "").strip()]
+    if len(ingredients_clean) < 2 or len(instructions_clean) < 2:
+        return {"error": (
+            "Fetched the page but couldn't find full ingredients/instructions "
+            "(site may be paywalled or JS-rendered). Not adding a partial entry -- "
+            "paste the recipe content directly or use an authenticated source."
+        )}
+    fetched_data["ingredients"] = ingredients_clean
+    fetched_data["instructions"] = instructions_clean
+
     title = fetched_data["title"].strip()
     source_name = urlparse(url).netloc.replace("www.", "")
     return _classify_and_write(title, fetched_data, url, source_name)
@@ -1591,8 +1608,10 @@ def _fetch_recipe_data(url: str) -> Optional[dict]:
             if "Recipe" not in (t if isinstance(t, list) else [t]):
                 continue
             instructions = [
-                (s.get("text", "") if isinstance(s, dict) else s).strip()
-                for s in item.get("recipeInstructions", [])
+                text for text in (
+                    (s.get("text", "") if isinstance(s, dict) else s).strip()
+                    for s in item.get("recipeInstructions", [])
+                ) if text
             ]
             return {
                 "title": item.get("name", "").strip(),
@@ -4307,9 +4326,18 @@ def process_recipe_image(image_b64: str, mime_type: str = "image/jpeg",
     if not title:
         return {"status": "error", "error": "Could not determine recipe title from image"}
 
-    ings_raw = fetched_data.get("ingredients", [])
-    if not ings_raw:
-        return {"status": "error", "error": "Could not extract ingredients from image"}
+    # Guard against a low-quality/partial vision extraction (blurry photo, cut-off
+    # page, etc.) writing a naked stub. Filter blank entries before counting -- a
+    # list can be non-empty while every element is "". See bug_recipe_intake_naked_stub_aug22.
+    ingredients_clean  = [i.strip() for i in (fetched_data.get("ingredients") or []) if (i or "").strip()]
+    instructions_clean = [i.strip() for i in (fetched_data.get("instructions") or []) if (i or "").strip()]
+    if len(ingredients_clean) < 2 or len(instructions_clean) < 2:
+        return {"status": "error", "error": (
+            "Could not extract full ingredients/instructions from the image "
+            "(photo may be blurry, cropped, or the recipe incomplete). Not adding a partial entry."
+        )}
+    fetched_data["ingredients"] = ingredients_clean
+    fetched_data["instructions"] = instructions_clean
 
     # 2. Similarity check (title only — no URL for book recipes)
     recipes = _load_metadata()

@@ -30,6 +30,7 @@ from pathlib import Path
 
 import httpx
 import anthropic
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).parent
@@ -266,9 +267,37 @@ def _search_algolia(query: str, max_results: int = 15) -> list[dict]:
         return []
 
 
+def _html_instructions_fallback(html):
+    """
+    ATK's ld+json ships recipeInstructions with empty text for paywall-hidden
+    recipes (isAccessibleForFree: false) -- even with a valid authenticated
+    session. The real step text is still server-rendered in the HTML under
+    the instructions list, just not surfaced in structured data. Match CSS
+    module class names by substring since the hash suffix (e.g.
+    "instructionsList__1j00t") drifts on every ATK frontend redeploy.
+    Returns a list of step strings, or [] if the block isn't found.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    container = soup.find("ol", class_=lambda c: c and "instructionsList" in c)
+    if not container:
+        return []
+    steps = []
+    for wrapper in container.find_all(
+        "div", class_=lambda c: c and "instructionWrapper" in c, recursive=False
+    ):
+        li = wrapper.find("li")
+        if li:
+            text = li.get_text(strip=True)
+            if text:
+                steps.append(text)
+    return steps
+
+
 def _fetch_recipe(http, url):
     """
-    Fetch an ATK recipe page and extract structured data via ld+json.
+    Fetch an ATK recipe page and extract structured data via ld+json, falling
+    back to HTML parsing for instructions if ld+json comes back empty (see
+    _html_instructions_fallback).
     Returns a dict or None if extraction fails.
     """
     try:
@@ -307,6 +336,9 @@ def _fetch_recipe(http, url):
                         instructions.append(text)
                 elif isinstance(step, str) and step.strip():
                     instructions.append(step.strip())
+
+            if not instructions:
+                instructions = _html_instructions_fallback(html)
 
             # Ingredients (raw strings)
             ingredients_raw = [s.strip() for s in item.get("recipeIngredient", []) if s.strip()]
