@@ -86,6 +86,23 @@ def _existing_sets() -> tuple[set, set]:
     return urls, titles
 
 
+DISMISSED_PATH = STATE_DIR / "dismissed_recipes.json"
+
+
+def _dismissed_sets() -> tuple[set, set]:
+    """Return (dismissed_urls, dismissed_norm_titles). Belt-and-suspenders alongside
+    fill_menu_ideas.py's post-run sweep of agent_results/*.json -- a recipe can be
+    dismissed at any time between sweeps, and this runs on every batch/email build."""
+    try:
+        entries = json.loads(DISMISSED_PATH.read_text())
+    except Exception:
+        return set(), set()
+    urls = {(e.get("url", "") or "").rstrip("/") for e in entries if e.get("url")}
+    norm_titles = {_normalize_title(e.get("title", "")) for e in entries if e.get("title")}
+    norm_titles.discard("")
+    return urls, norm_titles
+
+
 def _sent_sets() -> tuple[set, set]:
     if not SENT_LOG_PATH.exists():
         return set(), set()
@@ -101,6 +118,7 @@ def _sent_sets() -> tuple[set, set]:
 def gather_candidates() -> list:
     existing_urls, existing_titles = _existing_sets()
     sent_urls, sent_titles = _sent_sets()
+    dismissed_urls, dismissed_titles = _dismissed_sets()
 
     files = sorted(glob.glob(str(AGENT_RESULTS_DIR / "*_agent_results.json")))
     fresh = []
@@ -119,6 +137,8 @@ def gather_candidates() -> list:
             if url in existing_urls or nt in existing_titles:
                 continue
             if url in sent_urls or nt in sent_titles:
+                continue
+            if url in dismissed_urls or nt in dismissed_titles:
                 continue
             if url in seen_urls or nt in seen_titles:
                 continue

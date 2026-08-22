@@ -1366,6 +1366,7 @@
 
     const isRunning  = !!_agentPollTimer;
     const savedTopic = document.getElementById('agent-topic')?.value || '';
+    const savedIncludeDismissed = document.getElementById('agent-include-dismissed')?.checked || false;
 
     document.getElementById('agent-sheet-body').innerHTML = `
       <div class="fs-section">
@@ -1377,6 +1378,10 @@
         <input id="agent-topic" type="text" value="${escHtml(savedTopic)}"
                placeholder="e.g. grilling, fish dinner…"
                style="width:100%;padding:8px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
+        <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:12px;color:#555;cursor:pointer">
+          <input id="agent-include-dismissed" type="checkbox" ${savedIncludeDismissed ? 'checked' : ''}>
+          Include previously dismissed recipes
+        </label>
       </div>
       <div class="fs-section" style="border-bottom:none">
         <button id="agent-run-btn" onclick="runAgents()" ${isRunning ? 'disabled' : ''}
@@ -1393,12 +1398,13 @@
     if (_agentPollTimer) return;
     const topic  = document.getElementById('agent-topic')?.value?.trim() || '';
     const agents = _selectedAgents.has('all') ? 'all' : [..._selectedAgents];
+    const includeDismissed = document.getElementById('agent-include-dismissed')?.checked || false;
     const statusEl = () => document.querySelector('#agent-sheet-body p');
     try {
       const res  = await fetch('/api/fill_ideas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agents, topic }),
+        body: JSON.stringify({ agents, topic, include_dismissed: includeDismissed }),
       });
       if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data = await res.json();
@@ -2394,7 +2400,7 @@
       await fetch('/api/dismiss', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: r.url }),
+        body: JSON.stringify({ url: r.url, title: r.title }),
       });
     } catch (e) { /* best-effort */ }
     allRecipes.splice(idx, 1);
