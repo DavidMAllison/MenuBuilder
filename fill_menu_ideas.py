@@ -35,10 +35,11 @@ _ROTATION_STATE = Path(__file__).parent / "agent_rotation_state.json"
 # Config
 # ---------------------------------------------------------------------------
 
-METADATA_PATH   = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
-CONDIMENTS_PATH = Path.home() / "Dropbox/LLMContext/cooking/condiments.json"
-RECIPES_DIR     = Path.home() / "Dropbox/LLMContext/cooking/recipes"
-MENUBUILDER     = Path(__file__).parent
+METADATA_PATH     = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
+CONDIMENTS_PATH   = Path.home() / "Dropbox/LLMContext/cooking/condiments.json"
+RECIPES_DIR       = Path.home() / "Dropbox/LLMContext/cooking/recipes"
+AGENT_RESULTS_DIR = Path.home() / "Dropbox/LLMContext/cooking/agent_results"
+MENUBUILDER       = Path(__file__).parent
 
 _CONFIG_PATH = MENUBUILDER / "config.json"
 _CUISINE_FAMILY_MAP: dict[str, str] = json.loads(_CONFIG_PATH.read_text()).get("cuisine_family_map", {})
@@ -640,6 +641,22 @@ def _infer_cooking_method(title: str, instructions: list[str]) -> str:
     return "stovetop"
 
 
+_SOUP_KEYWORDS = [
+    "soup", "stew", "chowder", "bisque", "gumbo", "posole", "pozole",
+    "minestrone", "jjigae",
+]
+# "chili" deliberately excluded -- too often a spice modifier ("chili-rubbed",
+# "chili oil", "chili powder") rather than the dish. Tag actual chili
+# recipes manually.
+
+
+def _infer_is_soup(title: str) -> bool:
+    """Keyword match on title -- soup and stew are treated as one tag per
+    David's request; a stew is soup enough for this purpose."""
+    t = title.lower()
+    return any(w in t for w in _SOUP_KEYWORDS)
+
+
 def _iso_to_minutes(iso: str) -> int:
     if not iso:
         return 0
@@ -714,6 +731,49 @@ def _existing_norm_titles(recipes: dict) -> set[str]:
     return {_normalize_title(k) for k in recipes}
 
 
+DISMISSED_PATH = Path("/Users/Shared/cooking-state/dismissed_recipes.json")
+
+
+def _dismissed_sets() -> tuple[set[str], set[str]]:
+    """Return (dismissed_urls, dismissed_norm_titles) -- recipes explicitly
+    removed via the Review UI or the weekly email's "Not Interested" action.
+    Shared source of truth with recipe_review_server.py's DISMISSED_FILE."""
+    try:
+        entries = json.loads(DISMISSED_PATH.read_text())
+    except Exception:
+        return set(), set()
+    urls = {(e.get("url", "") or "").rstrip("/") for e in entries if e.get("url")}
+    norm_titles = {_normalize_title(e.get("title", "")) for e in entries if e.get("title")}
+    norm_titles.discard("")
+    return urls, norm_titles
+
+
+def _sweep_urls_titles_from_agent_results(urls: set[str], norm_titles: set[str]) -> int:
+    """Prune any agent_results/*.json entry matching a url or fuzzy-normalized
+    title in the given sets. Shared by the dismissed-recipe sweep and the
+    already-in-collection sweep -- same mechanism, different source set.
+    Returns the number of entries removed."""
+    if not urls and not norm_titles:
+        return 0
+    removed = 0
+    for path in AGENT_RESULTS_DIR.glob("*_agent_results.json"):
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        kept = []
+        for r in entries:
+            url = (r.get("url", "") or "").rstrip("/")
+            norm = _normalize_title(r.get("title", ""))
+            if (url and url in urls) or (norm and norm in norm_titles):
+                removed += 1
+                continue
+            kept.append(r)
+        if len(kept) != len(entries):
+            path.write_text(json.dumps(kept, indent=2, ensure_ascii=False), encoding="utf-8")
+    return removed
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -728,6 +788,9 @@ def main():
                         help="Override search topic for all agents (default: per-agent defaults)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Run agents (populates /tmp) but do not write to metadata")
+    parser.add_argument("--include-dismissed", action="store_true",
+                        help="Don't filter out previously-dismissed recipes -- for a "
+                             "deliberate search where a past 'Not Interested' shouldn't apply")
     args = parser.parse_args()
 
     # Resolve agents list
@@ -776,6 +839,12 @@ def main():
 
     print(f"\nTotal from agents: {len(all_results)} recipe(s)")
 
+    if args.include_dismissed:
+        dismissed_urls, dismissed_norm = set(), set()
+        print("(--include-dismissed: skipping the dismissed-recipe filter)")
+    else:
+        dismissed_urls, dismissed_norm = _dismissed_sets()
+
     # Deduplicate against existing entries
     new_recipes = []
     skipped = []
@@ -792,6 +861,12 @@ def main():
             continue
         if norm and norm in existing_norm:
             skipped.append(r.get("title", "?") + " (fuzzy title match)")
+            continue
+        if url and url in dismissed_urls:
+            skipped.append(r.get("title", "?") + " (previously dismissed)")
+            continue
+        if norm and norm in dismissed_norm:
+            skipped.append(r.get("title", "?") + " (previously dismissed, fuzzy title)")
             continue
         if not r.get("ingredients") or not r.get("instructions"):
             skipped.append(r.get("title", "?") + " (no ingredients/instructions)")
@@ -823,6 +898,27 @@ def main():
         for r in new_recipes:
             print(f"  + {r.get('title','?')} ({r.get('source','?')})")
         print("\nAgents wrote results to Dropbox/agent_results/ — open the Recipe Review UI and use Add to Collection.")
+
+    # Sweep dismissed recipes out of agent_results/*.json -- covers entries written
+    # just now AND ones sitting from earlier runs, since a dismiss can happen any
+    # time between fill_menu_ideas.py runs. Also keeps Ashley's SMS batch and the
+    # weekly email clean, since both read these same files directly.
+    if args.include_dismissed:
+        print("\n(--include-dismissed: skipping the dismissed-recipe sweep)")
+    else:
+        swept = _sweep_urls_titles_from_agent_results(dismissed_urls, dismissed_norm)
+        if swept:
+            print(f"\nSwept {swept} previously-dismissed recipe(s) out of agent_results/*.json")
+
+    # Sweep already-active-in-collection candidates too -- annotated with a
+    # checkmark by the New view rather than removed, which is easy to miss
+    # scrolling a grid of cards. Uses the same existing_urls/existing_norm
+    # already loaded above (grown during the dedup loop with this run's
+    # additions too, so it also covers anything just fetched that happens to
+    # duplicate an existing recipe).
+    swept_existing = _sweep_urls_titles_from_agent_results(existing_urls, existing_norm)
+    if swept_existing:
+        print(f"Swept {swept_existing} already-in-collection recipe(s) out of agent_results/*.json")
 
     # Post-run metadata cleanup — fix cuisine/source/meal_type + classify missing health/time
     print("\n--- Post-run cleanup ---")

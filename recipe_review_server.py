@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from fill_menu_ideas import (  # noqa: E402
     classify_health, classify_effort, classify_kid_friendly, parse_ingredients_structured,
     translate_title, _build_recipe_md, _title_to_filename, _infer_cooking_method,
-    _infer_meal_type, _quality_check, _register_cuisine, RECIPES_DIR,
+    _infer_meal_type, _infer_is_soup, _quality_check, _register_cuisine, RECIPES_DIR,
 )
 from prep_utils import classify_prep  # noqa: E402
 
@@ -91,8 +91,7 @@ def logout():
     return redirect(url_for("login_page"))
 
 
-UID = os.getuid()
-DISMISSED_FILE = Path(f"/tmp/dismissed_{UID}.json")
+DISMISSED_FILE = Path("/Users/Shared/cooking-state/dismissed_recipes.json")
 AGENT_RESULTS_DIR = Path.home() / "Dropbox/LLMContext/cooking/agent_results"
 METADATA_PATH    = Path.home() / "Dropbox/LLMContext/cooking/recipe_metadata.json"
 CONDIMENTS_PATH  = Path.home() / "Dropbox/LLMContext/cooking/condiments.json"
@@ -307,6 +306,21 @@ def _existing_sets() -> tuple[set, set]:
         return set(), set()
 
 
+def _dismissed_sets() -> tuple[set, set]:
+    """Return (dismissed_urls, dismissed_norm_titles) from the durable dismissed-recipes
+    log -- shared with fill_menu_ideas.py's post-run sweep and pick_ashley_batch.py's
+    candidate gathering so a "Remove"/"Not Interested" click sticks everywhere, not
+    just this server's own New-view display filter."""
+    try:
+        entries = json.loads(DISMISSED_FILE.read_text())
+    except Exception:
+        return set(), set()
+    urls = {(e.get("url", "") or "").rstrip("/") for e in entries if e.get("url")}
+    norm_titles = {_normalize_title(e.get("title", "")) for e in entries if e.get("title")}
+    norm_titles.discard("")
+    return urls, norm_titles
+
+
 def _hidden_urls() -> set:
     """Return source_url set for retired/disliked entries — used to filter New view."""
     try:
@@ -334,13 +348,7 @@ def me():
 
 
 def _get_annotated_candidates() -> list:
-    dismissed: set = set()
-    if DISMISSED_FILE.exists():
-        try:
-            dismissed = set(json.loads(DISMISSED_FILE.read_text()))
-        except Exception:
-            pass
-
+    dismissed_urls, dismissed_norm = _dismissed_sets()
     hidden = _hidden_urls()
 
     files = sorted(AGENT_RESULTS_DIR.glob("*_agent_results.json"))
@@ -356,7 +364,9 @@ def _get_annotated_candidates() -> list:
                     continue
                 if norm_title and norm_title in seen_titles:
                     continue
-                if url and url in dismissed:
+                if url and url in dismissed_urls:
+                    continue
+                if norm_title and norm_title in dismissed_norm:
                     continue
                 if url and url in hidden:
                     continue
@@ -525,6 +535,7 @@ def _classify_and_add_recipe(recipe: dict) -> tuple[dict | None, tuple | None]:
         "servings":        recipe.get("yield", ""),
         "status":          "active",
         "cooking_method":  _infer_cooking_method(title, recipe.get("instructions", [])),
+        "is_soup":         _infer_is_soup(title),
         "last_cooked_date": None,
         "ingredients_raw": recipe.get("ingredients", []),
         "instructions":    recipe.get("instructions", []),
@@ -719,9 +730,14 @@ def email_action_confirm_submit():
                 dismissed = json.loads(DISMISSED_FILE.read_text())
             except Exception:
                 pass
-        if url and url not in dismissed:
-            dismissed.append(url)
-            DISMISSED_FILE.write_text(json.dumps(dismissed))
+        if url and not any((e.get("url", "") or "").rstrip("/") == url for e in dismissed):
+            dismissed.append({"title": rec.get("title", ""), "url": url, "dismissed_at": date.today().isoformat()})
+            DISMISSED_FILE.parent.mkdir(parents=True, exist_ok=True)
+            DISMISSED_FILE.write_text(json.dumps(dismissed, indent=2, ensure_ascii=False))
+            try:
+                DISMISSED_FILE.chmod(0o666)
+            except Exception:
+                pass
         result_text = f'"{rec["title"]}" won\'t be suggested again.'
     else:
         entry, err = _classify_and_add_recipe(recipe)
@@ -1159,9 +1175,12 @@ def move_queue_item():
 @app.route("/api/dismiss", methods=["POST"])
 @login_required
 def dismiss_recipe():
-    """Dismiss a recipe from the New queue for this session."""
-    body = request.get_json()
-    url  = (body.get("url", "") or "").rstrip("/")
+    """Dismiss a recipe permanently -- durable, not just hidden from this session.
+    Swept out of agent_results/*.json by fill_menu_ideas.py on its next run, and
+    excluded from Ashley/email candidate gathering by pick_ashley_batch.py."""
+    body  = request.get_json()
+    url   = (body.get("url", "") or "").rstrip("/")
+    title = (body.get("title", "") or "").strip()
     if not url:
         return jsonify({"error": "url required"}), 400
 
@@ -1171,9 +1190,14 @@ def dismiss_recipe():
             dismissed = json.loads(DISMISSED_FILE.read_text())
         except Exception:
             pass
-    if url not in dismissed:
-        dismissed.append(url)
-    DISMISSED_FILE.write_text(json.dumps(dismissed))
+    if not any((e.get("url", "") or "").rstrip("/") == url for e in dismissed):
+        dismissed.append({"title": title, "url": url, "dismissed_at": date.today().isoformat()})
+    DISMISSED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    DISMISSED_FILE.write_text(json.dumps(dismissed, indent=2, ensure_ascii=False))
+    try:
+        DISMISSED_FILE.chmod(0o666)
+    except Exception:
+        pass
     return jsonify({"dismissed": url})
 
 
@@ -1366,12 +1390,15 @@ def fill_ideas():
         body = request.get_json(silent=True) or {}
         agents = body.get("agents", "all")
         topic = (body.get("topic") or "").strip()
+        include_dismissed = bool(body.get("include_dismissed"))
         script = Path(__file__).parent / "fill_menu_ideas.py"
         cmd = [sys.executable, str(script)]
         if isinstance(agents, list) and agents:
             cmd += ["--agents", ",".join(agents)]
         if topic:
             cmd += ["--topic", topic]
+        if include_dismissed:
+            cmd += ["--include-dismissed"]
         _fill_ideas_proc = subprocess.Popen(cmd, cwd=str(Path(__file__).parent))
     return jsonify({"status": "started"})
 

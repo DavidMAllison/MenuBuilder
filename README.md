@@ -62,7 +62,7 @@ sites_agent.py                # Cross-cuisine sites (Serious Eats) via Playwrigh
 yt_utils.py                   # Shared YouTube helpers — fetch_transcript(), enrich_recipe_from_transcript(); used by chef_agent and mexican_agent
 recipe_source_patterns.md     # Decision tree for adding new recipe sources — five patterns (website, website+video, YT-description, YT-transcript, paywalled) with extraction technique and routing rules
 atk_agent.py                  # America's Test Kitchen — syncs saved ATK collections into recipe_metadata.json (paywall auth via Playwright, httpx for fetches)
-fill_menu_ideas.py            # Run all agents in parallel and add new results to recipe_metadata.json as status="active"
+fill_menu_ideas.py            # Run all agents in parallel and add new results to recipe_metadata.json as status="active"; after each run, sweeps agent_results/*.json clean of dismissed and already-in-collection entries (durable list at /Users/Shared/cooking-state/dismissed_recipes.json). `--include-dismissed` skips the dismissed-recipe filter for a deliberate search; also exposed as a checkbox in the Review UI's Run Agents panel.
 prep_utils.py                 # Shared prep classification — prompt, classify_prep(), parse_md_instructions(); used by fill_menu_ideas and menu_server
 backfill_prep.py              # One-time (re-runnable) backfill of prep_components/prep_notes for all active recipes
 backfill_ingredients.py       # Re-runnable: Haiku batch-parses ingredients_raw → structured ingredients array for all active recipes
