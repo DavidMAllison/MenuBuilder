@@ -45,9 +45,8 @@ CONFIG_PATH = PROJECT / "config.json"
 FEEDBACK  = PLANS_DIR / "feedback_current.json"
 TCC_DB    = HOME / "Library/Application Support/com.apple.TCC/TCC.db"
 
-SHOPPING_APP   = Path("/Applications/WeeklyShoppingList.app")
-CALENDAR_APP   = Path("/Applications/WeeklyMealCalendar.app")
-CAL_HELPER     = PROJECT / "parse_meal_calendar.py"
+SHOPPING_SYNC  = PROJECT / "shopping_list_sync.py"
+CALENDAR_SYNC  = PROJECT / "meal_calendar_sync.py"
 SUGGEST_SCRIPT = PROJECT / "suggest_meals.py"
 RECIPES_DIR    = DROPBOX / "recipes"
 GH_REPO        = HOME / "projects/personal/menubuilder-recipes"
@@ -224,51 +223,65 @@ def _check_shopping_csv():
     assert len(lines) > 1, "CSV has no data rows"
     return f"{csvs[0].name}  {len(lines)-1} items"
 
-def _check_shopping_app():
-    applet = SHOPPING_APP / "Contents/MacOS/applet"
-    assert SHOPPING_APP.exists(), "app not found"
-    assert applet.exists(), "binary is not an AppleScript applet — was it replaced with a Python script?"
-    return "applet binary present"
+def _check_shopping_script():
+    assert SHOPPING_SYNC.exists(), f"missing {SHOPPING_SYNC}"
+    return "shopping_list_sync.py present"
 
-def _check_calendar_app():
-    applet = CALENDAR_APP / "Contents/MacOS/applet"
-    assert CALENDAR_APP.exists(), "app not found"
-    assert applet.exists(), "binary is not an AppleScript applet — needs rebuild (see feedback_weeklymealcalendar_open.md)"
-    return "applet binary present"
+def _check_calendar_script():
+    assert CALENDAR_SYNC.exists(), f"missing {CALENDAR_SYNC}"
+    return "meal_calendar_sync.py present"
 
-def _check_cal_helper():
-    assert CAL_HELPER.exists(), f"missing {CAL_HELPER}"
-    r = subprocess.run([sys.executable, str(CAL_HELPER)], capture_output=True, text=True, timeout=15)
-    lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
-    if r.returncode != 0 and not lines:
-        raise AssertionError(f"script error: {r.stderr[:200]}")
-    dinners = sum(1 for ln in lines if ln.startswith("DINNER"))
-    lunches = sum(1 for ln in lines if ln.startswith("LUNCH"))
-    return f"{dinners} dinners  {lunches} lunches"
+def _check_calendar_dryrun():
+    """Aug 22 2026: replaces the old parse_meal_calendar.py subprocess check
+    -- everything's in one process now via EventKit, no tab-separated stdout
+    protocol to parse. See project_eventkit_migration_aug22 memory."""
+    import meal_calendar_sync
+    result = meal_calendar_sync.sync_calendar(dry_run=True)
+    return f"{result['dinners']} dinners  {result['lunches']} lunches"
 
-def _tcc_query(client_like: str, indirect_obj: str) -> str:
-    """Return matching client name if Allowed (auth_value=2) entry exists."""
+def _tcc_query_eventkit(service: str) -> str:
+    """Aug 22 2026: EventKit uses kTCCServiceReminders/kTCCServiceCalendar,
+    separate from the old kTCCServiceAppleEvents grants the AppleScript apps
+    used. Scoped to the exact resolved venv python3 binary path -- that's
+    the identity com.menubuilder.guilaunch's LaunchAgent actually runs as."""
+    resolved_python = str(Path(sys.executable).resolve())
     conn = sqlite3.connect(str(TCC_DB))
     rows = conn.execute(
-        "SELECT client, auth_value FROM access "
-        "WHERE service='kTCCServiceAppleEvents' "
-        "  AND indirect_object_identifier=? "
-        "  AND client LIKE ?",
-        (indirect_obj, f"%{client_like}%"),
+        "SELECT auth_value FROM access WHERE service=? AND client=?",
+        (service, resolved_python),
     ).fetchall()
     conn.close()
-    allowed = [c for c, v in rows if v == 2]
-    assert allowed, (
-        f"no Allowed TCC entry matching '{client_like}' → {indirect_obj}\n"
-        f"       Fix: run 'open /Applications/{client_like}.app' and approve the permission dialog"
+    assert rows, (
+        f"no TCC entry for {resolved_python} → {service}\n"
+        f"       Fix: run the one-time EventKit permission grant (see "
+        f"       project_eventkit_migration_aug22 memory) and approve the dialog"
     )
-    return f"TCC client: {allowed[0]}"
+    auth_value = rows[0][0]
+    if auth_value != 2:
+        # Don't hard-fail on an unrecognized value (e.g. 4 = WriteOnly for
+        # Calendar is a legitimate EventKit status, not a bug) -- flag it
+        # instead of asserting only 2 is ever valid.
+        return f"auth_value={auth_value} (not the usual 2 — verify this is expected)"
+    return f"Allowed (python={resolved_python})"
 
 def _check_tcc_calendar():
-    return _tcc_query("WeeklyMealCalendar", "com.apple.iCal")
+    return _tcc_query_eventkit("kTCCServiceCalendar")
 
 def _check_tcc_reminders():
-    return _tcc_query("WeeklyShoppingList", "com.apple.reminders")
+    return _tcc_query_eventkit("kTCCServiceReminders")
+
+def _check_eventkit_liveness():
+    """Can we actually reach both targets EventKit needs -- the "Grocery"
+    reminders list and the "Calendar" calendar -- not just that permission
+    is granted."""
+    import eventkit_helpers as ek
+    from EventKit import EKEntityTypeEvent, EKEntityTypeReminder
+    store = ek.get_store()
+    grocery = ek.find_calendar_by_title(store, EKEntityTypeReminder, "Grocery")
+    assert grocery is not None, '"Grocery" reminders list not found'
+    cal = ek.find_calendar_by_title(store, EKEntityTypeEvent, "Calendar")
+    assert cal is not None, '"Calendar" calendar not found'
+    return "Grocery list + Calendar both reachable"
 
 def _check_gui_launch_watcher():
     """
@@ -453,19 +466,13 @@ def simulate_workflow():
         print(f"  {R('[FAIL]')} {e}")
 
     # Step 8 — calendar events preview
-    step(8, "Preview calendar events  (parse_meal_calendar.py dry-run)")
+    step(8, "Preview calendar events  (meal_calendar_sync.py dry-run)")
     try:
-        r = subprocess.run([sys.executable, str(CAL_HELPER)], capture_output=True, text=True, timeout=15)
-        lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
-        if r.returncode != 0 and not lines:
-            raise AssertionError(r.stderr[:200])
-        for ln in lines:
-            note(ln[:90])
-        dinners = sum(1 for ln in lines if ln.startswith("DINNER"))
-        lunches = sum(1 for ln in lines if ln.startswith("LUNCH"))
+        import meal_calendar_sync
+        result = meal_calendar_sync.sync_calendar(dry_run=True)
         _results.append((True, "Step 8: calendar preview"))
-        print(f"  {G('[PASS]')} Would create {dinners} dinner events + {lunches} lunch events")
-    except AssertionError as e:
+        print(f"  {G('[PASS]')} Would create {result['dinners']} dinner events + {result['lunches']} lunch events")
+    except Exception as e:
         _results.append((False, "Step 8: calendar preview"))
         print(f"  {R('[FAIL]')} {e}")
 
@@ -490,15 +497,16 @@ def main():
     check("Recipe .md structure",  _check_md_structure)
     check("ATK session expiry",    _check_atk_cookie_expiry)
 
-    section("APP BINARIES")
-    check("WeeklyShoppingList.app",  _check_shopping_app)
-    check("WeeklyMealCalendar.app",  _check_calendar_app)
-    check("parse_meal_calendar.py",  _check_cal_helper)
+    section("EVENTKIT SYNC SCRIPTS")
+    check("shopping_list_sync.py",  _check_shopping_script)
+    check("meal_calendar_sync.py",  _check_calendar_script)
+    check("calendar dry-run",       _check_calendar_dryrun)
+    check("Grocery list + Calendar reachable", _check_eventkit_liveness)
 
     section("TCC PERMISSIONS")
-    check("WeeklyMealCalendar → Calendar",   _check_tcc_calendar)
-    check("WeeklyShoppingList → Reminders",  _check_tcc_reminders)
-    check("gui_launch LaunchAgent",          _check_gui_launch_watcher)
+    check("EventKit → Calendar",   _check_tcc_calendar)
+    check("EventKit → Reminders",  _check_tcc_reminders)
+    check("gui_launch LaunchAgent", _check_gui_launch_watcher)
     check("gui_launch queue backlog",        _check_gui_launch_queue_backlog)
 
     section("SERVER & WORKFLOW STATE")

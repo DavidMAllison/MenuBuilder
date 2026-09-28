@@ -846,6 +846,14 @@ def main():
         dismissed_urls, dismissed_norm = _dismissed_sets()
 
     # Deduplicate against existing entries
+    # Snapshot before the loop below grows existing_urls/existing_norm with this
+    # run's own new finds (for intra-batch dedup) -- the already-in-collection
+    # sweep further down must only match the TRUE collection, not recipes this
+    # run just discovered, or it deletes its own new results before they're
+    # ever reviewed.
+    true_existing_urls = set(existing_urls)
+    true_existing_norm = set(existing_norm)
+
     new_recipes = []
     skipped = []
     for r in all_results:
@@ -912,11 +920,12 @@ def main():
 
     # Sweep already-active-in-collection candidates too -- annotated with a
     # checkmark by the New view rather than removed, which is easy to miss
-    # scrolling a grid of cards. Uses the same existing_urls/existing_norm
-    # already loaded above (grown during the dedup loop with this run's
-    # additions too, so it also covers anything just fetched that happens to
-    # duplicate an existing recipe).
-    swept_existing = _sweep_urls_titles_from_agent_results(existing_urls, existing_norm)
+    # scrolling a grid of cards. Uses the true_existing_urls/true_existing_norm
+    # snapshot taken before the dedup loop, NOT the live existing_urls/existing_norm
+    # (which the loop above grows with this run's own new finds) -- otherwise this
+    # sweep deletes recipes the run just discovered, mistaking "found this run" for
+    # "already in the collection".
+    swept_existing = _sweep_urls_titles_from_agent_results(true_existing_urls, true_existing_norm)
     if swept_existing:
         print(f"Swept {swept_existing} already-in-collection recipe(s) out of agent_results/*.json")
 
