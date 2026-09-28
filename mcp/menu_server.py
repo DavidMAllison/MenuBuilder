@@ -985,18 +985,26 @@ _PICK_CHOICE_SIZE = 3
 
 
 def _parse_eating_out_days(constraints: str, schedule_notes: list) -> list:
-    """Extract day abbreviations for eating-out days from constraints + schedule notes."""
+    """Extract day abbreviations for eating-out days from constraints + schedule notes.
+
+    Schedule notes pack multiple day-facts into one string, e.g. "Going out
+    Friday; Eleanor soccer practice Monday 5:00-6:30 PM" -- an out-signal
+    anywhere in the text used to sweep in every day name in the whole text
+    (including unrelated practice-night days). Scope the day lookup to the
+    clause containing the signal instead.
+    """
     out_signals = ("eating out", "going out", "out to eat", "out to dinner", "eat out")
     eating_out = []
     texts = [constraints] + list(schedule_notes)
     for text in texts:
         if not text:
             continue
-        lower = text.lower()
-        if any(sig in lower for sig in out_signals):
-            for day_name, abbrev in DAY_NAME_MAP.items():
-                if day_name in lower and abbrev not in eating_out:
-                    eating_out.append(abbrev)
+        for clause in re.split(r"[;,.\n]", text):
+            lower = clause.lower()
+            if any(sig in lower for sig in out_signals):
+                for day_name, abbrev in DAY_NAME_MAP.items():
+                    if day_name in lower and abbrev not in eating_out:
+                        eating_out.append(abbrev)
     return eating_out
 
 
@@ -2536,12 +2544,13 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
 
     quick_days = list(activity.get("quick_days", []))
     if constraints:
-        c_lower = constraints.lower()
         quick_signals = ("game", "practice", "busy", "quick", "early", "tournament")
-        if any(s in c_lower for s in quick_signals):
-            for day_name, abbrev in DAY_NAME_MAP.items():
-                if day_name in c_lower and abbrev not in quick_days:
-                    quick_days.append(abbrev)
+        for clause in re.split(r"[;,.\n]", constraints):
+            c_lower = clause.lower()
+            if any(s in c_lower for s in quick_signals):
+                for day_name, abbrev in DAY_NAME_MAP.items():
+                    if day_name in c_lower and abbrev not in quick_days:
+                        quick_days.append(abbrev)
     activity["quick_days"] = quick_days
 
     eating_out_days = _parse_eating_out_days(
