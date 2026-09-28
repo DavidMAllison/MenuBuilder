@@ -36,6 +36,7 @@ import json
 import random
 import secrets
 import smtplib
+import subprocess
 import sys
 from datetime import date
 from email.message import EmailMessage
@@ -291,6 +292,24 @@ def build(size: int = BATCH_SIZE, write: bool = True) -> dict | None:
     return {"subject": subject, "html": html, "recipients": recipients, "picks": len(picks)}
 
 
+def _gmail_app_password(config: dict) -> str:
+    """Prefer the config value if still present (pre-migration / not yet cleaned
+    up); otherwise read the shared login-keychain item so KidQuiz and MenuBuilder
+    read the same single source instead of each keeping their own copy."""
+    pw = (config.get("gmail_smtp_app_password") or "").strip()
+    if pw:
+        return pw
+    try:
+        r = subprocess.run(
+            ["security", "find-generic-password", "-s", "gmail-smtp-app-password",
+             "-a", config.get("david_email", ""), "-w"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
 def send_email(subject: str, html: str, recipients: list) -> None:
     """Send via Gmail SMTP using an app password -- replaces the old headless
     `claude -p` + Gmail MCP send step, which silently stripped every <img> tag
@@ -299,7 +318,7 @@ def send_email(subject: str, html: str, recipients: list) -> None:
     limitation since the HTML goes out byte-for-byte, untouched by an LLM."""
     config = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
     from_addr = config.get("david_email", "")
-    app_password = config.get("gmail_smtp_app_password", "")
+    app_password = _gmail_app_password(config)
     if not from_addr or not app_password:
         print(json.dumps({"error": "smtp_not_configured"}))
         sys.exit(1)

@@ -328,7 +328,10 @@ def _extract_day_from_text(text: str) -> str:
     """Return the first day abbreviation found in free text, or ''."""
     lower = text.lower()
     for word, abbrev in _DAY_ALIASES.items():
-        if re.search(r'\b' + word + r'\b', lower):
+        # s? allows plural/possessive-ish phrasing ("Thursdays", "Mondays") --
+        # missed "Make Thursdays a going out to eat night" on 2026-08-23,
+        # silently dropping Ashley's request instead of extracting the day.
+        if re.search(r'\b' + word + r's?\b', lower):
             return abbrev
     return ""
 
@@ -2449,16 +2452,33 @@ def log_meal_feedback(feedback: str) -> dict:
     # Route to the meal with the most name-word overlap — first-match routing
     # sent "Cherry Tomato Salad" feedback to "Grilled Chicken and Cherry
     # Tomatoes" because it appeared earlier in the week
+    #
+    # Words are extracted with regex (not .split()) so punctuation never
+    # blocks a match -- "(Mushroom" and "Stir-Fry)" wouldn't match plain
+    # "mushroom"/"stir"/"fry" otherwise -- and short-but-distinctive words
+    # like "Moo"/"Gai"/"Pan" survive since only stopwords are excluded, not
+    # anything <=3 chars. Candidates are narrowed to meals still missing
+    # feedback first, since that's what the question was about; if nothing
+    # overlaps at all, fall back to the earliest one of those rather than
+    # blindly the last meal in the week (which silently misattributed
+    # "Moo Goo Gai Pan: didn't make it" to Saturday's meal on 2026-08-23).
+    _STOPWORDS = {"and", "the", "with", "for", "of", "in", "a"}
+
+    def _sig_words(name: str) -> list:
+        return [w for w in re.findall(r"[a-z']+", name.lower()) if len(w) > 2 and w not in _STOPWORDS]
+
+    candidates = [m for m in meals if not m.get("sms_feedback")] or meals
+
     best_meal = None
     best_overlap = 0
-    for meal in meals:
-        words = [w for w in meal["name"].lower().split() if len(w) > 3]
+    for meal in candidates:
+        words = _sig_words(meal["name"])
         overlap = sum(1 for w in words if w in lowered)
         if overlap > best_overlap:
             best_meal, best_overlap = meal, overlap
 
-    if best_meal is None and meals:
-        best_meal = meals[-1]
+    if best_meal is None and candidates:
+        best_meal = candidates[0]
 
     if best_meal is not None:
         existing = best_meal.get("sms_feedback") or ""
@@ -2668,6 +2688,33 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
     outgoing = selected.get(day)
     filter_notes = []
 
+    # A "clear this day" request (no replacement wanted) previously fell through
+    # to the auto-pick candidate logic below, which always hands back some filler
+    # recipe — there was no way to actually blank a day. Detect that intent here
+    # and write the existing "Going Out to Eat" placeholder instead, mirroring
+    # the pattern already used for Ashley's eating-out replies (see
+    # _parse_eating_out_days / classify_ashley_reply's "eating_out" intent).
+    _CLEAR_DAY_SIGNALS = (
+        "don't need a meal", "no meal needed", "skip this day", "skip it",
+        "leave it blank", "leave blank", "nothing planned", "take out",
+        "remove it", "don't worry about", "going out", "eating out",
+        "out to eat", "out to dinner", "eat out", "ordering out",
+        "order takeout", "getting takeout", "no dinner",
+    )
+    if not replacement and any(sig in reason.lower() for sig in _CLEAR_DAY_SIGNALS):
+        selected[day] = "Going Out to Eat"
+        activity["selected_meals"] = selected
+        eating_out_days = set(activity.get("eating_out_days", []))
+        eating_out_days.add(day)
+        activity["eating_out_days"] = sorted(eating_out_days)
+        _save_activity(activity)
+        return {
+            "selected_meals": selected,
+            "swapped_day": day,
+            "new_recipe": "Going Out to Eat",
+            "outgoing_recipe": outgoing,
+        }
+
     all_recipes = _load_metadata()
 
     if replacement and not _find_recipe_key(replacement, all_recipes):
@@ -2869,9 +2916,16 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             if balanced:
                 eligible = balanced
 
-        # 6. Cook-time filter — weeknight days default to quick meals
+        # 6. Cook-time filter — weeknight days default to quick meals; a weekend day
+        # only gets this if the reason explicitly asks for it ("quick", "fast", "short
+        # on time") -- otherwise Sat/Sun keep their normal longer-cook allowance.
+        # Matters because "low effort"/"easy" (step 3) filters by the weeknight_effort
+        # tag (hands-on labor), which is a different axis from total minutes -- a
+        # 2-hour mostly-hands-off braise can be tagged "low effort" and still sail
+        # through step 3 despite being the opposite of quick.
         weeknight_days = {"Mon", "Tue", "Wed", "Thu", "Fri"}
-        if day in weeknight_days:
+        quick_requested = any(s in reason_lower for s in ("quick", "fast", "short on time"))
+        if day in weeknight_days or quick_requested:
             quick_eligible = [c for c in eligible if c.get("minutes", 999) <= QUICK_THRESHOLD
                               or c.get("method", "") == "slow_cooker"]
             if quick_eligible:
@@ -3786,6 +3840,47 @@ def get_recipe_url(name: str) -> dict:
     meta = recipes[key]
     url = _recipe_url(key, meta)
     return {"name": key, "url": url}
+
+
+@mcp.tool()
+def get_recipe_notes(name: str) -> dict:
+    """
+    Look up standing family notes/feedback for a recipe by name.
+
+    recipe_metadata.json is the durable home for per-recipe feedback given
+    in a MenuBuilder session (cooking tips, "kids liked it", adjustments) --
+    this tool is the read side for any consumer (e.g. Keanu/SMS) that needs
+    that field without parsing the metadata file directly.
+
+    Uses the same fuzzy key lookup as get_recipe_url.
+
+    Args:
+        name: Recipe name (exact or fuzzy match).
+
+    Returns:
+        {"name": resolved_name, "notes": "...", "times_cooked": N,
+         "last_cooked_date": "YYYY-MM-DD" or None}
+        notes is "" if the recipe has none recorded.
+    """
+    recipes = _load_metadata()
+    key = _find_recipe_key(name, recipes)
+    if not key:
+        match = _find_recipe_best_match(name, recipes)
+        if match:
+            return {
+                "status": "needs_confirmation",
+                "suggested": match[0],
+                "message": f"Did you mean '{match[0]}'?",
+                "name": name,
+            }
+        return {"name": name, "notes": "", "times_cooked": 0, "last_cooked_date": None}
+    meta = recipes[key]
+    return {
+        "name": key,
+        "notes": meta.get("notes", ""),
+        "times_cooked": meta.get("times_cooked", 0),
+        "last_cooked_date": meta.get("last_cooked_date"),
+    }
 
 
 @mcp.tool()

@@ -309,7 +309,7 @@ def _log_swap_to_feedback(outgoing: str, incoming: str, target_date: date) -> No
         "date": target_date.isoformat(),
         "recipe": outgoing,
         "sentiment": "skipped",
-        "notes": f"Swapped out for {incoming}.",
+        "note": f"Swapped out for {incoming}.",
         "source": "swap",
     })
     feedback_path.write_text(json.dumps(data, indent=2))

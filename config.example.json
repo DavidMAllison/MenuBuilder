@@ -7,7 +7,6 @@
   "admin_handle": "+15550000001",
   "david_email": "you@example.com",
   "ashley_email": "partner@example.com",
-  "gmail_smtp_app_password": "your-gmail-app-password",
   "review_ui_base_url": "https://your-mac.local:5051",
   "ingredient_portion_overrides": {
     "chicken thighs": {"price_per_lb": 2.99, "portion_lb": 1.5},
