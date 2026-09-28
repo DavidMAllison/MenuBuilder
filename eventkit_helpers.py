@@ -24,7 +24,6 @@ from pathlib import Path
 
 from EventKit import (
     EKCalendar,
-    EKEntityTypeEvent,
     EKEntityTypeReminder,
     EKEventStore,
 )
