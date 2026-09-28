@@ -6,8 +6,8 @@ A personal meal planning system built around real family constraints — health 
 
 - **Weekly meal planning**: Proposes 7 dinners tailored to the week's schedule, health balance, and what's already in the fridge
 - **Recipe candidate scoring**: Filters recipes by recency, health classification, protein variety, cuisine variety, and seasonal cooking method
-- **Shopping list generation**: Aggregates ingredients across the week's plan into a structured CSV, auto-imported into iOS Reminders via a Mac app
-- **Calendar integration**: Adds dinner events to iCloud Calendar with cook times and recipe links, built as a Mac app
+- **Shopping list generation**: Aggregates ingredients across the week's plan into a structured CSV, synced into iOS Reminders via EventKit
+- **Calendar integration**: Adds dinner events to iCloud Calendar with cook times and recipe links, synced via EventKit
 - **Feedback loop**: Tracks which meals the family liked, surfaces family-favorite signals in future candidate scoring
 - **SMS assistant**: Companion WhatsApp bot for querying recipes, meal plans, and inventory from a phone (separate project)
 - **Recipe discovery agents**: Automated agents that source new recipe ideas from regional cuisine sites and named chefs. All agents are accessed through a single orchestrator (`recipe_agent.py` / `recipe` CLI).
@@ -36,7 +36,7 @@ A personal meal planning system built around real family constraints — health 
 
 **Kids-friendly layered cooking.** Recipes are structured where possible so kids' plain portions can be pulled before adding adult sauces — one meal, two outcomes, no separate cooking.
 
-**Claude Code as the planning interface.** The AI assistant handles the conversational workflow — logging last week's meals, checking the schedule, running the candidate script, proposing options, generating the plan file, and triggering the Mac apps. The Python tooling handles deterministic filtering and file I/O.
+**Claude Code as the planning interface.** The AI assistant handles the conversational workflow — logging last week's meals, checking the schedule, running the candidate script, proposing options, generating the plan file, and triggering the Reminders/Calendar sync. The Python tooling handles deterministic filtering and file I/O.
 
 ## Repository Structure
 
@@ -78,6 +78,14 @@ pick_ashley_batch.py          # Selects 5 fresh idea-queue candidates for Ashley
 refresh_ashley_queue_worker.py # Background worker spawned by the refresh_ashley_recipe_queue MCP tool — runs all 6 recipe agents, then texts a fresh batch when done
 build_weekly_recipe_email.py  # Builds and sends the weekly 10-pick recipe-idea email via SMTP — no LLM call in the send path
 recipe_review_server.py       # Local recipe review web UI server (port 5051) — Flask, session auth, metadata cache, RAG search, Queue tab, Ashley batch review, email-action click-through
+eventkit_helpers.py           # Shared EventKit store/authorization helpers used by shopping_list_sync.py and meal_calendar_sync.py
+shopping_list_sync.py         # Writes shopping_YYYY-MM-DD.csv into the iOS Grocery Reminders list via EventKit (replaces WeeklyShoppingList.app)
+meal_calendar_sync.py         # Writes the week's meal plan into iCloud Calendar via EventKit (replaces WeeklyMealCalendar.app)
+run_shopping_list.sh          # Manual terminal fallback for shopping_list_sync.py
+run_meal_calendar.sh          # Manual terminal fallback for meal_calendar_sync.py
+test_eventkit_sync.py         # Validates EventKit sync scripts (idempotency, real writes) outside the full smoketest
+WeeklyShoppingList_backup.applescript # Retired AppleScript source for WeeklyShoppingList.app — kept as manual fallback only, EventKit sync is primary
+WeeklyMealCalendar_backup.applescript # Retired AppleScript source for WeeklyMealCalendar.app — kept as manual fallback only, EventKit sync is primary
 recipe_review/
   index.html                  # Recipe review UI — This Week grid, Full Collection, New Recipes, Queue views; semantic search; Type filter (Dinner/Lunch/Condiment)
   login.html                  # Login page for recipe review UI
@@ -97,7 +105,7 @@ release-notes.md              # Shipped features log
 
 ## MCP Server
 
-`mcp/menu_server.py` exposes the weekly menu workflow as 29 tools callable from Claude Code
+`mcp/menu_server.py` exposes the weekly menu workflow as 30 tools callable from Claude Code
 or any MCP-compatible client (e.g. Keanu via SMS). The table below covers the core workflow;
 not every tool is listed.
 
@@ -115,6 +123,7 @@ not every tool is listed.
 | `activate_idea_recipe` | Activates a pending idea from pasted markdown content or URL auto-fetch; `content` is optional — if empty and `source_url` given, fetch is attempted first; returns `needs_content: True` if fetch fails |
 | `finalize_plan` | Generates plan + shopping CSV, launches apps, notifies admin |
 | `get_prep_guide` | On-demand prep guide — `mode=weekly` (remaining meals this week) or `mode=tonight` (tonight's dinner); applies food-safety classification automatically |
+| `get_recipe_notes` | Looks up standing family notes/feedback for a recipe by name (fuzzy match); read side of the `notes` field for any consumer, e.g. Keanu via SMS |
 | `generate_shopping_list` | Writes shopping CSV from a finalized meal dict (authoritative — sms-assistant calls this) |
 | `get_lunch_suggestions` | Returns 3 scored lunch candidates for Ashley based on recency + variety |
 | `set_lunch_pick` | Saves Ashley's lunch pick, adds ingredients to the week's shopping CSV |
@@ -158,12 +167,18 @@ cp config.example.json config.json
 }
 ```
 
-## Mac Apps
+## Reminders / Calendar Sync
 
-- **WeeklyShoppingList.app** — reads `shopping_YYYY-MM-DD.csv` and populates the iOS Grocery Reminders list (syncs to family members)
-- **WeeklyMealCalendar.app** — reads the week's meal plan and adds dinner events to iCloud Calendar with cook times and recipe links
+- **shopping_list_sync.py** — reads `shopping_YYYY-MM-DD.csv` and populates the iOS Grocery Reminders list via EventKit (syncs to family members)
+- **meal_calendar_sync.py** — reads the week's meal plan and adds dinner events to iCloud Calendar with cook times and recipe links via EventKit
 
-Both run via `open /Applications/<AppName>.app` at the end of each planning session.
+Both are called in-process by `gui_launch_watcher.py` (a LaunchAgent running inside
+davidallison's own Aqua session, which holds the EventKit TCC grant) at the end of each
+planning session. Replaces the original WeeklyShoppingList.app / WeeklyMealCalendar.app
+AppleScript automation of Reminders.app/Calendar.app, which proved unreliable (intermittent
+Apple Events timeouts). Those two apps and their AppleScript sources
+(`*_backup.applescript`) are kept only as a manual terminal fallback via
+`run_shopping_list.sh` / `run_meal_calendar.sh`.
 
 ## Recipe Metadata Schema
 
