@@ -5,7 +5,7 @@ A personal meal planning system built around real family constraints — health 
 ## What It Does
 
 - **Weekly meal planning**: Proposes 7 dinners tailored to the week's schedule, health balance, and what's already in the fridge
-- **Recipe candidate scoring**: Filters recipes by recency, health classification, protein variety, cuisine variety, and seasonal cooking method
+- **Recipe candidate scoring**: Filters recipes by recency, health classification, protein variety, cuisine variety, and seasonal cooking method. A recipe swapped out mid-week or logged as not cooked gets a 3-week decline cooldown so it doesn't just resurface the following week; real score jitter (not just tie-breaking) keeps near-top candidates rotating
 - **Shopping list generation**: Aggregates ingredients across the week's plan into a structured CSV, synced into iOS Reminders via EventKit
 - **Calendar integration**: Adds dinner events to iCloud Calendar with cook times and recipe links, synced via EventKit
 - **Feedback loop**: Tracks which meals the family liked, surfaces family-favorite signals in future candidate scoring
