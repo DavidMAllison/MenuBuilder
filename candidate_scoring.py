@@ -14,6 +14,7 @@ import re
 from datetime import date, datetime
 
 RECENCY_WEEKS = 3          # avoid meals cooked within this many weeks
+DECLINE_COOLDOWN_WEEKS = RECENCY_WEEKS  # avoid resurfacing a swapped-out/not_cooked meal this soon
 QUICK_THRESHOLD = 35       # minutes -- "quick" meals for practice nights
 SPRING_SUMMER = (4, 9)     # months April-September: prioritize grill
 TRACKED_FRESH_HERBS = ['cilantro', 'mint', 'dill', 'parsley', 'tarragon', 'chives']
@@ -362,6 +363,13 @@ def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
 
         age_weeks = weeks_since(r.get('last_cooked_date'))
         if age_weeks < RECENCY_WEEKS:
+            continue
+
+        # A recipe that was swapped out mid-week or logged not_cooked gets a
+        # short cooldown too -- otherwise its age_weeks keeps climbing (since
+        # last_cooked_date never moved) and it scores *better* every week it's
+        # declined, so it keeps resurfacing with no signal that it was passed on.
+        if weeks_since(r.get('last_declined_date')) < DECLINE_COOLDOWN_WEEKS:
             continue
 
         minutes = parse_minutes(r.get('time', ''))

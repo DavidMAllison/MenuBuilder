@@ -103,6 +103,15 @@ def load_candidates(quick_nights=False):
         r = recipes[c['name']]
         c['bought_herbs'] = [h for h in herbs_in_recipe(r, TRACKED_FRESH_HERBS) if h not in GARDEN_HERBS]
 
+    # Small jitter so near-equal candidates rotate week to week instead of the
+    # same argmin winning forever (matches mcp/menu_server.py's _load_candidates);
+    # kept below the health bonus (15) and far below the never-cooked age bonus
+    # (~104) so big factors still rule. Plain shuffle-before-stable-sort only
+    # reorders exact score ties, which are rare, so without this the top
+    # scorer in each protein group was deterministic week over week.
+    for c in candidates:
+        c['score'] = score(c) + random.uniform(-4, 4)
+
     return candidates, is_grill_season
 
 
@@ -110,9 +119,7 @@ def print_group(title, items, limit=6):
     if not items:
         return
     print(f'\n  {title}')
-    shuffled = list(items)
-    random.shuffle(shuffled)
-    for c in sorted(shuffled, key=score)[:limit]:
+    for c in sorted(items, key=lambda c: c['score'])[:limit]:
         time_str = f"{c['minutes']} min" if c['minutes'] < 900 else '?'
         if c['method'] == 'slow_cooker':
             time_str = 'slow cooker'
@@ -160,9 +167,7 @@ def main():
     if args.json:
         import json as _json
         out = []
-        shuffled = list(candidates)
-        random.shuffle(shuffled)
-        for c in sorted(shuffled, key=score):
+        for c in sorted(candidates, key=lambda c: c['score']):
             time_str = f"{c['minutes']} min" if c['minutes'] < 900 else '?'
             if c['method'] == 'slow_cooker':
                 time_str = 'slow cooker'
@@ -177,7 +182,7 @@ def main():
                 'meal_type':  c['meal_type'],
                 'times_cooked': c['times_cooked'],
                 'last_cooked':  c['last_cooked'],
-                'score':      score(c),
+                'score':      c['score'],
             })
         print(_json.dumps(out))
         return

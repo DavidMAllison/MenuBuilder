@@ -2410,6 +2410,10 @@ def log_meal_feedback(feedback: str) -> dict:
             if is_not_cooked or is_already_logged:
                 if is_not_cooked:
                     not_cooked_meals.append(meal["name"])
+                    # Cooldown so it doesn't just resurface next week with no
+                    # signal that it was planned and skipped -- see
+                    # DECLINE_COOLDOWN_WEEKS in candidate_scoring.py.
+                    recipes[key]["last_declined_date"] = meal.get("date") or today_str
                 continue  # don't log
 
             if is_disliked:
@@ -2969,6 +2973,17 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
         best_score = _swap_score(eligible[0])
         top_tier = [c for c in eligible if _swap_score(c) == best_score]
         replacement = random.choice(top_tier)["name"]
+
+    # Record the decline so the outgoing recipe gets a cooldown before it's
+    # suggested again next week too -- see DECLINE_COOLDOWN_WEEKS in
+    # candidate_scoring.py. Pre-signoff swaps only ever touched activity state,
+    # never recipe_metadata.json, so a recipe swapped out here during planning
+    # had no memory of the decline by the following week.
+    if outgoing:
+        outgoing_key = _find_recipe_key(outgoing, all_recipes)
+        if outgoing_key:
+            all_recipes[outgoing_key]["last_declined_date"] = date.today().isoformat()
+            _save_metadata(all_recipes)
 
     selected[day] = replacement
     activity["selected_meals"] = selected

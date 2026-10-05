@@ -502,6 +502,15 @@ def execute_swap(
         data["recipes"] = recipes
         _save_metadata(data)
 
+    # --- Record the decline so the outgoing recipe gets a cooldown before it's
+    # suggested again (see DECLINE_COOLDOWN_WEEKS in candidate_scoring.py) ---
+    outgoing_match = _find_recipe(outgoing_recipe, recipes)
+    if outgoing_match:
+        _, outgoing_entry = outgoing_match
+        outgoing_entry["last_declined_date"] = target.isoformat()
+        data["recipes"] = recipes
+        _save_metadata(data)
+
     # --- Update files ---
     _update_shopping_csv(csv_path, outgoing_recipe, canonical_name, parsed_ingredients, target)
     _update_meal_plan_json(plan_path, day, outgoing_recipe, canonical_name, time_str, health, recipe_url)
