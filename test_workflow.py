@@ -98,6 +98,17 @@ def check_dish_boost():
           target in selected.values(), f"target={target!r} selected={selected}")
 
 
+def check_eating_out_reconcile():
+    """A "going out" note recorded after meals were picked must still win at finalize."""
+    act = {"schedule_notes": ["Going out Sunday \u2014 no dinner needed", "kid soccer Monday 5:00-6:30 PM"],
+           "selected_meals": {"Sun": "Chicken Cacciatore", "Mon": "Some Recipe"}}
+    changed = srv._reconcile_eating_out(act)
+    check("reconcile: out-note overrides picked recipe", act["selected_meals"]["Sun"] == "Going Out to Eat" and changed == ["Sun"], f"{act}")
+    check("reconcile: unrelated day untouched", act["selected_meals"]["Mon"] == "Some Recipe")
+    act2 = {"schedule_notes": ["Going out Sunday"], "selected_meals": {"Sun": "Real Recipe"}, "eating_out_overrides": ["Sun"]}
+    check("reconcile: later swap_meal override respected", srv._reconcile_eating_out(act2) == [] and act2["selected_meals"]["Sun"] == "Real Recipe")
+
+
 # ── Main test ─────────────────────────────────────────────────────────────────
 
 def run(week_start_str: str, keep: bool) -> int:
@@ -146,6 +157,7 @@ def run(week_start_str: str, keep: bool) -> int:
     # 4b. Dish/protein matching wiring (mocked Haiku call — deterministic, no network)
     check_dish_gate()
     check_dish_boost()
+    check_eating_out_reconcile()
 
     # Weekday-safe only: swap_meal excludes "weekend" meal_type candidates
     # before step 1b ever runs when swap_day isn't Sat/Sun, so a target with
@@ -235,6 +247,12 @@ if __name__ == "__main__":
         from datetime import timedelta
         today = date.today()
         days_ahead = (0 - today.weekday()) % 7 or 7
-        args.week = (today + timedelta(days=days_ahead)).isoformat()
+        target = today + timedelta(days=days_ahead)
+        # The sandbox check asserts no *production* plan gets written for the
+        # target week, so skip past any week whose real plan already exists
+        # (e.g. pushing after Sunday planning has finalized next Monday's plan).
+        while (srv.WEEKLYPLAN_DIR / f"mealplan_{target.isoformat()}.json").exists():
+            target += timedelta(days=7)
+        args.week = target.isoformat()
 
     sys.exit(run(args.week, args.keep))
