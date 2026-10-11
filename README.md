@@ -121,7 +121,7 @@ not every tool is listed.
 | `approve_menu` | Sends selected meals to Ashley via Keanu for signoff; optional `expected_selected_meals` refuses to send if the caller's local mirror has drifted from the actual workflow state |
 | `handle_ashley_reply` | Processes Ashley's approval or swap request; a recipe URL in her reply is fetched and swapped in directly instead of stranding the workflow; auto-activates idea recipes |
 | `activate_idea_recipe` | Activates a pending idea from pasted markdown content or URL auto-fetch; `content` is optional — if empty and `source_url` given, fetch is attempted first; returns `needs_content: True` if fetch fails |
-| `finalize_plan` | Generates plan + shopping CSV, launches apps, notifies admin |
+| `finalize_plan` | Generates plan + shopping CSV, launches apps, notifies admin. First forces "Going Out to Eat" on any day the schedule notes mark as out (unless a later `swap_meal` gave that day a real recipe) |
 | `get_prep_guide` | On-demand prep guide — `mode=weekly` (remaining meals this week) or `mode=tonight` (tonight's dinner); applies food-safety classification automatically |
 | `get_recipe_notes` | Looks up standing family notes/feedback for a recipe by name (fuzzy match); read side of the `notes` field for any consumer, e.g. Keanu via SMS |
 | `generate_shopping_list` | Writes shopping CSV from a finalized meal dict (authoritative — sms-assistant calls this) |

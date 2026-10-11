@@ -1008,6 +1008,31 @@ def _parse_eating_out_days(constraints: str, schedule_notes: list) -> list:
     return eating_out
 
 
+def _reconcile_eating_out(activity: dict) -> list:
+    """Force "Going Out to Eat" on every day the schedule notes say is out.
+
+    _parse_eating_out_days only runs when meals are first picked, so a
+    "we're going out Sunday" note recorded AFTER that (record_schedule_note
+    just appends text) never reached selected_meals and the day finalized with
+    a real recipe. Days the user later gave a real recipe via swap_meal are
+    listed in activity["eating_out_overrides"] and left alone. Mutates
+    `activity`; returns the days it changed.
+    """
+    overrides = set(activity.get("eating_out_overrides", []))
+    out_days = [
+        d for d in _parse_eating_out_days("", activity.get("schedule_notes", []))
+        if d not in overrides
+    ]
+    selected = dict(activity.get("selected_meals", {}))
+    changed = [d for d in out_days if selected.get(d) != "Going Out to Eat"]
+    if out_days:
+        for d in changed:
+            selected[d] = "Going Out to Eat"
+        activity["selected_meals"] = selected
+        activity["eating_out_days"] = sorted(set(activity.get("eating_out_days", [])) | set(out_days))
+    return changed
+
+
 def _resolve_dish_boost_names(direction_text: str, candidates: list) -> Optional[list]:
     """
     Ask Haiku which real recipe titles match specific dish/protein/cut
@@ -2109,6 +2134,8 @@ def _do_finalize(activity: dict) -> dict:
     starts more than 7 days from today (future-week planning). Call
     generate_shopping_list when ready to shop.
     """
+    if _reconcile_eating_out(activity):
+        _save_activity(activity)
     selected = activity.get("selected_meals", {})
     week_start = date.fromisoformat(activity["week_start"])
     schedule_notes = activity.get("schedule_notes", [])
@@ -2720,6 +2747,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
         eating_out_days = set(activity.get("eating_out_days", []))
         eating_out_days.add(day)
         activity["eating_out_days"] = sorted(eating_out_days)
+        activity["eating_out_overrides"] = [d for d in activity.get("eating_out_overrides", []) if d != day]
         _save_activity(activity)
         return {
             "selected_meals": selected,
@@ -2987,6 +3015,8 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
 
     selected[day] = replacement
     activity["selected_meals"] = selected
+    if day in activity.get("eating_out_days", []):
+        activity["eating_out_overrides"] = sorted(set(activity.get("eating_out_overrides", [])) | {day})
     _save_activity(activity)
 
     new_effort = ""
