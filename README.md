@@ -115,13 +115,13 @@ not every tool is listed.
 | `cancel_workflow` | Resets an in-progress workflow to idle — abandon a build started by mistake, or stand down when a plan was already built through another channel. Idempotent |
 | `start_menu_workflow` | Drains feedback queue, loads last week, initializes activity |
 | `log_meal_feedback` | Records last-week ratings; `"done"` finalizes and advances state |
-| `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week |
+| `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week; each candidate carries `url`, plus `selected_meal_urls` so SMS recommendations can put a link after each recipe name |
 | `advance_to_meal_approval` | Writes selected meals into menu_activity.json; bridges local SMS phase to MCP bridge phase |
-| `swap_meal` | Replaces one day's meal (auto-picks or takes explicit name) |
-| `approve_menu` | Sends selected meals to Partner via Keanu for signoff; optional `expected_selected_meals` refuses to send if the caller's local mirror has drifted from the actual workflow state |
+| `swap_meal` | Replaces one day's meal (auto-picks or takes explicit name); returns `new_recipe_url` + `selected_meal_urls` |
+| `approve_menu` | Sends selected meals to Partner via Keanu for signoff (each recipe name followed by its link); optional `expected_selected_meals` refuses to send if the caller's local mirror has drifted from the actual workflow state |
 | `handle_partner_reply` | Processes Partner's approval or swap request; a recipe URL in her reply is fetched and swapped in directly instead of stranding the workflow; auto-activates idea recipes |
 | `activate_idea_recipe` | Activates a pending idea from pasted markdown content or URL auto-fetch; `content` is optional — if empty and `source_url` given, fetch is attempted first; returns `needs_content: True` if fetch fails |
-| `finalize_plan` | Generates plan + shopping CSV, launches apps, notifies admin. First forces "Going Out to Eat" on any day the schedule notes mark as out (unless a later `swap_meal` gave that day a real recipe) |
+| `finalize_plan` | Generates plan + shopping CSV, launches apps, texts David and Partner `Plan ready! <review_ui_base_url>` (site link only — the site lists the plan). First forces "Going Out to Eat" on any day the schedule notes mark as out (unless a later `swap_meal` gave that day a real recipe) |
 | `get_prep_guide` | On-demand prep guide — `mode=weekly` (remaining meals this week) or `mode=tonight` (tonight's dinner); applies food-safety classification automatically |
 | `get_recipe_notes` | Looks up standing family notes/feedback for a recipe by name (fuzzy match); read side of the `notes` field for any consumer, e.g. Keanu via SMS |
 | `generate_shopping_list` | Writes shopping CSV from a finalized meal dict (authoritative — sms-assistant calls this) |

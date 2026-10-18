@@ -26,10 +26,14 @@ PARTNER_HANDLE = _config["partner_handle"]
 
 
 def format_message(meals: list[dict]) -> str:
+    """Pre-finalize menu text: each recipe name is followed by its link.
+    `recipe` may be a list (multi-recipe day); `urls` is parallel to it."""
     lines = ["This week's menu:"]
     for m in meals:
         day = m['day'].split()[0]
-        lines.append(f"{day}: {m['recipe']}")
+        recipes = m['recipe'] if isinstance(m['recipe'], list) else [m['recipe']]
+        lines.append(f"{day}: {' + '.join(recipes)}")
+        lines.extend(url for url in m.get('urls', []) if url)
     lines.append("\nAll good? Any changes?")
     return "\n".join(lines)
 

@@ -109,6 +109,32 @@ def check_eating_out_reconcile():
     check("reconcile: later swap_meal override respected", srv._reconcile_eating_out(act2) == [] and act2["selected_meals"]["Sun"] == "Real Recipe")
 
 
+def check_sms_links(candidates, selected):
+    """Pre-finalize texts carry a link after each recipe; finalized text is just the site link."""
+    check("get_meal_suggestions candidates carry url",
+          all(c.get("url") for c in candidates), f"{[c['name'] for c in candidates if not c.get('url')]}")
+    urls = srv._selected_meal_urls(selected, srv._load_metadata())
+    check("selected_meal_urls parallel to selected_meals",
+          all(len(urls[d]) == len(srv._day_meals(v)) for d, v in selected.items()), f"{urls}")
+    check("Going Out to Eat has no url", srv._selected_meal_urls({"Sun": "Going Out to Eat"}, {}) == {"Sun": [""]})
+
+    import send_menu_partner as smp
+    msg = smp.format_message([
+        {"day": "Mon 10/19", "recipe": "A", "urls": ["https://x/A"]},
+        {"day": "Tue 10/20", "recipe": ["B", "C"], "urls": ["https://x/B", "https://x/C"]},
+        {"day": "Wed 10/21", "recipe": "Going Out to Eat", "urls": [""]},
+    ])
+    check("approval text: url line follows recipe",
+          "Mon: A\nhttps://x/A\n" in msg, msg)
+    check("approval text: multi-recipe day joined, one url line each",
+          "Tue: B + C\nhttps://x/B\nhttps://x/C\n" in msg, msg)
+    check("approval text: no blank url line", "Wed: Going Out to Eat\n\nAll good?" in msg, msg)
+
+    site = srv._CONFIG.get("review_ui_base_url", "").rstrip("/")
+    check("finalized text is Plan ready + site link only", srv._plan_ready_text() == f"Plan ready! {site}",
+          srv._plan_ready_text())
+
+
 # ── Main test ─────────────────────────────────────────────────────────────────
 
 def run(week_start_str: str, keep: bool) -> int:
@@ -158,6 +184,7 @@ def run(week_start_str: str, keep: bool) -> int:
     check_dish_gate()
     check_dish_boost()
     check_eating_out_reconcile()
+    check_sms_links(result.get("candidates", []), selected)
 
     # Weekday-safe only: swap_meal excludes "weekend" meal_type candidates
     # before step 1b ever runs when swap_day isn't Sat/Sun, so a target with

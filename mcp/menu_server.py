@@ -1600,6 +1600,22 @@ def _recipe_url(recipe_name: str, metadata_entry: dict) -> str:
     return ""
 
 
+def _url_for_name(recipe_name: str, recipes: dict) -> str:
+    """Recipe URL by name, or "" for unknown names / "Going Out to Eat"."""
+    key = _find_recipe_key(recipe_name, recipes)
+    return _recipe_url(key, recipes[key]) if key else ""
+
+
+def _selected_meal_urls(selected: dict, recipes: dict) -> dict:
+    """{day: [url, ...]} parallel to selected_meals — one URL per recipe on a
+    multi-recipe day, "" where a recipe has no URL. Pre-finalize texts put each
+    recipe's link right after its name (finalized texts send the site link)."""
+    return {
+        day: [_url_for_name(name, recipes) for name in _day_meals(val)]
+        for day, val in selected.items()
+    }
+
+
 # ---------------------------------------------------------------------------
 # Idea recipe: fetch + activate
 # ---------------------------------------------------------------------------
@@ -1832,6 +1848,12 @@ def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> 
         "balance": health_counts,
         "meals": meals_info,
     }
+
+
+def _plan_ready_text() -> str:
+    """Finalized-plan SMS: "Plan ready!" plus the Review UI site link."""
+    site = _CONFIG.get("review_ui_base_url", "").rstrip("/")
+    return f"Plan ready! {site}" if site else "Plan ready!"
 
 
 def _plan_summary_text(data: dict) -> str:
@@ -2192,11 +2214,10 @@ def _do_finalize(activity: dict) -> dict:
         # Always launch calendar app — future events are still useful to see
         request_gui_launch(["WeeklyMealCalendar.app"])
 
-        # Summary notification to admin only
-        summary = _plan_summary_text(plan_data)
-        if ADMIN_HANDLE:
-            note = "\n\n(Shopping list deferred — run generate_shopping_list when ready to shop.)" if defer_shopping else ""
-            _send_outbox(ADMIN_HANDLE, f"Plan ready!\n\n{summary}{note}")
+        # Finalized: one text to everyone with just the site link — the site
+        # already lists the week's plan, so no per-recipe links or day list.
+        for handle in dict.fromkeys(h for h in (ADMIN_HANDLE, PARTNER_HANDLE) if h):
+            _send_outbox(handle, _plan_ready_text())
 
         # Clear the pending approval file
         if PENDING_FILE.exists():
@@ -2608,9 +2629,11 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
     activity["state"] = "awaiting_meal_approval"
     _save_activity(activity)
 
+    all_recipes = _load_metadata()
     clean_candidates = [
         {
             "name": c["name"],
+            "url": _url_for_name(c["name"], all_recipes),
             "cuisine": c["cuisine"],
             "health": c["health"],
             "minutes": c["minutes"],
@@ -2626,6 +2649,7 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
     result = {
         "candidates": clean_candidates,
         "selected_meals": selected,
+        "selected_meal_urls": _selected_meal_urls(selected, all_recipes),
         "quick_days": quick_days,
         "week_start": activity["week_start"],
     }
@@ -2687,6 +2711,7 @@ def advance_to_meal_approval(
     result = {
         "state": "awaiting_meal_approval",
         "selected_meals": selected_meals,
+        "selected_meal_urls": _selected_meal_urls(selected_meals, _load_metadata()),
         "week_start": activity.get("week_start", ""),
     }
     if cuisine_note:
@@ -3026,8 +3051,10 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
 
     result = {
         "selected_meals": selected,
+        "selected_meal_urls": _selected_meal_urls(selected, all_recipes),
         "swapped_day": day,
         "new_recipe": replacement,
+        "new_recipe_url": _url_for_name(replacement, all_recipes),
         "outgoing_recipe": outgoing,
     }
     if new_effort:
@@ -3088,12 +3115,13 @@ def approve_menu(expected_selected_meals: dict = None) -> dict:
     week_start = date.fromisoformat(activity["week_start"])
     day_to_date = _day_date_map(week_start)
 
+    meal_urls = _selected_meal_urls(selected, _load_metadata())
     meals_json = []
     for day in DAYS_ORDER:
         if day in selected:
             dt = day_to_date.get(day)
             date_str = dt.strftime("%-m/%-d") if dt else ""
-            meals_json.append({"day": f"{day} {date_str}", "recipe": selected[day]})
+            meals_json.append({"day": f"{day} {date_str}", "recipe": selected[day], "urls": meal_urls[day]})
 
     cmd = [
         sys.executable, str(MENUBUILDER_DIR / "send_menu_partner.py"),
@@ -3285,8 +3313,10 @@ def _classify_partner_reply(reply: str) -> str:
 def _resend_menu_to_partner(new_selected: dict, week_start: date) -> list:
     """Build meals_json for the updated selection and re-send it to Partner."""
     day_to_date = _day_date_map(week_start)
+    meal_urls = _selected_meal_urls(new_selected, _load_metadata())
     meals_json = [
-        {"day": f"{day} {day_to_date[day].strftime('%-m/%-d')}", "recipe": new_selected[day]}
+        {"day": f"{day} {day_to_date[day].strftime('%-m/%-d')}", "recipe": new_selected[day],
+         "urls": meal_urls[day]}
         for day in DAYS_ORDER if day in new_selected
     ]
     cmd = [
