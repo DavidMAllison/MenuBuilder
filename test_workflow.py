@@ -135,6 +135,28 @@ def check_sms_links(candidates, selected):
           srv._plan_ready_text())
 
 
+def check_partner_classify_and_chmod():
+    """classify_partner_reply gates reply capture with no side effects; chmod never aborts a write."""
+    cases = [
+        ("https://www.americastestkitchen.com/recipes/9801-slow-cooker-chicken-tortilla-soup", "unclear"),
+        ("Can we do this on Tuesday https://example.com/recipe", "swap_request"),
+        ("Looks good ", "approve"),
+    ]
+    for text, want in cases:
+        got = srv.classify_partner_reply(text)
+        check(f"classify_partner_reply({text[:40]!r})", got == want, f"got {got}, want {want}")
+
+    import os as _os
+    from unittest import mock
+    with mock.patch.object(_os, "chmod", side_effect=PermissionError(1, "Operation not permitted")):
+        try:
+            srv._chmod_shared("/nonexistent")
+            ok = True
+        except PermissionError:
+            ok = False
+    check("_chmod_shared swallows non-owner PermissionError", ok)
+
+
 # ── Main test ─────────────────────────────────────────────────────────────────
 
 def run(week_start_str: str, keep: bool) -> int:
@@ -185,6 +207,7 @@ def run(week_start_str: str, keep: bool) -> int:
     check_dish_boost()
     check_eating_out_reconcile()
     check_sms_links(result.get("candidates", []), selected)
+    check_partner_classify_and_chmod()
 
     # Weekday-safe only: swap_meal excludes "weekend" meal_type candidates
     # before step 1b ever runs when swap_day isn't Sat/Sun, so a target with

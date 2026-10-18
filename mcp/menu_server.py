@@ -232,6 +232,18 @@ def _save_metadata(recipes: dict) -> None:
     METADATA_PATH.write_text(json.dumps(raw, indent=2))
 
 
+def _chmod_shared(path) -> None:
+    """Best-effort 666 on a shared plan/shopping file. Access between
+    davidallison and allisonbot actually comes from the inherited group:staff
+    ACL on cooking-state/ -- chmod is only a belt-and-braces extra, and it
+    raises PermissionError for whichever account doesn't own the file (only
+    the owner may chmod), which used to abort finalize/swap mid-write."""
+    try:
+        os.chmod(path, 0o666)
+    except PermissionError:
+        pass
+
+
 def _day_meals(val) -> list:
     """Normalize a selected_meals day value to a list of recipe name strings."""
     if isinstance(val, list):
@@ -2198,12 +2210,12 @@ def _do_finalize(activity: dict) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(plan_data, indent=2, ensure_ascii=False))
     if not _TEST_DIR:
-        os.chmod(plan_path, 0o666)
+        _chmod_shared(plan_path)
 
     if not defer_shopping:
         shopping_path.write_text(_build_shopping_csv(selected, week_start))
         if not _TEST_DIR:
-            os.chmod(shopping_path, 0o666)
+            _chmod_shared(shopping_path)
             request_gui_launch(["WeeklyShoppingList.app"])
 
     # In test mode skip app launches and SMS; log summary to stderr instead
@@ -3269,6 +3281,27 @@ def _process_recipe_url_core(url: str, day: str = "", force_add: bool = False) -
 
 
 @mcp.tool()
+def classify_partner_reply(reply: str) -> str:
+    """
+    Classify Partner's reply to the proposed menu WITHOUT acting on it.
+
+    Use this to decide whether an incoming message is actually her menu answer
+    before consuming the pending-approval state; then call handle_partner_reply
+    only for menu-related labels. Mirrors handle_partner_reply's own routing:
+      - URL + a named day  -> swap_request (she's suggesting that recipe for that day)
+      - URL, no day        -> unclear (likely an unrelated recipe idea, not a reply)
+      - APPROVAL_PHRASES exact match -> approve
+      - otherwise Haiku: approve / swap_request / eating_out / swap_plus_approve / unclear
+
+    Returns one of: approve, swap_request, eating_out, swap_plus_approve, unclear.
+    """
+    if re.search(r'https?://\S+', reply):
+        return "swap_request" if _extract_day_from_text(reply) else "unclear"
+    if reply.lower().strip() in APPROVAL_PHRASES:
+        return "approve"
+    return _classify_partner_reply(reply)
+
+
 def _classify_partner_reply(reply: str) -> str:
     """Classify Partner's reply intent via Haiku. Same pattern as _claude_swap
     (same model, constrained-output prompt, graceful fallback on any error).
@@ -3887,7 +3920,7 @@ def update_plan_meal(day: str, title: str) -> dict:
 
     try:
         plan_file.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-        os.chmod(plan_file, 0o666)
+        _chmod_shared(plan_file)
     except Exception as e:
         return {"success": False, "day": day, "title": title, "error": str(e)}
 

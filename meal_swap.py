@@ -31,6 +31,19 @@ from bs4 import BeautifulSoup
 
 from gui_launch import request_gui_launch
 
+
+def _chmod_shared(path) -> None:
+    """Best-effort 666 on a shared plan/shopping file. Access between
+    davidallison and allisonbot actually comes from the inherited group:staff
+    ACL on cooking-state/ -- chmod is only a belt-and-braces extra, and it
+    raises PermissionError for whichever account doesn't own the file (only
+    the owner may chmod), which used to abort finalize/swap mid-write."""
+    try:
+        os.chmod(path, 0o666)
+    except PermissionError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -277,7 +290,7 @@ def _update_meal_plan_json(plan_path: Path, day_str: str, outgoing: str,
             meal["url"] = url
             break
     plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    os.chmod(plan_path, 0o666)
+    _chmod_shared(plan_path)
 
 
 def _update_shopping_csv(csv_path: Path, outgoing: str,
@@ -299,7 +312,7 @@ def _update_shopping_csv(csv_path: Path, outgoing: str,
     writer.writeheader()
     writer.writerows(kept)
     csv_path.write_text(out.getvalue())
-    os.chmod(csv_path, 0o666)
+    _chmod_shared(csv_path)
 
 
 def _log_swap_to_feedback(outgoing: str, incoming: str, target_date: date) -> None:
@@ -329,7 +342,7 @@ def _recompute_balance(plan_path: Path) -> None:
             counts[h] = counts.get(h, 0) + 1
     data["balance"] = counts
     plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    os.chmod(plan_path, 0o666)
+    _chmod_shared(plan_path)
 
 
 def _suggest_start_time(time_str: str) -> str:
@@ -361,7 +374,7 @@ def _update_reminder_line(plan_path: Path, day_str: str, incoming: str, time_str
             meal["reminder"] = new_reminder
             break
     plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    os.chmod(plan_path, 0o666)
+    _chmod_shared(plan_path)
 
 
 # ---------------------------------------------------------------------------
