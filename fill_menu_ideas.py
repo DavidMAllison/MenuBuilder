@@ -632,6 +632,9 @@ def _infer_cooking_method(title: str, instructions: list[str]) -> str:
     text = (title + " " + " ".join(instructions[:2])).lower()
     if any(w in text for w in ["slow cooker", "crockpot", "slow-cook"]):
         return "slow_cooker"
+    # Before oven -- air-fryer recipes often say "bake"/"roast" in the basket.
+    if any(w in text for w in ["air fryer", "air-fryer", "air fry", "air-fry"]):
+        return "air_fryer"
     if any(w in text for w in ["grill", "bbq", "barbecue"]):
         return "grill"
     if any(w in text for w in ["roast", "bake", "oven", "sheet pan", "baked"]):
