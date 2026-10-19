@@ -854,6 +854,8 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .queue-title a { color: inherit; text-decoration: none; }
+    .queue-title a:hover { color: #2980b9; text-decoration: underline; }
 
     .queue-meta {
       display: flex;
@@ -1921,7 +1923,9 @@
           <div class="queue-rank">${posInGroup + 1}</div>
           ${thumbHtml}
           <div class="queue-info">
-            <div class="queue-title">${escHtml(item.title)}</div>
+            <div class="queue-title">${item.url
+              ? `<a href="${escHtml(item.url)}" target="_blank" rel="noopener">${escHtml(item.title)}</a>`
+              : escHtml(item.title)}</div>
             <div class="queue-meta">
               ${item.health ? `<span class="health-pill ${pClass}">${escHtml(item.health)}</span>` : ''}
               ${item.time ? `<span>${escHtml(item.time)}</span>` : ''}
