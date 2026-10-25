@@ -280,7 +280,15 @@ def _find_recipe_key(name: str, recipes: dict) -> Optional[str]:
 
 
 def _find_recipe_best_match(name: str, recipes: dict) -> Optional[tuple]:
-    """Returns (key, score) for the best fuzzy match >= 0.80, else None."""
+    """
+    Returns (key, score) for the best fuzzy match >= 0.80, else falls back to
+    Sonnet (_match_named_dishes) and returns (key, 0.0) for its top pick, else None.
+
+    The Sonnet fallback catches shorthand names that difflib scores far too low --
+    "Soy Salmon" vs "Soy-Ginger-Garlic Salmon" is 0.59. Every caller turns the
+    result into a "Did you mean X?" confirmation, so a looser match never
+    swaps anything in without a yes.
+    """
     name_lower = name.lower().strip()
     best_key, best_score = None, 0.0
     for key in recipes:
@@ -289,6 +297,10 @@ def _find_recipe_best_match(name: str, recipes: dict) -> Optional[tuple]:
             best_key, best_score = key, score
     if best_score >= 0.80:
         return (best_key, best_score)
+    live_names = [k for k, r in recipes.items() if r.get("status") not in ("disliked", "ignored")]
+    matches = _match_named_dishes(name, live_names)
+    if matches:
+        return (matches[0], 0.0)
     return None
 
 
@@ -1463,10 +1475,10 @@ def _claude_swap(text: str, selected: dict, cuisine_direction: Optional[str]) ->
 def _match_named_dishes(
     query_text: str,
     candidate_names: list,
-    max_tokens: int = 400,
+    max_tokens: int = 4000,
 ) -> Optional[list]:
     """
-    Use Claude Haiku to find which of `candidate_names` are the actual
+    Use Claude Sonnet to find which of `candidate_names` are the actual
     dish(es) named in `query_text` -- e.g. query_text="force pork belly for
     Sunday" should match "Chairman Mao's Red Braised Pork Belly", not
     "Herb-Marinated Lamb Rib Chops" or a generic "Pork Tenderloin".
@@ -1511,21 +1523,33 @@ def _match_named_dishes(
         "all (e.g. a general complaint like \"too much chicken\" or a "
         "vague preference like \"something easy\"), return exactly "
         "[\"NO_MATCH\"].\n\n"
-        "Return a JSON array of recipe names only, no explanation:\n"
-        '["Recipe Name 1", "Recipe Name 2"]'
+        "Return the matching recipe names as `matches`."
     )
 
+    # Structured output, not "return a JSON array": Sonnet writes a prose
+    # explanation before the array and runs out of max_tokens before reaching it.
+    # (Forced tool_choice is a 400 on Sonnet 5.5.) Low effort keeps SMS latency down.
     try:
         client = _anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-5-5",
             max_tokens=max_tokens,
+            output_config={
+                "effort": "low",
+                "format": {
+                    "type": "json_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"matches": {"type": "array", "items": {"type": "string"}}},
+                        "required": ["matches"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = resp.content[0].text.strip()
-        raw = re.sub(r"^```[a-z]*\n?", "", raw)
-        raw = re.sub(r"\n?```$", "", raw)
-        matches = json.loads(raw)
+        raw = next(b.text for b in resp.content if b.type == "text")
+        matches = json.loads(raw).get("matches")
         if not isinstance(matches, list) or not matches:
             return None
         if any(str(m).strip().upper() == "NO_MATCH" for m in matches):
@@ -2891,7 +2915,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
             else:
                 filter_notes.append(f"No {reason_protein.lower()} recipes available in the pool right now")
 
-        # 1b. Specific dish/cut match via Haiku — narrows further than the coarse
+        # 1b. Specific dish/cut match via Sonnet — narrows further than the coarse
         # protein-bucket filter above can (e.g. "pork belly" vs. any pork dish),
         # and covers cuts/dishes the bucket map doesn't know at all (e.g. "ribs").
         # Runs before the protein-diversity heuristic below so a specifically
