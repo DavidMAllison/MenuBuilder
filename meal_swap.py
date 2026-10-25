@@ -60,7 +60,7 @@ def _metadata_path() -> Path:
 
 
 def _weeklyplan_dir() -> Path:
-    return _metadata_path().parent / "weeklyplan"
+    return Path(_cfg()["state_dir"]) / "weeklyplan"
 
 
 def _recipes_dir() -> Path:
