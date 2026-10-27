@@ -48,7 +48,7 @@ restart_mcp.sh                # Kill stale menu_server.py MCP subprocess(es) so 
 ruff.toml                     # Lint config (pyflakes F + pycodestyle E4/E7/E9)
 requirements.txt              # Pinned dependency versions
 process_feedback_queue.py     # Drain SMS feedback queue into feedback_current.json
-meal_swap.py                  # Mid-week meal swap — all swap logic lives here
+meal_swap.py                  # Mid-week meal swap — all swap logic lives here; a recipe it adds gets a complete entry + intake checks
 send_menu_partner.py          # Send weekly menu to partner for approval via Keanu
 show_inventory.py             # Opens browser with full inventory grouped by category
 recipe_agent.py               # Recipe search orchestrator — single entry point for all agents
@@ -63,7 +63,7 @@ yt_utils.py                   # Shared YouTube helpers — fetch_transcript(), e
 recipe_source_patterns.md     # Decision tree for adding new recipe sources — five patterns (website, website+video, YT-description, YT-transcript, paywalled) with extraction technique and routing rules
 atk_agent.py                  # America's Test Kitchen — syncs saved ATK collections into recipe_metadata.json (paywall auth via Playwright, httpx for fetches)
 fill_menu_ideas.py            # Run all agents in parallel and add new results to recipe_metadata.json as status="active"; after each run, sweeps agent_results/*.json clean of dismissed and already-in-collection entries (durable list at /Users/Shared/cooking-state/dismissed_recipes.json). `--include-dismissed` skips the dismissed-recipe filter for a deliberate search; also exposed as a checkbox in the Review UI's Run Agents panel.
-intake_checks.py              # Shared intake checks (Review UI + SMS) — required waits from instructions → advance_prep_hours + "plus N hours marinating" in time; linked sub-recipes → condiments.json + condiment_deps. Backfilled Oct 27 2026
+intake_checks.py              # Shared intake checks (Review UI + SMS + meal swap) — required waits from instructions → advance_prep_hours + "plus N hours marinating" in time; linked sub-recipes → condiments.json + condiment_deps. Backfilled Oct 27 2026
 github_sync.py                # Publish recipe/condiment .md to GitHub Pages. request_publish() spools a request (any account, e.g. Keanu as allisonbot); the com.menubuilder.githubsync LaunchAgent (plist in repo root) drains it and pushes as davidallison. Review UI calls publish() directly. No fetch/rebase; failed pushes retry every 10 min
 prep_utils.py                 # Shared prep classification — prompt, classify_prep(), parse_md_instructions(); used by fill_menu_ideas and menu_server
 backfill_prep.py              # One-time (re-runnable) backfill of prep_components/prep_notes for all active recipes
