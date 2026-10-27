@@ -157,6 +157,52 @@ def check_partner_classify_and_chmod():
     check("_chmod_shared swallows non-owner PermissionError", ok)
 
 
+def check_intake_checks():
+    """Offline checks for intake_checks.py (no API calls) -- Miso Chicken, Oct 2026:
+    a 24h marinade hidden from `time`, and a sub-recipe the .md never linked."""
+    import intake_checks as ic
+    from candidate_scoring import parse_minutes
+    from recipe_md import build_recipe_md
+
+    e = {"time": "25 minutes"}
+    ic.apply_advance_prep(e, {"hours": 24.0, "label": "marinating", "evidence": ""})
+    check("advance prep: wait appended to time", e["time"] == "25 minutes plus 24 hours marinating", e["time"])
+    check("advance prep: parse_minutes reads active time only", parse_minutes(e["time"]) == 25)
+    check("advance prep: blocks quick pick", ic.is_quick_blocked(e))
+    check("advance prep: buy a day ahead", ic.buy_ahead_days(e) == 1)
+    check("no advance prep: not blocked", not ic.is_quick_blocked({}) and ic.buy_ahead_days({}) == 0)
+    check("advance prep: no keyword -> no LLM call, None",
+          ic.detect_advance_prep("T", ["Sear the chicken.", "Serve."]) is None)
+
+    missing = ic.unresolved_homemade(
+        ["5 Tbsp Homemade All-Purpose Miso Sauce", "1 cup homemade or store-bought broth", "Homemade hummus"],
+        ["All-Purpose Miso Sauce"])
+    check("homemade: only unlinked, no-alternative lines flagged", missing == ["Homemade hummus"], missing)
+
+    md = build_recipe_md("T", ["5 Tbsp Homemade All-Purpose Miso Sauce"], ["x"],
+                         condiments={"All-Purpose Miso Sauce": "https://u/All-Purpose_Miso_Sauce"})
+    check("md: sub-recipe linked in ingredient line",
+          "- 5 Tbsp Homemade [All-Purpose Miso Sauce](https://u/All-Purpose_Miso_Sauce)" in md, md)
+    check("md: Make first line", "**Make first:** [All-Purpose Miso Sauce]" in md, md)
+
+    # Synthetic recipe -- test_output/recipe_metadata_test.json is a stale copy
+    # that only refreshes when deleted, so don't depend on what's in it.
+    from unittest import mock
+    fake = {"Miso Chicken": {
+        "ingredients": [{"name": "chicken thighs", "quantity": "5", "unit": "pieces", "category": "Proteins"}],
+        "condiment_deps": ["All-Purpose Miso Sauce"],
+        "advance_prep_hours": 24.0,
+    }}
+    sauce = [{"name": "red miso", "quantity": "1", "unit": "cup", "category": "Pantry/Asian"},
+             {"name": "mirin", "quantity": "1", "unit": "cup", "category": "Pantry/Asian"}]
+    with mock.patch.object(srv, "_load_metadata", return_value=fake), \
+         mock.patch.object(srv, "_condiment_ingredients", return_value=sauce), \
+         mock.patch.object(srv, "LUNCH_STATE_FILE", Path("/nonexistent")):
+        csv = srv._build_shopping_csv({"Tue": "Miso Chicken"}, date(2026, 10, 26))
+    check("shopping: sub-recipe ingredients expanded", "red miso" in csv and "mirin" in csv, csv)
+    check("shopping: 24h marinade dated the day before", "2026-10-26" in csv and "2026-10-27" not in csv, csv)
+
+
 # ── Main test ─────────────────────────────────────────────────────────────────
 
 def run(week_start_str: str, keep: bool) -> int:
@@ -208,6 +254,7 @@ def run(week_start_str: str, keep: bool) -> int:
     check_eating_out_reconcile()
     check_sms_links(result.get("candidates", []), selected)
     check_partner_classify_and_chmod()
+    check_intake_checks()
 
     # Weekday-safe only: swap_meal excludes "weekend" meal_type candidates
     # before step 1b ever runs when swap_day isn't Sat/Sun, so a target with

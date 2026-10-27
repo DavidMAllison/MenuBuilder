@@ -34,6 +34,7 @@ from fill_menu_ideas import (  # noqa: E402
     translate_title, _build_recipe_md, _title_to_filename, _infer_cooking_method,
     _infer_meal_type, _infer_is_soup, _quality_check, _register_cuisine, RECIPES_DIR,
 )
+from intake_checks import run_intake_checks  # noqa: E402
 from prep_utils import classify_prep  # noqa: E402
 
 app = Flask(__name__, static_folder="recipe_review")
@@ -434,8 +435,9 @@ def batch_recipes(batch_id):
     return jsonify(matched)
 
 
-def _sync_recipe_to_github(filename: str) -> None:
-    """Copy recipe .md to menubuilder-recipes repo, regenerate data, and push.
+def _sync_recipe_to_github(filename: str, condiment_mds: tuple = ()) -> None:
+    """Copy recipe .md (plus any new condiment .md files it depends on) to the
+    menubuilder-recipes repo, regenerate data, and push.
 
     Runs in a background thread — errors are logged but do not surface to the caller.
     """
@@ -447,6 +449,11 @@ def _sync_recipe_to_github(filename: str) -> None:
             print(f"[github-sync] source not found: {src}", flush=True)
             return
         shutil.copy2(src, dst)
+        condiment_rel = []
+        for cmd in condiment_mds:
+            rel = f"condiments/{Path(cmd).name}"
+            shutil.copy2(cmd, _GH_REPO_DIR / rel)
+            condiment_rel.append(rel)
 
         # Regenerate GitHub Pages data
         result = subprocess.run(
@@ -457,7 +464,7 @@ def _sync_recipe_to_github(filename: str) -> None:
             print(f"[github-sync] generate script failed: {result.stderr}", flush=True)
 
         # Commit and push
-        subprocess.run(["git", "add", filename, "_data/recipes.json"],
+        subprocess.run(["git", "add", filename, "_data/recipes.json", *condiment_rel],
                        cwd=str(_GH_REPO_DIR), capture_output=True)
         commit = subprocess.run(
             ["git", "commit", "-m", f"feat: add {filename} via Review UI"],
@@ -562,6 +569,11 @@ def _classify_and_add_recipe(recipe: dict) -> tuple[dict | None, tuple | None]:
         "title_en":        title_en,
     }
 
+    # Required waits (24h marinade) and linked sub-recipes the source's ld+json
+    # doesn't surface -- see intake_checks.py. Before the .md write so the file
+    # links its sub-recipes.
+    new_condiment_mds = run_intake_checks(title, entry, url, entry["source"])
+
     # Write .md file
     md_path = RECIPES_DIR / entry["filename"]
     if not md_path.exists():
@@ -577,7 +589,8 @@ def _classify_and_add_recipe(recipe: dict) -> tuple[dict | None, tuple | None]:
     _save_metadata(metadata)
 
     # Push to GitHub Pages in background
-    t = threading.Thread(target=_sync_recipe_to_github, args=(entry["filename"],), daemon=True)
+    t = threading.Thread(target=_sync_recipe_to_github, args=(entry["filename"], new_condiment_mds),
+                         daemon=True)
     t.start()
 
     return entry, None

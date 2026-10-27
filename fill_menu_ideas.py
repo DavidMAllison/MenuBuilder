@@ -79,12 +79,14 @@ def _quality_check(ingredients_raw: list, instructions: list) -> bool:
 def _build_recipe_md(title: str, entry: dict, needs_review: bool) -> str:
     """Format a recipe entry as a .md file. Thin wrapper — see recipe_md.py
     for the canonical builder every intake path shares."""
+    from intake_checks import condiment_links
     from recipe_md import build_recipe_md
     return build_recipe_md(
         title=title,
         ingredients=entry.get("ingredients_raw", []),
         instructions=entry.get("instructions", []),
         needs_review=needs_review,
+        condiments=condiment_links(entry),
     )
 
 if not os.environ.get("ANTHROPIC_API_KEY"):

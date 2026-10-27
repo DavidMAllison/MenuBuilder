@@ -55,6 +55,7 @@ from candidate_scoring import (
     protein_label as _get_protein,
 )
 from gui_launch import request_gui_launch
+from intake_checks import buy_ahead_days, is_quick_blocked, run_intake_checks, condiment_links
 
 # ---------------------------------------------------------------------------
 # Config and paths
@@ -421,13 +422,24 @@ def _classify_and_write(
     except Exception:
         title_en = None
 
-    md_path = _write_recipe_md(title, fetched_data, source_url, source_name, source_credit)
+    # Required waits (24h marinade) and linked sub-recipes the page's ld+json
+    # doesn't surface -- see intake_checks.py. Runs before the .md write so the
+    # recipe file can link its sub-recipes.
+    checks: dict = {
+        "time": fetched_data.get("time", ""),
+        "instructions": fetched_data.get("instructions", []),
+        "ingredients_raw": ings_raw,
+    }
+    run_intake_checks(title, checks, source_url, source_name)
+
+    md_path = _write_recipe_md(title, fetched_data, source_url, source_name, source_credit,
+                               condiments=condiment_links(checks))
 
     if recipes is None:
         recipes = _load_metadata()
 
     if not any(k.lower() == title.lower() for k in recipes):
-        time_str = fetched_data.get("time", "")
+        time_str = checks["time"]
         mins = _parse_minutes(time_str)
         entry: dict = {
             "status": "active",
@@ -448,11 +460,13 @@ def _classify_and_write(
         }
         if needs_review:
             entry["needs_review"] = True
+        for k in ("advance_prep_hours", "condiment_deps", "needs_review", "intake_warnings"):
+            if checks.get(k):
+                entry[k] = checks[k]
         recipes[title] = entry
         _save_metadata(recipes)
 
-    time_str = fetched_data.get("time", "")
-    return {"title": title, "health": health, "time": time_str}
+    return {"title": title, "health": health, "time": checks["time"]}
 
 
 def _full_recipe_add(url: str, fetched_data: Optional[dict]) -> dict:
@@ -1129,7 +1143,8 @@ def _select_meals(
                     "protein": _get_protein(name),
                     "minutes": minutes,
                     "time_str": meta.get("time", ""),
-                    "is_quick": minutes <= QUICK_THRESHOLD or meta.get("cooking_method") == "slow_cooker",
+                    "is_quick": (minutes <= QUICK_THRESHOLD or meta.get("cooking_method") == "slow_cooker")
+                                and not is_quick_blocked(meta),
                     "meal_type": meta.get("meal_type", "Weeknight"),
                     "score": -100,
                 })
@@ -1161,7 +1176,8 @@ def _select_meals(
                     "protein": _get_protein(name),
                     "minutes": minutes,
                     "time_str": meta.get("time", ""),
-                    "is_quick": minutes <= QUICK_THRESHOLD or meta.get("cooking_method") == "slow_cooker",
+                    "is_quick": (minutes <= QUICK_THRESHOLD or meta.get("cooking_method") == "slow_cooker")
+                                and not is_quick_blocked(meta),
                     "meal_type": meta.get("meal_type", "Weeknight"),
                     "score": -100,
                 })
@@ -1713,7 +1729,7 @@ def _fetch_recipe_data(url: str) -> Optional[dict]:
 
 
 def _write_recipe_md(title: str, recipe_data: dict, source_url: str, source_name: str,
-                     source_credit: str = "") -> Path:
+                     source_credit: str = "", condiments: Optional[dict] = None) -> Path:
     """Write a recipe .md file to RECIPES_DIR. Returns the path.
 
     source_url/source_name/source_credit are not written into the file —
@@ -1729,6 +1745,7 @@ def _write_recipe_md(title: str, recipe_data: dict, source_url: str, source_name
         title=title,
         ingredients=recipe_data.get("ingredients", []),
         instructions=recipe_data.get("instructions", []),
+        condiments=condiments,
     )
     path.write_text(content, encoding="utf-8")
     return path
@@ -2091,11 +2108,12 @@ def _build_shopping_csv(selected: dict, week_start: date) -> str:
         cook_date = day_to_date.get(day)
         if not cook_date:
             continue
-        date_str = cook_date.isoformat()
         for name in _day_meals(selected[day]):
             key = _find_recipe_key(name, recipes)
             if not key:
                 continue
+            # A 24h marinade means the ingredients are needed the day before.
+            date_str = (cook_date - timedelta(days=buy_ahead_days(recipes[key]))).isoformat()
             structured = recipes[key].get("ingredients", [])
             if structured:
                 _add_structured(structured, name, date_str)

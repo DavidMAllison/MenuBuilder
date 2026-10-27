@@ -11,6 +11,8 @@ paths (Phase 4.3, architecture_review_and_fix_plan.md).
 
 import json
 import re
+
+from intake_checks import is_quick_blocked
 from datetime import date, datetime
 
 RECENCY_WEEKS = 3          # avoid meals cooked within this many weeks
@@ -80,6 +82,8 @@ def resolve_health(r: dict, default: str = 'Moderate') -> str:
 def parse_minutes(time_str: str) -> int:
     if not time_str:
         return 999
+    # Active time only: "25 minutes plus 24 hours marinating" is a 25-minute cook.
+    time_str = re.split(r"\s+plus\s+", time_str, maxsplit=1)[0]
     mins = 0
     h = re.search(r'(\d+)\s*hour', time_str, re.IGNORECASE)
     if h:
@@ -375,6 +379,7 @@ def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
         minutes = parse_minutes(r.get('time', ''))
         is_slow = r.get('cooking_method') == 'slow_cooker'
         is_quick = (minutes <= QUICK_THRESHOLD or is_slow) and r.get('weeknight_effort') == 'low'
+        is_quick = is_quick and not is_quick_blocked(r)  # e.g. 24h marinade
         is_grill = r.get('cooking_method') == 'grill'
         protein = protein_label(name)
         feedback = r.get('feedback', [])
