@@ -4524,8 +4524,7 @@ def add_lunch_recipe_url(url: str) -> dict:
     md_content = f"# {title}\n\n## Instructions\n\n{instructions}\n"
     md_path.write_text(md_content)
 
-    data    = json.loads(METADATA_PATH.read_text())
-    recipes = data["recipes"]
+    recipes = _load_metadata()
 
     if title not in recipes:
         recipes[title] = {
@@ -4546,7 +4545,7 @@ def add_lunch_recipe_url(url: str) -> dict:
             "needs_review":      True,
             "url":               url,
         }
-        METADATA_PATH.write_text(json.dumps(data, indent=2))
+        _save_metadata(recipes)
     _publish([filename])
 
     base_url = _CONFIG.get("github_pages_base_url", "https://davidmallison.github.io/menubuilder-recipes")
@@ -4775,7 +4774,8 @@ def set_test_mode(enabled: bool) -> dict:
     When enabled:
     - All file writes go to test_output/ in the project directory
     - recipe_metadata.json is copied to test_output/recipe_metadata_test.json
-      (copy only made once; subsequent enables reuse the existing copy)
+      (re-copied fresh each time test mode goes from off to on; enabling while
+      already on keeps the copy so an in-progress test isn't wiped)
     - App launches (WeeklyShoppingList.app, WeeklyMealCalendar.app) are suppressed
     - SMS/outbox messages are suppressed (plan summary logged to stderr instead)
     - PENDING_FILE is not cleared
@@ -4794,13 +4794,14 @@ def set_test_mode(enabled: bool) -> dict:
     if enabled:
         test_dir = MENUBUILDER_DIR / "test_output"
         test_dir.mkdir(exist_ok=True)
+        fresh = _TEST_DIR is None
         test_copy = test_dir / "recipe_metadata_test.json"
-        if not test_copy.exists():
+        if fresh or not test_copy.exists():
             test_copy.write_text(METADATA_PATH.read_text())
         inv_path_str = _CONFIG.get("inventory_path", "")
         if inv_path_str:
             inv_test_copy = test_dir / "inventory_test.json"
-            if not inv_test_copy.exists():
+            if fresh or not inv_test_copy.exists():
                 inv_source = Path(inv_path_str)
                 if inv_source.exists():
                     inv_test_copy.write_text(inv_source.read_text())
@@ -4819,7 +4820,7 @@ def cleanup_test_data() -> dict:
     Removes test_output/weeklyplan/, test_output/menu_activity.json, and
     test_output/menu_queue.json.
     Leaves test_output/recipe_metadata_test.json in place (re-copied fresh
-    the next time set_test_mode(True) is called and the file is absent).
+    the next time set_test_mode(True) is called).
 
     Returns:
         {"ok": True, "cleaned": [list of paths removed]}

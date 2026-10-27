@@ -31,6 +31,7 @@ from bs4 import BeautifulSoup
 
 from github_sync import request_publish
 from gui_launch import request_gui_launch
+from intake_checks import condiment_links, run_intake_checks
 
 
 def _chmod_shared(path) -> None:
@@ -262,7 +263,8 @@ def _parse_ingredient(s: str) -> dict:
 # File writers
 # ---------------------------------------------------------------------------
 
-def _create_recipe_md(recipe: dict, source_url: str, source_name: str) -> Path:
+def _create_recipe_md(recipe: dict, source_url: str, source_name: str,
+                      condiments: Optional[dict] = None) -> Path:
     """source_url/source_name aren't written into the file — the caller
     persists source_url to recipe_metadata.json, and the GitHub Pages
     template renders attribution from there. See recipe_md.py for the
@@ -274,6 +276,7 @@ def _create_recipe_md(recipe: dict, source_url: str, source_name: str) -> Path:
         title=title,
         ingredients=recipe.get("ingredients", []),
         instructions=recipe.get("instructions", []),
+        condiments=condiments,
     )
     path.write_text(content, encoding="utf-8")
     return path
@@ -459,6 +462,16 @@ def execute_swap(
                                 "detail": f"Could not fetch {incoming_url}. Provide incoming_content."}
             elif incoming_content:
                 recipe_data = incoming_content
+            elif entry.get("ingredients_raw") and entry.get("instructions"):
+                recipe_data = {
+                    "title": canonical_name,
+                    "time": entry.get("time", ""),
+                    "servings": entry.get("servings", ""),
+                    "ingredients": list(entry["ingredients_raw"]),
+                    "instructions": list(entry["instructions"]),
+                    "cuisine": entry.get("cuisine", ""),
+                }
+                incoming_url = incoming_url or entry.get("source_url", "")
             else:
                 return {"success": False, "message": "Idea recipe requires incoming_url or incoming_content"}
 
@@ -495,27 +508,57 @@ def execute_swap(
 
     # --- Activate recipe if needed (Scenario B or C) ---
     if needs_activation:
-        _create_recipe_md(recipe_data, incoming_url or "", source_name)
-        clean_ingredients = [{k: v for k, v in i.items()} for i in parsed_ingredients]
-        recipes[canonical_name] = {
+        # JSON invariant: no entry without ingredients_raw + instructions.
+        ingredients_raw = [i for i in raw if isinstance(i, str) and i.strip()]
+        instructions = [s for s in recipe_data.get("instructions", []) if isinstance(s, str) and s.strip()]
+        if not ingredients_raw or not instructions:
+            return {"success": False, "message": "fetch_failed",
+                    "detail": "Recipe is missing ingredients or instructions. Provide incoming_content."}
+
+        # Required waits (24h marinade) and linked sub-recipes -- same intake
+        # checks as the Review UI and SMS URL paths. Before the .md write so
+        # the file can link its sub-recipes.
+        checks = {"time": time_str, "instructions": instructions, "ingredients_raw": ingredients_raw}
+        new_condiment_mds = run_intake_checks(title, checks, incoming_url or "", source_name)
+        time_str = checks["time"]
+
+        _create_recipe_md(recipe_data, incoming_url or "", source_name,
+                          condiments=condiment_links(checks))
+
+        from candidate_scoring import parse_minutes
+        from fill_menu_ideas import _infer_cooking_method
+
+        # Scenario B updates the idea's entry in place so fields set at its
+        # intake (source_url, title_en, notes, ...) survive activation.
+        entry = recipes.get(canonical_name) if isinstance(recipes.get(canonical_name), dict) else {}
+        entry.update({
             "title": canonical_name,
             "filename": f"{filename}.md",
             "source": source_name,
-            "cuisine": recipe_data.get("cuisine", ""),
-            "meal_type": "Weeknight",
+            "cuisine": recipe_data.get("cuisine", "") or entry.get("cuisine", ""),
+            "meal_type": "Weekend" if parse_minutes(time_str) > 60 and parse_minutes(time_str) != 999 else "Weeknight",
             "health": health,
-            "times_cooked": 0,
             "time": time_str,
-            "servings": recipe_data.get("servings", ""),
+            "servings": recipe_data.get("servings", "") or entry.get("servings", ""),
             "status": "active",
-            "cooking_method": "oven",
-            "last_cooked_date": None,
-            "ingredients": clean_ingredients,
-            "feedback": [],
-        }
+            "cooking_method": entry.get("cooking_method") or _infer_cooking_method(title, instructions),
+            "ingredients_raw": ingredients_raw,
+            "instructions": instructions,
+            "ingredients": [dict(i) for i in parsed_ingredients],
+        })
+        entry.setdefault("times_cooked", 0)
+        entry.setdefault("last_cooked_date", None)
+        entry.setdefault("feedback", [])
+        if incoming_url:
+            entry.setdefault("source_url", incoming_url)
+        for k in ("advance_prep_hours", "condiment_deps", "intake_warnings"):
+            if checks.get(k):
+                entry[k] = checks[k]
+        recipes[canonical_name] = entry
         data["recipes"] = recipes
         _save_metadata(data)
-        request_publish([f"{filename}.md"])  # github_sync LaunchAgent pushes as davidallison
+        # github_sync LaunchAgent pushes as davidallison
+        request_publish([f"{filename}.md"], new_condiment_mds)
 
     # --- Record the decline so the outgoing recipe gets a cooldown before it's
     # suggested again (see DECLINE_COOLDOWN_WEEKS in candidate_scoring.py) ---

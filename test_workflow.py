@@ -263,6 +263,92 @@ def check_github_sync():
 
 # ── Main test ─────────────────────────────────────────────────────────────────
 
+def check_swap_activation():
+    """meal_swap.execute_swap activating a recipe writes a complete entry and runs
+    intake checks (Oct 2026: it wrote naked entries and skipped run_intake_checks).
+    Fully mocked -- no plan files, metadata, or publish spool touched."""
+    import meal_swap as ms
+    from unittest import mock
+
+    idea = {"status": "idea", "health": "Heart-Healthy", "source": "Test Kitchen",
+            "source_url": "https://example.com/miso", "title_en": None, "notes": "keep me",
+            "time": "25 minutes", "ingredients_raw": ["2 lb chicken thighs", "1/2 cup miso"],
+            "instructions": ["Marinate the chicken 24 hours.", "Roast at 425F."]}
+    store = {"recipes": {"Zzz Miso Chicken": dict(idea), "Old Dinner": {"status": "active"}}}
+    saved, published = [], []
+
+    def fake_checks(title, entry, url="", name=""):
+        entry["time"] += " plus 24 hours marinating"
+        entry["advance_prep_hours"] = 24.0
+        return [Path("Miso_Sauce.md")]
+
+    patches = [
+        mock.patch.object(ms, "_parse_day_to_date", return_value=date(2026, 10, 27)),
+        mock.patch.object(ms, "_find_week_files", return_value=(Path("/x/plan.json"), Path("/x/s.csv"))),
+        mock.patch.object(ms, "_load_metadata", side_effect=lambda: json.loads(json.dumps(store))),
+        mock.patch.object(ms, "_save_metadata", side_effect=lambda d: saved.append(json.loads(json.dumps(d)))),
+        mock.patch.object(ms, "_create_recipe_md", return_value=Path("/x/r.md")),
+        mock.patch.object(ms, "run_intake_checks", side_effect=fake_checks),
+        mock.patch.object(ms, "request_publish", side_effect=lambda r, c=(): published.append(([Path(x).name for x in r], [Path(x).name for x in c]))),
+        mock.patch.object(ms, "request_gui_launch"),
+    ] + [mock.patch.object(ms, f) for f in ("_update_shopping_csv", "_update_meal_plan_json",
+                                              "_recompute_balance", "_update_reminder_line",
+                                              "_log_swap_to_feedback")]
+    for pt in patches:
+        pt.start()
+    try:
+        bad = ms.execute_swap("Tue 10/27", "Old Dinner",
+                              incoming_content={"title": "Zzz Stub", "ingredients": ["1 egg"], "instructions": []})
+        check("swap: content without instructions refused", not bad["success"] and not saved, str(bad))
+
+        res = ms.execute_swap("Tue 10/27", "Old Dinner", incoming_name="Zzz Miso Chicken")
+        check("swap: idea activates from its stored content", res["success"], str(res))
+        e = saved[0]["recipes"]["Zzz Miso Chicken"] if saved else {}
+        check("swap: entry has ingredients_raw + instructions",
+              e.get("ingredients_raw") == idea["ingredients_raw"] and e.get("instructions") == idea["instructions"], str(e))
+        check("swap: intake checks applied", e.get("advance_prep_hours") == 24.0
+              and e.get("time") == "25 minutes plus 24 hours marinating", str(e))
+        check("swap: idea fields preserved", e.get("notes") == "keep me"
+              and e.get("source_url") == "https://example.com/miso" and e.get("status") == "active", str(e))
+        check("swap: meal_type from active time", e.get("meal_type") == "Weeknight", str(e))
+        check("swap: condiment md published", published == [(["Zzz_Miso_Chicken.md"], ["Miso_Sauce.md"])], str(published))
+    finally:
+        for pt in patches:
+            pt.stop()
+
+
+def check_test_mode_refresh():
+    """set_test_mode re-copies production metadata on off->on, keeps it on on->on."""
+    copy = srv._TEST_DIR / "recipe_metadata_test.json"
+    raw = json.loads(copy.read_text())
+    raw["recipes"]["Zzz Stale Marker"] = {"status": "active"}
+    copy.write_text(json.dumps(raw))
+    srv.set_test_mode(True)
+    check("test mode: re-enable while on keeps test copy",
+          "Zzz Stale Marker" in json.loads(copy.read_text())["recipes"])
+    srv.set_test_mode(False)
+    srv.set_test_mode(True)
+    fresh = json.loads(copy.read_text())["recipes"]
+    prod = json.loads(srv.METADATA_PATH.read_text())["recipes"]
+    check("test mode: off->on re-copies production metadata",
+          "Zzz Stale Marker" not in fresh and len(fresh) == len(prod), f"{len(fresh)} vs {len(prod)}")
+
+
+def check_lunch_test_mode():
+    """add_lunch_recipe_url writes the test copy in test mode, not production."""
+    from unittest import mock
+    html = "<html><body><h1>Zzz Test Lunch Bowl</h1><p>Mix it.</p></body></html>"
+    resp = mock.Mock(text=html, raise_for_status=lambda: None)
+    with mock.patch.object(srv.httpx, "get", return_value=resp), \
+         mock.patch.object(srv, "RECIPES_DIR", srv._TEST_DIR):
+        res = srv.add_lunch_recipe_url("https://example.com/zzz-lunch")
+    check("lunch intake ok in test mode", res.get("ok"), str(res))
+    check("lunch intake: entry in test copy", "Zzz Test Lunch Bowl" in srv._load_metadata())
+    check("lunch intake: production metadata untouched",
+          "Zzz Test Lunch Bowl" not in json.loads(srv.METADATA_PATH.read_text())["recipes"])
+    (srv._TEST_DIR / "Zzz_Test_Lunch_Bowl.md").unlink(missing_ok=True)
+
+
 def run(week_start_str: str, keep: bool) -> int:
     print(f"\nWorkflow testbed — targeting week {week_start_str}\n")
 
@@ -314,6 +400,9 @@ def run(week_start_str: str, keep: bool) -> int:
     check_partner_classify_and_chmod()
     check_intake_checks()
     check_github_sync()
+    check_swap_activation()
+    check_test_mode_refresh()
+    check_lunch_test_mode()
 
     # Weekday-safe only: swap_meal excludes "weekend" meal_type candidates
     # before step 1b ever runs when swap_day isn't Sat/Sun, so a target with
