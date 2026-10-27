@@ -25,9 +25,7 @@ Tools:
 """
 # ruff: noqa: E402  -- imports below need MENUBUILDER_DIR on sys.path first
 
-import csv
 import difflib
-import io
 import json
 import os
 import random
@@ -56,7 +54,11 @@ from candidate_scoring import (
 )
 from github_sync import request_publish
 from gui_launch import request_gui_launch
-from intake_checks import buy_ahead_days, condiment_links, day_before_note, is_quick_blocked, run_intake_checks
+from intake_checks import condiment_links, day_before_note, is_quick_blocked, run_intake_checks
+from plan_utils import (
+    add_day_before_reminders, build_shopping_csv, canonical_ing, day_date_map, day_meals,
+    display_ing, find_recipe_key,
+)
 
 # ---------------------------------------------------------------------------
 # Config and paths
@@ -246,11 +248,7 @@ def _chmod_shared(path) -> None:
         pass
 
 
-def _day_meals(val) -> list:
-    """Normalize a selected_meals day value to a list of recipe name strings."""
-    if isinstance(val, list):
-        return [str(v) for v in val if v]
-    return [str(val)] if val else []
+_day_meals = day_meals
 
 
 _HEALTH_ORDER = {"Heart-Healthy": 0, "Moderate": 1, "Indulgent": 2}
@@ -262,23 +260,7 @@ def _combined_health(healths: list) -> str:
     return max(ranked, key=lambda h: _HEALTH_ORDER[h]) if ranked else (healths[0] if healths else "Moderate")
 
 
-def _find_recipe_key(name: str, recipes: dict) -> Optional[str]:
-    name_lower = name.lower()
-    for key in recipes:
-        if key.lower() == name_lower:
-            return key
-    for key in recipes:
-        # Deduplicate words so repeated tokens (e.g. "Chicken ... Chicken") don't double-count
-        words = {w for w in key.lower().split() if len(w) > 4}
-        if len(words) >= 2 and sum(1 for w in words if w in name_lower) >= 2:
-            return key
-    # Substring match: plan title may be a shortened form of the full metadata key
-    # (e.g. "Pasta e Ceci" stored as "Pasta e ceci (Pasta and Chickpeas)")
-    if len(name_lower) > 8:
-        for key in recipes:
-            if name_lower in key.lower() or key.lower().startswith(name_lower):
-                return key
-    return None
+_find_recipe_key = find_recipe_key
 
 
 def _find_recipe_best_match(name: str, recipes: dict) -> Optional[tuple]:
@@ -639,11 +621,7 @@ def _get_week_start() -> date:
     return today + timedelta(days=days_ahead)
 
 
-def _day_date_map(week_start: date) -> dict:
-    m = {"Sun": week_start - timedelta(days=1)}
-    for i, day in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]):
-        m[day] = week_start + timedelta(days=i)
-    return m
+_day_date_map = day_date_map
 
 
 # ---------------------------------------------------------------------------
@@ -1692,6 +1670,25 @@ def _parse_duration(iso: str) -> str:
     return " ".join(parts)
 
 
+def _is_atk_url(url: str) -> bool:
+    return (urlparse(url).hostname or "").endswith("americastestkitchen.com")
+
+
+def _fetch_atk_recipe(url: str) -> Optional[dict]:
+    """Authenticated ATK fetch via atk_agent (re-logs in when its cookies are
+    stale). None on any failure -- callers fall back to the public page."""
+    try:
+        import atk_agent
+        cfg, cookies = atk_agent._ensure_auth(atk_agent._load_config())
+        r = atk_agent._fetch_recipe(atk_agent._make_client(cookies), url)
+    except Exception as e:
+        print(f"[atk] fetch failed for {url}: {e}", file=sys.stderr)
+        return None
+    if not r or not r.get("ingredients") or not r.get("instructions"):
+        return None
+    return r
+
+
 def _fetch_recipe_data(url: str) -> Optional[dict]:
     """Fetch ld+json Recipe schema from URL. Returns structured dict or None."""
     try:
@@ -1812,23 +1809,7 @@ def _try_auto_activate(name: str, recipes: dict) -> bool:
 # Plan JSON generation
 # ---------------------------------------------------------------------------
 
-def _add_day_before_reminders(meals_info: list, recipes: dict) -> None:
-    """Put "Start X tonight (needs 24 hours marinating)" on the day *before* any
-    meal with a long required wait -- the LLM reminder for X's own day is too late
-    (Miso Chicken, Oct 2026). Deterministic, so it can't be dropped or misplaced."""
-    by_day = {m["day"]: m for m in meals_info}
-    for m in meals_info:
-        for title in m["title"].split(" + "):
-            key = _find_recipe_key(title, recipes)
-            note = day_before_note(title, recipes[key]) if key else ""
-            if not note:
-                continue
-            idx = DAYS_ORDER.index(m["day"])
-            prev = by_day.get(DAYS_ORDER[idx - 1]) if idx > 0 else None
-            if prev is not None:
-                prev["reminder"] = f"{note}. {prev['reminder']}".strip()
-            else:  # first night of the plan -- nothing earlier to hang it on
-                m["reminder"] = f"Needs a head start: {note[len('Start '):]}. {m['reminder']}".strip()
+_add_day_before_reminders = add_day_before_reminders
 
 
 def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> dict:
@@ -1964,136 +1945,11 @@ def _plan_summary_text(data: dict) -> str:
 # Shopping CSV generation
 # ---------------------------------------------------------------------------
 
-# Canonical ingredient aliases — normalizes pantry staples before deduplication
-_ING_ALIASES: dict[str, str] = {
-    # Olive oil variants
-    "extra-virgin olive oil":   "olive oil",
-    "extra virgin olive oil":   "olive oil",
-    # Salt variants
-    "table salt":               "salt",
-    "kosher salt":              "salt",
-    "kosher or sea salt":       "salt",
-    "fine salt":                "salt",
-    "sea salt":                 "salt",
-    "fleur de sel":             "salt",
-    "flaky salt":               "salt",
-    # Pepper variants
-    "black pepper":             "pepper",
-    "ground black pepper":      "pepper",
-    "freshly ground pepper":    "pepper",
-    "freshly ground black pepper": "pepper",
-    "cracked black pepper":     "pepper",
-    "white pepper":             "pepper",
-    "ground white pepper":      "pepper",
-    # Garlic variants
-    "garlic clove":             "garlic",
-    "garlic cloves":            "garlic",
-    "minced garlic":            "garlic",
-    # Ginger variants (fresh only — "ground ginger" is a dried spice, not aliased)
-    "fresh ginger":             "ginger",
-    "ginger root":              "ginger",
-    "minced ginger":            "ginger",
-    # Neutral oil variants
-    "vegetable oil":            "neutral oil",
-    "canola oil":               "neutral oil",
-    "peanut oil":               "neutral oil",
-    "grapeseed oil":            "neutral oil",
-    "sunflower oil":            "neutral oil",
-    "corn oil":                 "neutral oil",
-    "oil":                      "neutral oil",
-    # Chicken broth variants
-    "chicken stock":            "chicken broth",
-    "chicken bouillon":         "chicken broth",
-    "low sodium chicken stock": "chicken broth",
-    "low-sodium chicken stock": "chicken broth",
-    "low sodium chicken broth": "chicken broth",
-    "low-sodium chicken broth": "chicken broth",
-    # Vegetable broth variants
-    "vegetable stock":          "vegetable broth",
-    "low sodium vegetable broth": "vegetable broth",
-    "low-sodium vegetable broth": "vegetable broth",
-    # Soy sauce variants
-    "low sodium soy sauce":     "soy sauce",
-    "low-sodium soy sauce":     "soy sauce",
-    "tamari soy sauce":         "soy sauce",
-    # Rice vinegar variants
-    "natural rice vinegar":     "rice vinegar",
-    "unseasoned rice vinegar":  "rice vinegar",
-    "seasoned rice vinegar":    "rice vinegar",
-    # Scallion / green onion variants
-    "scallion":                 "green onions",
-    "scallions":                "green onions",
-    "green onion":              "green onions",
-    # Cilantro variants
-    "fresh cilantro":           "cilantro",
-    "chopped cilantro":         "cilantro",
-    "cilantro leaves":          "cilantro",
-    # Parsley variants
-    "fresh parsley":            "parsley",
-    "chopped parsley":          "parsley",
-    "flat-leaf parsley":        "parsley",
-    "italian parsley":          "parsley",
-    "fresh flat-leaf parsley":  "parsley",
-    # Butter variants
-    "unsalted butter":          "butter",
-    "salted butter":            "butter",
-    # Heavy cream variants
-    "heavy whipping cream":     "heavy cream",
-    "whipping cream":           "heavy cream",
-    # Lemon juice variants
-    "fresh lemon juice":        "lemon juice",
-    "freshly squeezed lemon juice": "lemon juice",
-    # Lime juice variants
-    "fresh lime juice":         "lime juice",
-    "freshly squeezed lime juice": "lime juice",
-    # Flour variants
-    "unbleached all-purpose flour": "all-purpose flour",
-    "unbleached flour":         "all-purpose flour",
-    "plain flour":              "all-purpose flour",
-    # Onion variants
-    "yellow onion":             "onion",
-    "white onion":              "onion",
-    "diced onion":              "onion",
-    "chopped onion":            "onion",
-    "chopped white onion":      "onion",
-    "chopped yellow onion":     "onion",
-    "medium onion":             "onion",
-    # Red onion variants
-    "red onion":                "red onions",
-    # Chicken thigh variants
-    "boneless, skinless chicken thighs":             "boneless skinless chicken thighs",
-    "boneless skinless chicken thighs or breast cutlets": "boneless skinless chicken thighs",
-    "boneless skinless chicken breast or thighs":   "boneless skinless chicken thighs",
-    "chicken thighs boneless skinless":             "boneless skinless chicken thighs",
-    "skinless boneless chicken thighs":             "boneless skinless chicken thighs",
-    # Chicken breast variants
-    "boneless, skinless chicken breasts":           "boneless skinless chicken breasts",
-    "boneless skinless chicken breast":             "boneless skinless chicken breasts",
-    # Mint variants (fresh only — "dried mint" is distinct, don't merge)
-    "fresh mint":               "mint",
-    "mint leaves":              "mint",
-    # Basil variants (fresh only — dried basil is distinct)
-    "fresh basil":              "basil",
-    "basil leaves":             "basil",
-    # NOTE: fresh thyme/rosemary intentionally NOT aliased to "thyme"/"rosemary"
-    # because "dried thyme" and "dried rosemary" are different shopping items.
-    # NOTE: cumin seeds, coriander seeds, ground ginger intentionally NOT aliased
-    # to ground cumin / coriander / ginger — different products.
-    # NOTE: plain "chopped tomatoes" intentionally NOT aliased — could be fresh or canned.
-    # Only explicitly-canned variants are merged.
-    "canned diced tomatoes":    "diced tomatoes",
-    "canned chopped tomatoes":  "diced tomatoes",
-}
 
-def _canonical_ing(name: str) -> str:
-    lower = name.lower().strip()
-    return _ING_ALIASES.get(lower, lower)
+_canonical_ing = canonical_ing
 
 
-def _display_ing(name: str) -> str:
-    """Return canonical alias if one exists, else the original name (preserves case)."""
-    lower = name.lower().strip()
-    return _ING_ALIASES.get(lower, name)
+_display_ing = display_ing
 
 
 def _condiment_ingredients(name: str) -> list[dict]:
@@ -2106,113 +1962,12 @@ def _condiment_ingredients(name: str) -> list[dict]:
 
 
 def _build_shopping_csv(selected: dict, week_start: date) -> str:
-    """
-    Generate shopping CSV content, aggregating duplicate ingredients across recipes.
-    Format: Item, Notes (qty + meal context), Date (earliest date needed as YYYY-MM-DD)
-
-    Ingredient fallback order per CLAUDE.md:
-      1. structured `ingredients` array
-      2. `ingredients_raw` strings
-      3. no ingredients → skip recipe
-    """
-    recipes = _load_metadata()
-    day_to_date = _day_date_map(week_start)
-
-    # Collect all occurrences: (canonical_key, display_name, qty_unit, meal_label, date_str)
-    occurrences: list[tuple] = []
-
-    def _add_structured(ing_list, meal_label, date_str):
-        for ing in ing_list:
-            ing_name = str(ing.get("name", "")).strip()
-            if not ing_name:
-                continue
-            if _GARDEN_HERBS and any(herb in ing_name.lower() for herb in _GARDEN_HERBS):
-                continue
-            qty  = str(ing.get("quantity", "")).strip()
-            unit = str(ing.get("unit", "")).strip()
-            qty_unit = f"{qty} {unit}".strip()
-            occurrences.append((_canonical_ing(ing_name), _display_ing(ing_name), qty_unit, meal_label, date_str))
-
-    def _add_raw(raw_list, meal_label, date_str):
-        for raw in raw_list:
-            raw = str(raw).strip()
-            if raw and not (_GARDEN_HERBS and any(herb in raw.lower() for herb in _GARDEN_HERBS)):
-                occurrences.append((_canonical_ing(raw), _display_ing(raw), "", meal_label, date_str))
-
-    for day in DAYS_ORDER:
-        if day not in selected:
-            continue
-        cook_date = day_to_date.get(day)
-        if not cook_date:
-            continue
-        for name in _day_meals(selected[day]):
-            key = _find_recipe_key(name, recipes)
-            if not key:
-                continue
-            # A 24h marinade means the ingredients are needed the day before.
-            date_str = (cook_date - timedelta(days=buy_ahead_days(recipes[key]))).isoformat()
-            structured = recipes[key].get("ingredients", [])
-            if structured:
-                _add_structured(structured, name, date_str)
-            else:
-                _add_raw(recipes[key].get("ingredients_raw", []), name, date_str)
-            for cdep in recipes[key].get("condiment_deps", []):
-                cing = _condiment_ingredients(cdep)
-                if cing:
-                    _add_structured(cing, f"{cdep} (for {name})", date_str)
-
-    # Append lunch ingredients if Partner has picked THIS week (set within 7 days of week_start)
-    if LUNCH_STATE_FILE.exists():
-        try:
-            lunch = json.loads(LUNCH_STATE_FILE.read_text())
-            pick = lunch.get("current_pick")
-            set_date_str = lunch.get("set_date", "")
-            cutoff = (week_start - timedelta(days=7)).isoformat()
-            if pick and lunch.get("status") == "selected" and set_date_str >= cutoff:
-                key = _find_recipe_key(pick, recipes)
-                if key:
-                    sat_date = (week_start - timedelta(days=2)).isoformat()
-                    structured = recipes[key].get("ingredients", [])
-                    if structured:
-                        _add_structured(structured, "Partner's lunch", sat_date)
-                    else:
-                        _add_raw(recipes[key].get("ingredients_raw", []), "Partner's lunch", sat_date)
-        except Exception:
-            pass
-
-    # Aggregate: group by canonical key, earliest date wins
-    grouped: dict[str, dict] = {}
-    for canon, display, qty_unit, meal_label, date_str in occurrences:
-        if canon not in grouped:
-            grouped[canon] = {"display": display, "date": date_str, "parts": []}
-        elif date_str < grouped[canon]["date"]:
-            grouped[canon]["date"] = date_str
-        grouped[canon]["parts"].append((qty_unit, meal_label))
-
-    # Build final rows
-    rows = []
-    for canon, g in grouped.items():
-        parts = g["parts"]
-        if len(parts) == 1:
-            qty_unit, meal_label = parts[0]
-            notes = f"{qty_unit} | {meal_label}".strip(" |") if qty_unit else meal_label
-        else:
-            note_parts = []
-            seen: set = set()
-            for qty_unit, meal_label in parts:
-                short = meal_label.split(" with ")[0][:28]
-                entry = f"{qty_unit} ({short})" if qty_unit else short
-                if entry not in seen:
-                    note_parts.append(entry)
-                    seen.add(entry)
-            notes = " + ".join(note_parts)
-        rows.append({"Item": g["display"], "Notes": notes, "Date": g["date"]})
-
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=["Item", "Notes", "Date"])
-    writer.writeheader()
-    writer.writerows(rows)
-    return buf.getvalue()
+    """Shopping CSV for a week's selections -- see plan_utils.build_shopping_csv,
+    shared with meal_swap.py so post-finalize swaps rebuild it the same way."""
+    return build_shopping_csv(selected, week_start, _load_metadata(),
+                              condiment_ingredients=_condiment_ingredients,
+                              lunch_state_file=LUNCH_STATE_FILE,
+                              garden_herbs=_GARDEN_HERBS)
 
 
 # ---------------------------------------------------------------------------
@@ -2839,6 +2594,14 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
     activity = _load_activity()
     if activity.get("state") == "idle":
         return {"error": "No active workflow. Call start_menu_workflow first."}
+    # Only selected_meals changes here -- once the plan is finalized, the plan
+    # file, shopping CSV and calendar are what people use, and this would report
+    # success while leaving them stale (Oct 27 2026).
+    if activity.get("state") == "complete":
+        return {"error": "plan_finalized",
+                "message": "This week's plan is already finalized. Use the post-finalize "
+                           "swap (meal_swap.execute_swap, or reorder_days to switch two "
+                           "planned days) so the plan, shopping list and calendar update."}
 
     selected = dict(activity.get("selected_meals", {}))
     outgoing = selected.get(day)
@@ -2874,7 +2637,10 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
 
     all_recipes = _load_metadata()
 
-    if replacement and not _find_recipe_key(replacement, all_recipes):
+    if replacement and _find_recipe_key(replacement, all_recipes):
+        # Store the collection's own name, not whatever the caller typed.
+        replacement = _find_recipe_key(replacement, all_recipes)
+    elif replacement:
         match = _find_recipe_best_match(replacement, all_recipes)
         if match:
             return {
@@ -2884,7 +2650,9 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 "day": day,
                 "outgoing_recipe": outgoing,
             }
-        return {"error": f"Recipe '{replacement}' not found. Please check the name and try again."}
+        return {"error": f"Recipe '{replacement}' not found. Please check the name and try again. "
+                         "If you have the recipe's URL, call process_recipe_url(url, day) -- it adds "
+                         "the recipe and swaps it in."}
 
     if not replacement:
         # Check if reason names a specific recipe (e.g. "swap to Pasta e Ceci")
@@ -3302,8 +3070,9 @@ def _process_recipe_url_core(url: str, day: str = "", force_add: bool = False) -
     a caller round-trip."""
     recipes = _load_metadata()
 
-    # 1. Lightweight fetch for title (used in similarity check)
-    fetched_data = _fetch_recipe_data(url)
+    # 1. Lightweight fetch for title (used in similarity check). ATK hides
+    # instructions behind its paywall, so use the ATK agent's logged-in fetch.
+    fetched_data = (_fetch_atk_recipe(url) if _is_atk_url(url) else None) or _fetch_recipe_data(url)
     title_guess = fetched_data.get("title", "") if fetched_data else ""
 
     # 2. Similarity check (unless force_add)
@@ -3338,8 +3107,13 @@ def _process_recipe_url_core(url: str, day: str = "", force_add: bool = False) -
 
     title = add_result["title"]
 
-    # 4. Swap into plan if day provided
+    # 4. Swap into plan if day provided -- planning only. Once finalized, the
+    # plan file/CSV/calendar need the post-finalize swap, not selected_meals.
     swap_result: dict = {}
+    if day and _load_activity().get("state") == "complete":
+        swap_result = {"note": (f"Plan is finalized -- '{title}' was added but not swapped in. "
+                                f"Use the post-finalize swap (meal_swap.execute_swap) for {day}.")}
+        day = ""
     if day:
         activity = _load_activity()
         selected = dict(activity.get("selected_meals", {}))

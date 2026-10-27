@@ -16,15 +16,13 @@ Usage:
 """
 
 import argparse
-import csv
 import json
 import os
 import re
 import sys
 from datetime import date, timedelta
-from io import StringIO
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import httpx
 from bs4 import BeautifulSoup
@@ -32,6 +30,7 @@ from bs4 import BeautifulSoup
 from github_sync import request_publish
 from gui_launch import request_gui_launch
 from intake_checks import condiment_links, run_intake_checks
+from plan_utils import add_day_before_reminders, build_shopping_csv, load_condiment_ingredients
 
 
 def _chmod_shared(path) -> None:
@@ -292,31 +291,42 @@ def _update_meal_plan_json(plan_path: Path, day_str: str, outgoing: str,
             meal["time"] = time_str
             meal["health"] = health
             meal["url"] = url
+            meal["urls"] = [url]
             break
     plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
     _chmod_shared(plan_path)
 
 
-def _update_shopping_csv(csv_path: Path, outgoing: str,
-                          incoming: str, ingredients: List[dict],
-                          target_date: date) -> None:
-    rows = list(csv.DictReader(csv_path.read_text().splitlines()))
-    kept = [r for r in rows if outgoing.lower() not in r.get("Notes", "").lower()]
-
-    date_str = target_date.isoformat()
-    for ing in ingredients:
-        qty = ing.get("quantity", "")
-        unit = ing.get("unit", "")
-        qty_str = f"{qty} {unit}".strip() if qty or unit else ""
-        notes = f"{qty_str} | {incoming}" if qty_str else incoming
-        kept.append({"Item": ing["name"], "Notes": notes, "Date": date_str})
-
-    out = StringIO()
-    writer = csv.DictWriter(out, fieldnames=["Item", "Notes", "Date"])
-    writer.writeheader()
-    writer.writerows(kept)
-    csv_path.write_text(out.getvalue())
+def _rebuild_shopping_csv(plan_path: Path, csv_path: Path, recipes: dict) -> None:
+    """Regenerate the week's shopping CSV from the plan file with the same builder
+    finalize uses. Editing rows in place dropped whole aggregated rows that named
+    the outgoing recipe ("garlic, 4 (Salmon) + 3 (Miso Chicken)") and couldn't
+    redate a day-before marinade (Oct 27 2026)."""
+    plan = json.loads(plan_path.read_text())
+    selected = {m["day"]: m["title"].split(" + ") for m in plan.get("meals", []) if m.get("title")}
+    week_monday = date.fromisoformat(plan_path.stem.split("_", 1)[1])
+    cfg = _cfg()
+    content = build_shopping_csv(
+        selected, week_monday, recipes,
+        condiment_ingredients=load_condiment_ingredients(_metadata_path().parent / "condiments.json"),
+        lunch_state_file=Path(cfg["state_dir"]) / "lunch_state.json",
+        garden_herbs=frozenset(h.lower() for h in cfg.get("garden_herbs", [])),
+    )
+    csv_path.write_text(content)
     _chmod_shared(csv_path)
+
+
+def _refresh_day_before_notes(plan_path: Path, recipes: dict) -> None:
+    """Re-place "Start X tonight (needs ...)" notes after meals move between days."""
+    data = json.loads(plan_path.read_text())
+    meals = data.get("meals", [])
+    for m in meals:
+        r = m.get("reminder", "")
+        r = re.sub(r"Start [^.]*? tonight \(needs [^)]*\)\.\s*", "", r)
+        m["reminder"] = re.sub(r"Needs a head start: [^.]*?\(needs [^)]*\)\.\s*", "", r).strip()
+    add_day_before_reminders(meals, recipes)
+    plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    _chmod_shared(plan_path)
 
 
 def _log_swap_to_feedback(outgoing: str, incoming: str, target_date: date) -> None:
@@ -350,15 +360,12 @@ def _recompute_balance(plan_path: Path) -> None:
 
 
 def _suggest_start_time(time_str: str) -> str:
-    """Subtract cook time from 6:30 PM dinner target to get a suggested start time."""
-    total_min = 0
-    h = re.search(r"(\d+)\s*h", time_str, re.IGNORECASE)
-    m = re.search(r"(\d+)\s*m", time_str, re.IGNORECASE)
-    if h:
-        total_min += int(h.group(1)) * 60
-    if m:
-        total_min += int(m.group(1))
-    if not total_min:
+    """Subtract active cook time from 6:30 PM dinner target to get a suggested start
+    time. Active only -- "25 minutes plus 24 hours marinating" used to come out
+    as "start by 12:00 AM"."""
+    from candidate_scoring import parse_minutes
+    total_min = parse_minutes(time_str)
+    if total_min == 999:
         return "6:00 PM"
     start_min = 18 * 60 + 30 - total_min  # 6:30 PM in minutes from midnight
     hour, minute = divmod(max(start_min, 0), 60)
@@ -438,10 +445,7 @@ def execute_swap(
                 "title": canonical_name,
                 "time": entry.get("time", ""),
                 "servings": entry.get("servings", ""),
-                "ingredients": [
-                    f"{i.get('quantity','')} {i.get('unit','')} {i['name']}".strip()
-                    for i in entry.get("ingredients", [])
-                ],
+                "ingredients": list(entry.get("ingredients_raw", [])),
                 "instructions": [],
                 "cuisine": entry.get("cuisine", ""),
             }
@@ -490,6 +494,14 @@ def execute_swap(
 
     if not recipe_data:
         return {"success": False, "message": "Could not resolve incoming recipe"}
+
+    day_abbrev = day.split()[0]
+    for meal in json.loads(plan_path.read_text()).get("meals", []):
+        if meal.get("day") != day_abbrev and (recipe_data.get("title") or canonical_name or "").lower() in (
+                t.lower() for t in meal.get("title", "").split(" + ")):
+            return {"success": False, "message": "already_planned",
+                    "detail": f"{meal['title']} is already on {meal['day']}. To switch two "
+                              f"nights, use reorder_days('{day_abbrev}', '{meal['day']}')."}
 
     title = recipe_data.get("title") or canonical_name or "Unknown Recipe"
     canonical_name = canonical_name or title
@@ -570,10 +582,11 @@ def execute_swap(
         _save_metadata(data)
 
     # --- Update files ---
-    _update_shopping_csv(csv_path, outgoing_recipe, canonical_name, parsed_ingredients, target)
     _update_meal_plan_json(plan_path, day, outgoing_recipe, canonical_name, time_str, health, recipe_url)
     _recompute_balance(plan_path)
     _update_reminder_line(plan_path, day, canonical_name, time_str)
+    _refresh_day_before_notes(plan_path, recipes)
+    _rebuild_shopping_csv(plan_path, csv_path, recipes)
     _log_swap_to_feedback(outgoing_recipe, canonical_name, target)
 
     # --- Re-run apps (opened from davidallison's own GUI session via
@@ -586,6 +599,45 @@ def execute_swap(
         "message": f"Swapped {outgoing_recipe} → {canonical_name} on {day}.",
         "incoming_recipe": canonical_name,
         "url": recipe_url,
+    }
+
+
+def reorder_days(day_a: str, day_b: str) -> dict:
+    """Switch the dinners on two planned days, e.g. "Tue 10/27", "Wed 10/28" when a marinade
+    didn't get started. Both meals are still cooked, so unlike execute_swap there's
+    no decline cooldown and no "skipped" feedback. Two execute_swap calls did all
+    of that, and lost shopping rows besides (Oct 27 2026)."""
+    target_a, target_b = _parse_day_to_date(day_a), _parse_day_to_date(day_b)
+    if not target_a or not target_b:
+        return {"success": False, "message": f"Could not parse days: {day_a!r}, {day_b!r}"}
+    plan_path, csv_path = _find_week_files(target_a)
+    if not plan_path or _find_week_files(target_b)[0] != plan_path:
+        return {"success": False, "message": f"{day_a} and {day_b} aren't in the same planned week"}
+
+    data = json.loads(plan_path.read_text())
+    by_day = {m.get("day"): m for m in data.get("meals", [])}
+    a, b = by_day.get(day_a.split()[0]), by_day.get(day_b.split()[0])
+    if not a or not b or a is b:
+        return {"success": False, "message": f"Need two different planned days, got {day_a!r}, {day_b!r}"}
+    for k in ("title", "health", "time", "url", "urls"):
+        a[k], b[k] = b.get(k), a.get(k)
+    for m in (a, b):
+        m["reminder"] = (f"Start {m['title']} around {_suggest_start_time(m.get('time', ''))} "
+                         f"for a 6:30 PM dinner.")
+    plan_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    _chmod_shared(plan_path)
+
+    recipes = _load_metadata().get("recipes", {})
+    _refresh_day_before_notes(plan_path, recipes)
+    if csv_path:
+        _rebuild_shopping_csv(plan_path, csv_path, recipes)  # day-before dates move with the meals
+    # Calendar only -- the Grocery list holds items David is deliberately
+    # leaving for later in the week, and nothing on it changes but dates.
+    request_gui_launch(["WeeklyMealCalendar.app"])
+    return {
+        "success": True,
+        "message": f"Switched: {a['day']} is now {a['title']}, {b['day']} is now {b['title']}.",
+        "days": {a["day"]: a["title"], b["day"]: b["title"]},
     }
 
 

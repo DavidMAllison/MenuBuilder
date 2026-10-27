@@ -282,18 +282,21 @@ def check_swap_activation():
         entry["advance_prep_hours"] = 24.0
         return [Path("Miso_Sauce.md")]
 
+    import tempfile
+    plan_file = Path(tempfile.mkdtemp()) / "mealplan_2026-10-26.json"
+    plan_file.write_text(json.dumps({"meals": [{"day": "Tue", "title": "Old Dinner"}]}))
     patches = [
         mock.patch.object(ms, "_parse_day_to_date", return_value=date(2026, 10, 27)),
-        mock.patch.object(ms, "_find_week_files", return_value=(Path("/x/plan.json"), Path("/x/s.csv"))),
+        mock.patch.object(ms, "_find_week_files", return_value=(plan_file, Path("/x/s.csv"))),
         mock.patch.object(ms, "_load_metadata", side_effect=lambda: json.loads(json.dumps(store))),
         mock.patch.object(ms, "_save_metadata", side_effect=lambda d: saved.append(json.loads(json.dumps(d)))),
         mock.patch.object(ms, "_create_recipe_md", return_value=Path("/x/r.md")),
         mock.patch.object(ms, "run_intake_checks", side_effect=fake_checks),
         mock.patch.object(ms, "request_publish", side_effect=lambda r, c=(): published.append(([Path(x).name for x in r], [Path(x).name for x in c]))),
         mock.patch.object(ms, "request_gui_launch"),
-    ] + [mock.patch.object(ms, f) for f in ("_update_shopping_csv", "_update_meal_plan_json",
+    ] + [mock.patch.object(ms, f) for f in ("_rebuild_shopping_csv", "_update_meal_plan_json",
                                               "_recompute_balance", "_update_reminder_line",
-                                              "_log_swap_to_feedback")]
+                                              "_refresh_day_before_notes", "_log_swap_to_feedback")]
     for pt in patches:
         pt.start()
     try:
@@ -347,6 +350,106 @@ def check_lunch_test_mode():
     check("lunch intake: production metadata untouched",
           "Zzz Test Lunch Bowl" not in json.loads(srv.METADATA_PATH.read_text())["recipes"])
     (srv._TEST_DIR / "Zzz_Test_Lunch_Bowl.md").unlink(missing_ok=True)
+
+
+def check_recipe_lookup():
+    """plan_utils.find_recipe_key: a name not in the collection must not resolve to a
+    lookalike (Oct 2026: Radicchio Salad became Cumin-Cardamom Chicken ... Salad)."""
+    from plan_utils import find_recipe_key as f
+    cumin = "Cumin-Cardamom Spiced Chicken with Parsley and Onion Salad"
+    rad = "Chicken and Radicchio Salad with Caramelized Honey-Tahini Vinaigrette"
+    typed = "Chicken and Radicchio Salad with Caramelized Honey Tahini Vinaigrette"
+    check("lookup: unknown recipe -> None, not a lookalike", f(typed, {cumin: {}}) is None)
+    check("lookup: punctuation-insensitive exact", f(typed, {cumin: {}, rad: {}}) == rad)
+    check("lookup: shared generic words don't match",
+          f("Lemon Garlic Pork Chops", {"Baked Chicken Drumsticks with Lemon and Garlic": {}}) is None)
+    check("lookup: plan annotations ignored",
+          f("Asian Chicken Lettuce Wraps [Heart-Healthy] *NEW*", {"Asian Chicken Lettuce Wraps": {}}) == "Asian Chicken Lettuce Wraps")
+    check("lookup: shortened name with one home resolves",
+          f("Lemon Chicken", {"Easy Skillet Lemon Chicken": {}}) == "Easy Skillet Lemon Chicken")
+    check("lookup: shortened name with two homes -> None",
+          f("Lemon Chicken", {"Easy Skillet Lemon Chicken": {}, "Slow-Cooker Lemon Chicken": {}}) is None)
+
+
+def check_post_finalize_swaps():
+    """reorder_days / execute_swap against real files in a temp week (Oct 27 2026:
+    a Tue/Wed reorder via two execute_swaps lost shopping rows, set decline
+    cooldowns, and said "start by 12:00 AM")."""
+    import csv as _csv
+    import io as _io
+    import tempfile
+    import meal_swap as ms
+    from unittest import mock
+
+    def ing(name, cat="Produce"):
+        return {"name": name, "quantity": "1", "unit": "", "category": cat}
+    recipes = {
+        "Soy Salmon": {"status": "active", "time": "30 minutes", "health": "Heart-Healthy",
+                       "ingredients": [ing("salmon"), ing("garlic")]},
+        "Miso Chicken": {"status": "active", "time": "25 minutes plus 24 hours marinating",
+                         "advance_prep_hours": 24.0, "health": "Moderate",
+                         "ingredients": [ing("chicken thighs"), ing("garlic")]},
+        "Thai Chicken Salad": {"status": "active", "time": "30 minutes", "health": "Heart-Healthy",
+                               "ingredients": [ing("bibb lettuce")]},
+        "Lemon Chicken": {"status": "active", "time": "30 minutes", "health": "Heart-Healthy",
+                          "ingredients": [ing("lemon"), ing("garlic")]},
+    }
+    tmp = Path(tempfile.mkdtemp())
+    plan_path, csv_path = tmp / "mealplan_2026-10-26.json", tmp / "shopping_2026-10-26.csv"
+    meals = [("Mon", "2026-10-26", "Soy Salmon"), ("Tue", "2026-10-27", "Miso Chicken"),
+             ("Wed", "2026-10-28", "Thai Chicken Salad")]
+    plan_path.write_text(json.dumps({"meals": [
+        {"day": d, "date": dt, "title": t, "health": recipes[t]["health"], "time": recipes[t]["time"],
+         "url": f"https://x/{t}", "urls": [f"https://x/{t}"], "reminder": "Practice day."}
+        for d, dt, t in meals]}))
+    csv_path.write_text("Item,Notes,Date\n")
+    saved, launched = [], []
+    store = {"recipes": recipes}
+    patches = [
+        mock.patch.object(ms, "_weeklyplan_dir", return_value=tmp),
+        mock.patch.object(ms, "_metadata_path", return_value=tmp / "recipe_metadata.json"),
+        mock.patch.object(ms, "_load_metadata", side_effect=lambda: json.loads(json.dumps(store))),
+        mock.patch.object(ms, "_save_metadata", side_effect=lambda d: saved.append(d)),
+        mock.patch.object(ms, "request_gui_launch", side_effect=lambda apps: launched.append(apps)),
+        mock.patch.object(ms, "_log_swap_to_feedback"),
+    ]
+    for pt in patches:
+        pt.start()
+    try:
+        def rows():
+            return {r["Item"]: r for r in _csv.DictReader(_io.StringIO(csv_path.read_text()))}
+        res = ms.reorder_days("Tue 10/27", "Wed 10/28")
+        plan = {m["day"]: m for m in json.loads(plan_path.read_text())["meals"]}
+        check("reorder: days switched", res["success"] and plan["Tue"]["title"] == "Thai Chicken Salad"
+              and plan["Wed"]["title"] == "Miso Chicken", str(res))
+        check("reorder: url/urls move with the meal", plan["Wed"]["urls"] == ["https://x/Miso Chicken"], str(plan["Wed"]))
+        check("reorder: no cooldown / metadata write", saved == [], str(saved))
+        check("reorder: marinade note on the night before",
+              "Start Miso Chicken tonight (needs 24 hours marinating)" in plan["Tue"]["reminder"], plan["Tue"]["reminder"])
+        check("reorder: start time from active minutes", "12:00 AM" not in plan["Wed"]["reminder"]
+              and "6:05 PM" in plan["Wed"]["reminder"], plan["Wed"]["reminder"])
+        r = rows()
+        check("reorder: marinade ingredients dated the day before", r["chicken thighs"]["Date"] == "2026-10-27", str(r.get("chicken thighs")))
+        check("reorder: shared row keeps both recipes",
+              "Soy Salmon" in r["garlic"]["Notes"] and "Miso Chicken" in r["garlic"]["Notes"], str(r.get("garlic")))
+        check("reorder: calendar only, not the Grocery list", launched == [["WeeklyMealCalendar.app"]], str(launched))
+
+        dup = ms.execute_swap("Mon 10/26", "Soy Salmon", incoming_name="Thai Chicken Salad")
+        check("swap: recipe already on another night refused", not dup["success"]
+              and dup["message"] == "already_planned", str(dup))
+
+        res = ms.execute_swap("Mon 10/26", "Soy Salmon", incoming_name="Lemon Chicken")
+        plan = {m["day"]: m for m in json.loads(plan_path.read_text())["meals"]}
+        r = rows()
+        check("swap: plan + urls updated", res["success"] and plan["Mon"]["title"] == "Lemon Chicken"
+              and plan["Mon"]["urls"] == [plan["Mon"]["url"]], str(plan["Mon"]))
+        check("swap: shared row survives swapping out one of its recipes",
+              "Miso Chicken" in r["garlic"]["Notes"] and "Lemon Chicken" in r["garlic"]["Notes"]
+              and "Soy Salmon" not in r["garlic"]["Notes"], str(r.get("garlic")))
+        check("swap: outgoing-only rows removed", "salmon" not in r, str(list(r)))
+    finally:
+        for pt in patches:
+            pt.stop()
 
 
 def run(week_start_str: str, keep: bool) -> int:
@@ -403,6 +506,8 @@ def run(week_start_str: str, keep: bool) -> int:
     check_swap_activation()
     check_test_mode_refresh()
     check_lunch_test_mode()
+    check_recipe_lookup()
+    check_post_finalize_swaps()
 
     # Weekday-safe only: swap_meal excludes "weekend" meal_type candidates
     # before step 1b ever runs when swap_day isn't Sat/Sun, so a target with
@@ -436,6 +541,9 @@ def run(week_start_str: str, keep: bool) -> int:
     result = srv.finalize_plan()
     check("finalize_plan returns state=complete",
           result.get("state") == "complete", str(result))
+    blocked = srv.swap_meal(day="Mon", reason="swap it")
+    check("swap_meal refuses once the plan is finalized",
+          blocked.get("error") == "plan_finalized", str(blocked))
 
     plan_path = Path(result.get("plan_path", ""))
     check("plan written to test_output/weeklyplan/",

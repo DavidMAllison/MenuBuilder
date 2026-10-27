@@ -48,7 +48,8 @@ restart_mcp.sh                # Kill stale menu_server.py MCP subprocess(es) so 
 ruff.toml                     # Lint config (pyflakes F + pycodestyle E4/E7/E9)
 requirements.txt              # Pinned dependency versions
 process_feedback_queue.py     # Drain SMS feedback queue into feedback_current.json
-meal_swap.py                  # Mid-week meal swap — all swap logic lives here; a recipe it adds gets a complete entry + intake checks
+meal_swap.py                  # Post-finalize swaps (Keanu calls directly): execute_swap (a recipe it adds gets a complete entry + intake checks; rebuilds the shopping CSV from the plan) and reorder_days (switch two nights, no decline cooldown, calendar-only resync)
+plan_utils.py                 # Shared by the MCP server and meal_swap: find_recipe_key (strict — unknown names return None, not a lookalike), build_shopping_csv, day-before marinade reminders
 send_menu_partner.py          # Send weekly menu to partner for approval via Keanu
 show_inventory.py             # Opens browser with full inventory grouped by category
 recipe_agent.py               # Recipe search orchestrator — single entry point for all agents
@@ -119,7 +120,7 @@ not every tool is listed.
 | `log_meal_feedback` | Records last-week ratings; `"done"` finalizes and advances state |
 | `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week; each candidate carries `url`, plus `selected_meal_urls` so SMS recommendations can put a link after each recipe name |
 | `advance_to_meal_approval` | Writes selected meals into menu_activity.json; bridges local SMS phase to MCP bridge phase |
-| `swap_meal` | Replaces one day's meal (auto-picks or takes explicit name); returns `new_recipe_url` + `selected_meal_urls` |
+| `swap_meal` | Pre-finalize only: replaces one day's meal (auto-picks or takes explicit name, stored under the collection's own name); returns `new_recipe_url` + `selected_meal_urls`. Refuses with `plan_finalized` once the plan is finalized — use meal_swap |
 | `approve_menu` | Sends selected meals to Partner via Keanu for signoff (each recipe name followed by its link); optional `expected_selected_meals` refuses to send if the caller's local mirror has drifted from the actual workflow state |
 | `handle_partner_reply` | Processes Partner's approval or swap request; a recipe URL in her reply is fetched and swapped in directly instead of stranding the workflow; auto-activates idea recipes |
 | `classify_partner_reply` | Side-effect-free intent label for an Partner reply (approve / swap_request / eating_out / swap_plus_approve / unclear) — Keanu gates menu-reply capture on it so an unrelated text doesn't consume the pending approval. URL with no day → unclear |
@@ -132,7 +133,7 @@ not every tool is listed.
 | `set_lunch_pick` | Saves Partner's lunch pick, adds ingredients to the week's shopping CSV |
 | `log_lunch_feedback` | Records post-week lunch feedback (liked/disliked/not_made) |
 | `add_lunch_recipe_url` | Fetches a URL, parses it into a lunch-suitable recipe entry |
-| `process_recipe_url` | Check for a similar existing recipe by URL or fuzzy title, add if new, optionally swap into a plan day; `force_add=true` skips similarity check |
+| `process_recipe_url` | Check for a similar existing recipe by URL or fuzzy title, add if new, optionally swap into a plan day (planning only — not after finalize); `force_add=true` skips similarity check. ATK links use atk_agent's logged-in fetch (paywall) |
 | `process_recipe_image` | Extract a recipe from a photo (cookbook page) via Claude vision and add to the collection; `force_add=true` re-runs with same image after user confirms |
 | `send_partner_recipe_batch` | Picks 5 fresh idea-queue candidates (favoring quick cook times) and builds a text + review link for Keanu to send Partner |
 | `refresh_partner_recipe_queue` | Kicks off all 6 recipe agents in a detached background worker, then texts a fresh batch to `notify_handle` once it finishes |

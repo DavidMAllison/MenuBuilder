@@ -287,7 +287,9 @@ def _html_instructions_fallback(html):
     ):
         li = wrapper.find("li")
         if li:
-            text = li.get_text(strip=True)
+            # Separator keeps bolded quantities from fusing into the words
+            # around them ("Cook½ cup honeyin small saucepan").
+            text = re.sub(r"\s+([,.;:)])", r"\1", li.get_text(" ", strip=True)).replace("( ", "(")
             if text:
                 steps.append(text)
     return steps
