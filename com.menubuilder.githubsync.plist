@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Publishes queued recipe/condiment .md files to the menubuilder-recipes
+  GitHub Pages repo as davidallison (see github_sync.py). Fires when a request
+  lands in publish_requests/, plus every 10 minutes to retry a failed push.
+
+  Install:
+    mkdir -p /Users/Shared/cooking-state/publish_requests
+    chmod 777 /Users/Shared/cooking-state/publish_requests
+    cp com.menubuilder.githubsync.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.menubuilder.githubsync.plist
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.menubuilder.githubsync</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/davidallison/projects/personal/MenuBuilder/.venv/bin/python3</string>
+		<string>-u</string>
+		<string>/Users/davidallison/projects/personal/MenuBuilder/github_sync.py</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/davidallison</string>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>WatchPaths</key>
+	<array>
+		<string>/Users/Shared/cooking-state/publish_requests</string>
+	</array>
+	<key>StartInterval</key>
+	<integer>600</integer>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/davidallison/projects/personal/MenuBuilder</string>
+	<key>StandardOutPath</key>
+	<string>/Users/davidallison/projects/personal/MenuBuilder/github_sync.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/davidallison/projects/personal/MenuBuilder/github_sync.log</string>
+</dict>
+</plist>

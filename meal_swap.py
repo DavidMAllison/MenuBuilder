@@ -29,6 +29,7 @@ from typing import Dict, List, Optional, Tuple
 import httpx
 from bs4 import BeautifulSoup
 
+from github_sync import request_publish
 from gui_launch import request_gui_launch
 
 
@@ -514,6 +515,7 @@ def execute_swap(
         }
         data["recipes"] = recipes
         _save_metadata(data)
+        request_publish([f"{filename}.md"])  # github_sync LaunchAgent pushes as davidallison
 
     # --- Record the decline so the outgoing recipe gets a cooldown before it's
     # suggested again (see DECLINE_COOLDOWN_WEEKS in candidate_scoring.py) ---

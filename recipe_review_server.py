@@ -34,6 +34,7 @@ from fill_menu_ideas import (  # noqa: E402
     translate_title, _build_recipe_md, _title_to_filename, _infer_cooking_method,
     _infer_meal_type, _infer_is_soup, _quality_check, _register_cuisine, RECIPES_DIR,
 )
+import github_sync  # noqa: E402
 from intake_checks import run_intake_checks  # noqa: E402
 from prep_utils import classify_prep  # noqa: E402
 
@@ -42,8 +43,6 @@ app = Flask(__name__, static_folder="recipe_review")
 _CONFIG_PATH = Path(__file__).parent / "config.json"
 _CONFIG = json.loads(_CONFIG_PATH.read_text())
 _GH_PAGES_BASE = _CONFIG.get("github_pages_base_url", "").rstrip("/")
-_GH_REPO_DIR = Path(__file__).parent.parent / "menubuilder-recipes"
-_GENERATE_SCRIPT = Path(__file__).parent / "generate_github_pages_data.py"
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-key-change-me")
 app.permanent_session_lifetime = timedelta(days=30)
 
@@ -436,49 +435,11 @@ def batch_recipes(batch_id):
 
 
 def _sync_recipe_to_github(filename: str, condiment_mds: tuple = ()) -> None:
-    """Copy recipe .md (plus any new condiment .md files it depends on) to the
-    menubuilder-recipes repo, regenerate data, and push.
-
-    Runs in a background thread — errors are logged but do not surface to the caller.
-    """
-    import shutil
+    """Publish a recipe .md (plus any new condiment .md files it depends on) to
+    GitHub Pages. Runs in a background thread; see github_sync.publish()."""
     try:
-        src = RECIPES_DIR / filename
-        dst = _GH_REPO_DIR / filename
-        if not src.exists():
-            print(f"[github-sync] source not found: {src}", flush=True)
-            return
-        shutil.copy2(src, dst)
-        condiment_rel = []
-        for cmd in condiment_mds:
-            rel = f"condiments/{Path(cmd).name}"
-            shutil.copy2(cmd, _GH_REPO_DIR / rel)
-            condiment_rel.append(rel)
-
-        # Regenerate GitHub Pages data
-        result = subprocess.run(
-            [sys.executable, str(_GENERATE_SCRIPT)],
-            capture_output=True, text=True, cwd=str(_GH_REPO_DIR)
-        )
-        if result.returncode != 0:
-            print(f"[github-sync] generate script failed: {result.stderr}", flush=True)
-
-        # Commit and push
-        subprocess.run(["git", "add", filename, "_data/recipes.json", *condiment_rel],
-                       cwd=str(_GH_REPO_DIR), capture_output=True)
-        commit = subprocess.run(
-            ["git", "commit", "-m", f"feat: add {filename} via Review UI"],
-            cwd=str(_GH_REPO_DIR), capture_output=True, text=True
-        )
-        if commit.returncode == 0:
-            push = subprocess.run(["git", "push"], cwd=str(_GH_REPO_DIR),
-                                   capture_output=True, text=True)
-            if push.returncode != 0:
-                print(f"[github-sync] push failed: {push.stderr}", flush=True)
-            else:
-                print(f"[github-sync] pushed {filename}", flush=True)
-        else:
-            print(f"[github-sync] nothing to commit for {filename}", flush=True)
+        github_sync.publish([filename], [Path(c).name for c in condiment_mds],
+                            message=f"feat: add {filename} via Review UI")
     except Exception as e:
         print(f"[github-sync] error: {e}", flush=True)
 

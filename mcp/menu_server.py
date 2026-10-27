@@ -54,6 +54,7 @@ from candidate_scoring import (
     resolve_cuisine, resolve_health, parse_minutes as _parse_minutes,
     protein_label as _get_protein,
 )
+from github_sync import request_publish
 from gui_launch import request_gui_launch
 from intake_checks import buy_ahead_days, is_quick_blocked, run_intake_checks, condiment_links
 
@@ -430,7 +431,7 @@ def _classify_and_write(
         "instructions": fetched_data.get("instructions", []),
         "ingredients_raw": ings_raw,
     }
-    run_intake_checks(title, checks, source_url, source_name)
+    new_condiment_mds = run_intake_checks(title, checks, source_url, source_name)
 
     md_path = _write_recipe_md(title, fetched_data, source_url, source_name, source_credit,
                                condiments=condiment_links(checks))
@@ -466,6 +467,7 @@ def _classify_and_write(
         recipes[title] = entry
         _save_metadata(recipes)
 
+    _publish([md_path.name], new_condiment_mds)
     return {"title": title, "health": health, "time": checks["time"]}
 
 
@@ -1728,6 +1730,18 @@ def _fetch_recipe_data(url: str) -> Optional[dict]:
     return None
 
 
+def _publish(recipes: list = (), condiments: list = ()) -> None:
+    """Queue new/changed .md files for GitHub Pages. The github_sync LaunchAgent
+    does the git work as davidallison -- this process may be Keanu running as
+    allisonbot, which can't write the repo or push. No-op in test mode."""
+    if _TEST_DIR:
+        return
+    try:
+        request_publish(recipes, condiments)
+    except Exception as e:
+        print(f"[publish] couldn't queue {recipes} {condiments}: {e}", file=sys.stderr)
+
+
 def _write_recipe_md(title: str, recipe_data: dict, source_url: str, source_name: str,
                      source_credit: str = "", condiments: Optional[dict] = None) -> Path:
     """Write a recipe .md file to RECIPES_DIR. Returns the path.
@@ -1788,7 +1802,10 @@ def _try_auto_activate(name: str, recipes: dict) -> bool:
     title = recipe_data.get("title") or name
     source_name = entry.get("source", source_url)
     md_path = _write_recipe_md(title, recipe_data, source_url, source_name)
-    return _activate_idea_in_metadata(name, md_path.name, recipe_data, source_url)
+    activated = _activate_idea_in_metadata(name, md_path.name, recipe_data, source_url)
+    if activated:
+        _publish([md_path.name])
+    return activated
 
 
 # ---------------------------------------------------------------------------
@@ -3692,6 +3709,7 @@ def activate_idea_recipe(name: str, content: str = "", source_url: str = "") -> 
             pass  # prep classification is best-effort; don't block activation
 
     _save_metadata(recipes)
+    _publish([filename])
 
     # Update pending_ideas list in activity
     pending = [p for p in activity.get("pending_ideas", []) if p.get("name") != key]
@@ -4488,6 +4506,7 @@ def add_lunch_recipe_url(url: str) -> dict:
             "url":               url,
         }
         METADATA_PATH.write_text(json.dumps(data, indent=2))
+    _publish([filename])
 
     base_url = _CONFIG.get("github_pages_base_url", "https://davidmallison.github.io/menubuilder-recipes")
     gh_url   = f"{base_url.rstrip('/')}/{safe_name}"
@@ -4496,7 +4515,7 @@ def add_lunch_recipe_url(url: str) -> dict:
         "ok":      True,
         "recipe":  title,
         "url":     gh_url,
-        "message": f"Added '{title}' as a lunch recipe. Marked needs_review=true. Run generate_github_pages_data.py + push to publish.",
+        "message": f"Added '{title}' as a lunch recipe. Marked needs_review=true. It will be on the recipe site within a minute or two.",
     }
 
 

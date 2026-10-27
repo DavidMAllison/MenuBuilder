@@ -203,6 +203,39 @@ def check_intake_checks():
     check("shopping: 24h marinade dated the day before", "2026-10-26" in csv and "2026-10-27" not in csv, csv)
 
 
+def check_github_sync():
+    """Publish spool: Keanu (allisonbot) queues, the davidallison LaunchAgent publishes."""
+    import json as _json
+    import stat
+    import tempfile
+    from unittest import mock
+
+    import github_sync as gs
+
+    with mock.patch.object(srv, "request_publish") as rp:
+        srv._publish(["X.md"])
+    check("publish: test mode never queues", not rp.called)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        spool = Path(tmp) / "publish_requests"
+        with mock.patch.object(gs, "publish_requests_dir", return_value=spool):
+            gs.request_publish(["/a/b/Miso_Chicken.md"], [])
+            gs.request_publish(["Miso_Chicken.md", "Other.md"], ["All-Purpose_Miso_Sauce.md"])
+            gs.request_publish([], [])
+            files = sorted(spool.glob("*.json"))
+            check("publish: one request file per non-empty call", len(files) == 2, [f.name for f in files])
+            check("publish: request file world-writable (cross-account)",
+                  stat.S_IMODE(files[0].stat().st_mode) == 0o666, oct(files[0].stat().st_mode))
+            check("publish: paths reduced to filenames",
+                  _json.loads(files[0].read_text())["recipes"] == ["Miso_Chicken.md"])
+            with mock.patch.object(gs, "publish", return_value=True) as pub:
+                gs.main()
+            args = pub.call_args.args if pub.called else ()
+            check("publish: drain merges requests without duplicates",
+                  args[:2] == (["Miso_Chicken.md", "Other.md"], ["All-Purpose_Miso_Sauce.md"]), args)
+            check("publish: drained requests removed", not list(spool.glob("*.json")))
+
+
 # ── Main test ─────────────────────────────────────────────────────────────────
 
 def run(week_start_str: str, keep: bool) -> int:
@@ -255,6 +288,7 @@ def run(week_start_str: str, keep: bool) -> int:
     check_sms_links(result.get("candidates", []), selected)
     check_partner_classify_and_chmod()
     check_intake_checks()
+    check_github_sync()
 
     # Weekday-safe only: swap_meal excludes "weekend" meal_type candidates
     # before step 1b ever runs when swap_day isn't Sat/Sun, so a target with
