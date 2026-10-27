@@ -57,7 +57,7 @@ from gui_launch import request_gui_launch
 from intake_checks import condiment_links, day_before_note, is_quick_blocked, run_intake_checks
 from plan_utils import (
     add_day_before_reminders, build_shopping_csv, canonical_ing, day_date_map, day_meals,
-    display_ing, find_recipe_key,
+    display_ing, find_recipe_key, name_candidates,
 )
 
 # ---------------------------------------------------------------------------
@@ -1632,6 +1632,36 @@ def _recipe_url(recipe_name: str, metadata_entry: dict) -> str:
     return ""
 
 
+def _confirm_recipe(typed: str, recipes: dict, **extra) -> Optional[dict]:
+    """needs_confirmation response for a recipe name a person typed: the recipe(s)
+    it could mean, each with its link, for them to confirm before anything
+    changes. Even an exact name is shown back -- David, Oct 27 2026: "if they
+    send a recipe name the first step would be to validate you are associating
+    the right recipe with the name." None when nothing plausible exists."""
+    options = name_candidates(typed, recipes)
+    if not options:
+        best = _find_recipe_best_match(typed, recipes)
+        options = [best[0]] if best else []
+    if not options:
+        return None
+    opts = [{"recipe": k, "url": _url_for_name(k, recipes)} for k in options]
+    if len(opts) == 1:
+        msg = f"Is this the right recipe? {opts[0]['recipe']} - {opts[0]['url']}"
+    else:
+        msg = "Which one did you mean? " + " ".join(
+            f"{i}) {o['recipe']} - {o['url']}" for i, o in enumerate(opts, 1))
+    return {
+        "status": "needs_confirmation",
+        "typed": typed,
+        "options": opts,
+        "suggested": options[0],
+        "message": msg,
+        "next_step": "Ask the user. After they confirm, call again with the exact recipe "
+                     "name they chose and confirmed=true.",
+        **extra,
+    }
+
+
 def _url_for_name(recipe_name: str, recipes: dict) -> str:
     """Recipe URL by name, or "" for unknown names / "Going Out to Eat"."""
     key = _find_recipe_key(recipe_name, recipes)
@@ -2566,7 +2596,8 @@ def advance_to_meal_approval(
 
 
 @mcp.tool()
-def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: str = "") -> dict:
+def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: str = "",
+              confirmed: bool = False) -> dict:
     """
     Replace the planned meal for a given day (pre-signoff).
 
@@ -2577,6 +2608,10 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
                 protein family.
         replacement: Optional explicit recipe name. If empty, auto-picks from candidates.
         cuisine_direction: Optional cuisine preference to override activity state (e.g. "Asian", "Indian").
+        confirmed: A recipe name the user typed (in replacement, or "swap to X" in
+                reason) first returns status="needs_confirmation" with the matching
+                recipe(s) and links. Ask the user, then call again with the exact
+                recipe name and confirmed=True.
 
     Auto-pick logic: excludes already-selected recipes, prefers cuisine_direction
     match, prefers same meal_type (weekend/weeknight) as the displaced day.
@@ -2637,41 +2672,26 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
 
     all_recipes = _load_metadata()
 
-    if replacement and _find_recipe_key(replacement, all_recipes):
+    if replacement:
+        key = _find_recipe_key(replacement, all_recipes)
+        if not (confirmed and key):
+            ask = _confirm_recipe(replacement, all_recipes, day=day, outgoing_recipe=outgoing)
+            if ask:
+                return ask
+            return {"error": f"Recipe '{replacement}' not found. Please check the name and try again. "
+                             "If you have the recipe's URL, call process_recipe_url(url, day) -- it adds "
+                             "the recipe and swaps it in."}
         # Store the collection's own name, not whatever the caller typed.
-        replacement = _find_recipe_key(replacement, all_recipes)
-    elif replacement:
-        match = _find_recipe_best_match(replacement, all_recipes)
-        if match:
-            return {
-                "status": "needs_confirmation",
-                "suggested": match[0],
-                "message": f"Did you mean '{match[0]}'?",
-                "day": day,
-                "outgoing_recipe": outgoing,
-            }
-        return {"error": f"Recipe '{replacement}' not found. Please check the name and try again. "
-                         "If you have the recipe's URL, call process_recipe_url(url, day) -- it adds "
-                         "the recipe and swaps it in."}
+        replacement = key
 
     if not replacement:
-        # Check if reason names a specific recipe (e.g. "swap to Pasta e Ceci")
+        # Reason names a specific recipe (e.g. "swap to Pasta e Ceci") -- confirm it too
         name_m = re.search(r'\bto\s+(.{4,})', reason.lower())
         if name_m:
             parsed_name = name_m.group(1).strip().rstrip(" .,")
-            rkey = _find_recipe_key(parsed_name, all_recipes)
-            if rkey:
-                replacement = rkey
-            else:
-                match = _find_recipe_best_match(parsed_name, all_recipes)
-                if match:
-                    return {
-                        "status": "needs_confirmation",
-                        "suggested": match[0],
-                        "message": f"Did you mean '{match[0]}'?",
-                        "day": day,
-                        "outgoing_recipe": outgoing,
-                    }
+            ask = _confirm_recipe(parsed_name, all_recipes, day=day, outgoing_recipe=outgoing)
+            if ask:
+                return ask
 
     if not replacement:
         # Exclude every recipe already in the plan (including outgoing — we want something different)
@@ -3078,6 +3098,25 @@ def _process_recipe_url_core(url: str, day: str = "", force_add: bool = False) -
     # 2. Similarity check (unless force_add)
     if not force_add:
         match = _find_similar_recipe(title_guess, url, recipes)
+        if match and match[1] == 1.0:
+            # Exact source link -- no guessing involved, so no confirmation (David,
+            # Oct 27 2026: a typed name gets validated "unless human sends an exact link").
+            existing_name = match[0]
+            result = {"status": "exists", "recipe": existing_name, "url": url,
+                      "recipe_url": _url_for_name(existing_name, recipes),
+                      "message": f"'{existing_name}' is already in the collection."}
+            if day and _load_activity().get("state") == "complete":
+                result["note"] = (f"Plan is finalized -- not swapped in. Use the post-finalize "
+                                  f"swap (meal_swap.execute_swap) for {day}.")
+            elif day:
+                activity = _load_activity()
+                selected = dict(activity.get("selected_meals", {}))
+                result.update(swapped_day=day, outgoing_recipe=selected.get(day))
+                selected[day] = existing_name
+                activity["selected_meals"] = selected
+                _save_activity(activity)
+                result["message"] += f" Swapped into {day}."
+            return result
         if match:
             existing_name, score = match
             msg = (
@@ -3217,7 +3256,7 @@ def _resend_menu_to_partner(new_selected: dict, week_start: date) -> list:
 
 
 def _finalize_or_request_idea_activation(activity: dict) -> dict:
-    """Shared by approve and swap_plus_approve: check activity's current
+    """Called on approve: check activity's current
     selected_meals for idea-status recipes, try auto-activation, and finalize
     if clear. _do_finalize persists activity itself; no _save_activity needed
     before calling this for a plain finalize."""
@@ -3281,7 +3320,7 @@ def handle_partner_reply(reply: str) -> dict:
       - Parses structured commands ("swap 3 to X", "change Tuesday to tacos")
       - Falls back to Claude Haiku for natural language ("we've had too much chicken")
       - swap_request re-sends the updated menu and stays in awaiting_partner_signoff
-      - swap_plus_approve applies the swap and finalizes immediately
+      - swap_plus_approve applies the swap and re-sends the menu with links for her to confirm (no longer finalizes immediately -- named recipes get confirmed)
 
     eating_out:
       - Marks the extracted day "Going Out to Eat" and re-sends the menu
@@ -3393,8 +3432,9 @@ def handle_partner_reply(reply: str) -> dict:
 
         if new_selected:
             activity["selected_meals"] = new_selected
-            if intent == "swap_plus_approve":
-                return _finalize_or_request_idea_activation(activity)
+            # "Looks good but do X Tuesday" used to finalize on the spot with
+            # whatever recipe her words resolved to. A recipe a person names gets
+            # confirmed first, so it goes back to her with links like any swap.
             meals_json = _resend_menu_to_partner(new_selected, week_start)
             _save_activity(activity)
             return {
@@ -3693,7 +3733,7 @@ def get_current_plan() -> dict:
 
 
 @mcp.tool()
-def update_plan_meal(day: str, title: str) -> dict:
+def update_plan_meal(day: str, title: str, confirmed: bool = False) -> dict:
     """
     Update the recipe title for a single day in the current week's plan.
 
@@ -3705,6 +3745,9 @@ def update_plan_meal(day: str, title: str) -> dict:
     Args:
         day:   Day abbreviation: Sun, Mon, Tue, Wed, Thu, Fri, Sat.
         title: New recipe title to put on that day.
+        confirmed: A title that matches a recipe first returns
+               status="needs_confirmation" with the recipe(s) and links; ask the
+               user, then call again with the exact name and confirmed=True.
 
     Returns:
         {"success": bool, "day": day, "title": title, "error": "..."}
@@ -3739,16 +3782,10 @@ def update_plan_meal(day: str, title: str) -> dict:
         new_reminder = "Going out to eat — no dinner to cook"
     else:
         key = _find_recipe_key(title, recipes)
-        if not key:
-            match = _find_recipe_best_match(title, recipes)
-            if match:
-                return {
-                    "status": "needs_confirmation",
-                    "suggested": match[0],
-                    "message": f"Did you mean '{match[0]}'?",
-                    "day": day,
-                    "title": title,
-                }
+        if not (confirmed and key):
+            ask = _confirm_recipe(title, recipes, day=day, title=title)
+            if ask:
+                return ask
         meta = recipes.get(key, {}) if key else {}
         new_url = _recipe_url(title, meta)
         new_time = meta.get("time", "")
@@ -3799,14 +3836,9 @@ def get_recipe_url(name: str) -> dict:
     recipes = _load_metadata()
     key = _find_recipe_key(name, recipes)
     if not key:
-        match = _find_recipe_best_match(name, recipes)
-        if match:
-            return {
-                "status": "needs_confirmation",
-                "suggested": match[0],
-                "message": f"Did you mean '{match[0]}'?",
-                "name": name,
-            }
+        ask = _confirm_recipe(name, recipes, name=name)
+        if ask:
+            return ask
         return {"name": name, "url": ""}
     meta = recipes[key]
     url = _recipe_url(key, meta)
@@ -3836,14 +3868,9 @@ def get_recipe_notes(name: str) -> dict:
     recipes = _load_metadata()
     key = _find_recipe_key(name, recipes)
     if not key:
-        match = _find_recipe_best_match(name, recipes)
-        if match:
-            return {
-                "status": "needs_confirmation",
-                "suggested": match[0],
-                "message": f"Did you mean '{match[0]}'?",
-                "name": name,
-            }
+        ask = _confirm_recipe(name, recipes, name=name)
+        if ask:
+            return ask
         return {"name": name, "notes": "", "times_cooked": 0, "last_cooked_date": None}
     meta = recipes[key]
     return {

@@ -7,6 +7,7 @@ CSV, day-before reminders) lives here instead of being re-implemented in each.
 """
 
 import csv
+import difflib
 import io
 import json
 import re
@@ -54,14 +55,11 @@ def _name_words(s: str) -> set:
 
 
 def find_recipe_key(name: str, recipes: dict) -> Optional[str]:
-    """Resolve a plan/selection name to its recipe_metadata key, or None.
-
-    Exact, then punctuation-insensitive, then a shortened form that maps to
-    exactly ONE recipe (substring, or every significant word contained in the
-    key). It used to accept any 2 shared 5+-letter words, which sent
-    "Chicken and Radicchio Salad..." to Cumin-Cardamom Spiced Chicken ...
-    Salad (Oct 2026) and "Lemon Garlic Pork Chops" to a drumstick recipe. A
-    name that isn't in the collection must come back None, not a lookalike.
+    """Resolve a name to its recipe_metadata key: exact, or exact apart from case
+    and punctuation ("Honey Tahini" == "Honey-Tahini"). Anything looser is a
+    guess, and guesses sent "Chicken and Radicchio Salad..." to Cumin-Cardamom
+    Spiced Chicken ... Salad (Oct 2026) -- a name a person typed goes through
+    name_candidates() and gets confirmed instead.
     """
     name_lower = name.lower().strip()
     for key in recipes:
@@ -73,16 +71,25 @@ def find_recipe_key(name: str, recipes: dict) -> Optional[str]:
     for key in recipes:
         if _norm_name(key) == norm:
             return key
-    if len(norm) > 8:
-        hits = [k for k in recipes if norm in _norm_name(k)]
-        if len(hits) == 1:
-            return hits[0]
-    words = _name_words(name)
-    if len(words) >= 2:
-        hits = [k for k in recipes if words <= _name_words(k)]
-        if len(hits) == 1:
-            return hits[0]
     return None
+
+
+def name_candidates(name: str, recipes: dict, limit: int = 3) -> list:
+    """Recipes a typed name could mean, best first -- to put in front of a person
+    ("Is this the right lemon chicken?"), never to pick from automatically. Two
+    recipes can share every word of "lemon chicken"."""
+    pool = {k: v for k, v in recipes.items()
+            if isinstance(v, dict) and v.get("status") not in ("disliked", "ignored")}
+    exact = find_recipe_key(name, pool)
+    if exact:
+        return [exact]
+    norm, words = _norm_name(name), _name_words(name)
+    if words:
+        hits = [k for k in pool if words <= _name_words(k)]
+    else:
+        hits = [k for k in pool if norm and norm in _norm_name(k)]
+    hits.sort(key=lambda k: -difflib.SequenceMatcher(None, norm, _norm_name(k)).ratio())
+    return hits[:limit]
 
 
 # ---------------------------------------------------------------------------

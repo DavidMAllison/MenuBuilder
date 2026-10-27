@@ -30,7 +30,10 @@ from bs4 import BeautifulSoup
 from github_sync import request_publish
 from gui_launch import request_gui_launch
 from intake_checks import condiment_links, run_intake_checks
-from plan_utils import add_day_before_reminders, build_shopping_csv, load_condiment_ingredients
+from plan_utils import (
+    add_day_before_reminders, build_shopping_csv, find_recipe_key, load_condiment_ingredients,
+    name_candidates,
+)
 
 
 def _chmod_shared(path) -> None:
@@ -112,17 +115,16 @@ def _save_metadata(data: dict) -> None:
 
 
 def _find_recipe(name: str, recipes: dict) -> Optional[Tuple[str, dict]]:
-    """Fuzzy name match. Returns (canonical_name, entry) or None."""
-    name_lower = name.lower()
-    if name in recipes and isinstance(recipes[name], dict):
-        return name, recipes[name]
-    for k, v in recipes.items():
-        if isinstance(v, dict) and k.lower() == name_lower:
-            return k, v
-    for k, v in recipes.items():
-        if isinstance(v, dict) and (name_lower in k.lower() or k.lower() in name_lower):
-            return k, v
-    return None
+    """Exact (case/punctuation-insensitive) match only -- see plan_utils.find_recipe_key.
+    The old substring match took the first recipe containing the name."""
+    key = find_recipe_key(name, recipes)
+    return (key, recipes[key]) if key and isinstance(recipes[key], dict) else None
+
+
+def _recipe_page_url(name: str, entry: dict) -> str:
+    base = _cfg().get("github_pages_base_url", "").rstrip("/")
+    filename = (entry.get("filename") or name.replace(" ", "_") + ".md").removesuffix(".md")
+    return f"{base}/{filename}" if base else ""
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +400,7 @@ def execute_swap(
     incoming_name: str = None,
     incoming_url: str = None,
     incoming_content: dict = None,
+    confirmed: bool = False,
 ) -> dict:
     """
     Swap a planned dinner. Returns {"success": bool, "message": str, ...}.
@@ -409,6 +412,10 @@ def execute_swap(
         incoming_url:     URL of recipe to fetch (required for idea or brand new)
         incoming_content: pre-parsed recipe dict if URL fetch failed —
                           {"title", "time", "servings", "ingredients": [str], "instructions": [str]}
+        confirmed:        incoming_name is something a person typed, so the first call
+                          returns {"success": False, "message": "needs_confirmation",
+                          "options": [{"recipe", "url"}]} without changing anything. Ask
+                          them, then call again with the exact name and confirmed=True.
     """
     cfg = _cfg()
     github_base = cfg.get("github_pages_base_url", "")
@@ -435,8 +442,16 @@ def execute_swap(
 
     if incoming_name:
         match = _find_recipe(incoming_name, recipes)
-        if not match:
-            return {"success": False, "message": f"Recipe not found: {incoming_name!r}"}
+        if not (confirmed and match):
+            options = name_candidates(incoming_name, recipes)
+            if not options:
+                return {"success": False, "message": f"Recipe not found: {incoming_name!r}"}
+            opts = [{"recipe": k, "url": _recipe_page_url(k, recipes[k])} for k in options]
+            return {"success": False, "message": "needs_confirmation", "typed": incoming_name,
+                    "options": opts,
+                    "detail": ("Is this the right recipe? " if len(opts) == 1 else "Which one did you mean? ")
+                              + " ".join(f"{o['recipe']} - {o['url']}" for o in opts)
+                              + " Ask the user, then call again with the exact name and confirmed=True."}
         canonical_name, entry = match
 
         if entry.get("status") == "active":
@@ -654,6 +669,8 @@ if __name__ == "__main__":
                        help="Name of existing recipe to swap in")
     group.add_argument("--url", dest="incoming_url", metavar="URL",
                        help="URL of new recipe to fetch")
+    parser.add_argument("--confirm", action="store_true",
+                        help="--in NAME is the exact recipe you mean (otherwise prints the matches to confirm)")
     args = parser.parse_args()
 
     result = execute_swap(
@@ -661,6 +678,7 @@ if __name__ == "__main__":
         outgoing_recipe=args.out,
         incoming_name=args.incoming_name,
         incoming_url=args.incoming_url,
+        confirmed=args.confirm,
     )
-    print(result["message"])
+    print(result.get("detail") or result["message"])
     sys.exit(0 if result["success"] else 1)

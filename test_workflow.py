@@ -304,7 +304,11 @@ def check_swap_activation():
                               incoming_content={"title": "Zzz Stub", "ingredients": ["1 egg"], "instructions": []})
         check("swap: content without instructions refused", not bad["success"] and not saved, str(bad))
 
-        res = ms.execute_swap("Tue 10/27", "Old Dinner", incoming_name="Zzz Miso Chicken")
+        ask = ms.execute_swap("Tue 10/27", "Old Dinner", incoming_name="Zzz Miso Chicken")
+        check("swap: typed name asks first, changes nothing",
+              ask["message"] == "needs_confirmation" and ask["options"][0]["recipe"] == "Zzz Miso Chicken"
+              and not saved, str(ask))
+        res = ms.execute_swap("Tue 10/27", "Old Dinner", incoming_name="Zzz Miso Chicken", confirmed=True)
         check("swap: idea activates from its stored content", res["success"], str(res))
         e = saved[0]["recipes"]["Zzz Miso Chicken"] if saved else {}
         check("swap: entry has ingredients_raw + instructions",
@@ -365,10 +369,26 @@ def check_recipe_lookup():
           f("Lemon Garlic Pork Chops", {"Baked Chicken Drumsticks with Lemon and Garlic": {}}) is None)
     check("lookup: plan annotations ignored",
           f("Asian Chicken Lettuce Wraps [Heart-Healthy] *NEW*", {"Asian Chicken Lettuce Wraps": {}}) == "Asian Chicken Lettuce Wraps")
-    check("lookup: shortened name with one home resolves",
-          f("Lemon Chicken", {"Easy Skillet Lemon Chicken": {}}) == "Easy Skillet Lemon Chicken")
-    check("lookup: shortened name with two homes -> None",
-          f("Lemon Chicken", {"Easy Skillet Lemon Chicken": {}, "Slow-Cooker Lemon Chicken": {}}) is None)
+    check("lookup: shortened name never auto-resolves",
+          f("Lemon Chicken", {"Easy Skillet Lemon Chicken": {}}) is None)
+    from plan_utils import name_candidates
+    two = {"Easy Skillet Lemon Chicken": {}, "Slow-Cooker Lemon Chicken": {}, "Lemon Garlic Pasta": {},
+           "Old Lemon Chicken": {"status": "disliked"}}
+    got = name_candidates("lemon chicken", two)
+    check("candidates: every recipe it could mean, none disliked",
+          sorted(got) == ["Easy Skillet Lemon Chicken", "Slow-Cooker Lemon Chicken"], str(got))
+    check("candidates: exact name is the only option", name_candidates("easy skillet lemon chicken", two)
+          == ["Easy Skillet Lemon Chicken"])
+
+    from unittest import mock
+    with mock.patch.object(srv, "_url_for_name", side_effect=lambda n, r: f"https://u/{n}"):
+        ask = srv._confirm_recipe("lemon chicken", two)
+        one = srv._confirm_recipe("Easy Skillet Lemon Chicken", two)
+    check("confirm: several matches listed with links",
+          ask["status"] == "needs_confirmation" and len(ask["options"]) == 2
+          and ask["message"].startswith("Which one did you mean? 1) ") and "https://u/" in ask["message"], str(ask))
+    check("confirm: exact name still shown back with its link",
+          one["message"] == "Is this the right recipe? Easy Skillet Lemon Chicken - https://u/Easy Skillet Lemon Chicken", str(one))
 
 
 def check_post_finalize_swaps():
@@ -434,11 +454,11 @@ def check_post_finalize_swaps():
               "Soy Salmon" in r["garlic"]["Notes"] and "Miso Chicken" in r["garlic"]["Notes"], str(r.get("garlic")))
         check("reorder: calendar only, not the Grocery list", launched == [["WeeklyMealCalendar.app"]], str(launched))
 
-        dup = ms.execute_swap("Mon 10/26", "Soy Salmon", incoming_name="Thai Chicken Salad")
+        dup = ms.execute_swap("Mon 10/26", "Soy Salmon", incoming_name="Thai Chicken Salad", confirmed=True)
         check("swap: recipe already on another night refused", not dup["success"]
               and dup["message"] == "already_planned", str(dup))
 
-        res = ms.execute_swap("Mon 10/26", "Soy Salmon", incoming_name="Lemon Chicken")
+        res = ms.execute_swap("Mon 10/26", "Soy Salmon", incoming_name="Lemon Chicken", confirmed=True)
         plan = {m["day"]: m for m in json.loads(plan_path.read_text())["meals"]}
         r = rows()
         check("swap: plan + urls updated", res["success"] and plan["Mon"]["title"] == "Lemon Chicken"
@@ -450,6 +470,38 @@ def check_post_finalize_swaps():
     finally:
         for pt in patches:
             pt.stop()
+
+
+def check_swap_meal_confirm(selected):
+    """swap_meal with a typed name asks first; the change lands only with confirmed=True."""
+    day = next((d for d in ("Mon", "Tue", "Wed", "Thu") if d in selected), None)
+    recipes = srv._load_metadata()
+    target = next((k for k, v in recipes.items() if v.get("status") == "active"
+                   and k not in selected.values() and str(v.get("meal_type", "")).lower() == "weeknight"), None)
+    if not day or not target:
+        check("swap_meal confirm round-trip", False, "no day/recipe to test with")
+        return
+    before = srv._load_activity()["selected_meals"][day]
+    ask = srv.swap_meal(day=day, reason="swap it", replacement=target.lower())
+    check("swap_meal: typed name returns needs_confirmation with link",
+          ask.get("status") == "needs_confirmation" and ask["options"][0]["recipe"] == target
+          and ask["options"][0]["url"], str(ask))
+    check("swap_meal: nothing changed before confirming",
+          srv._load_activity()["selected_meals"][day] == before)
+    done = srv.swap_meal(day=day, reason="swap it", replacement=target, confirmed=True)
+    check("swap_meal: confirmed swap stores the collection's name", done.get("new_recipe") == target, str(done))
+
+
+def check_exact_url_intake():
+    """An exact source link needs no confirmation -- it IS the recipe."""
+    from unittest import mock
+    recipes = srv._load_metadata()
+    name, entry = next((k, v) for k, v in recipes.items() if v.get("source_url") and v.get("status") == "active")
+    with mock.patch.object(srv, "_fetch_recipe_data", return_value=None), \
+         mock.patch.object(srv, "_fetch_atk_recipe", return_value=None):
+        res = srv.process_recipe_url(entry["source_url"])
+    check("url intake: exact source link resolves without asking",
+          res.get("status") == "exists" and res.get("recipe") == name, str(res))
 
 
 def run(week_start_str: str, keep: bool) -> int:
@@ -508,6 +560,8 @@ def run(week_start_str: str, keep: bool) -> int:
     check_lunch_test_mode()
     check_recipe_lookup()
     check_post_finalize_swaps()
+    check_swap_meal_confirm(selected)
+    check_exact_url_intake()
 
     # Weekday-safe only: swap_meal excludes "weekend" meal_type candidates
     # before step 1b ever runs when swap_day isn't Sat/Sun, so a target with
