@@ -202,6 +202,31 @@ def check_intake_checks():
     check("shopping: sub-recipe ingredients expanded", "red miso" in csv and "mirin" in csv, csv)
     check("shopping: 24h marinade dated the day before", "2026-10-26" in csv and "2026-10-27" not in csv, csv)
 
+    long_wait = {"time": "25 minutes plus 24 hours marinating", "advance_prep_hours": 24.0,
+                 "prep_components": ["Marinate chicken 24 hours"]}
+    recipes = {"Miso Chicken": long_wait, "Lemon Chicken": {"time": "30 minutes"},
+               "Bulgogi": {"time": "20 minutes", "advance_prep_hours": 2.0}}
+    check("day-before note: 24h wait",
+          ic.day_before_note("Miso Chicken", long_wait) == "Start Miso Chicken tonight (needs 24 hours marinating)")
+    check("day-before note: short wait stays same-day", ic.day_before_note("Bulgogi", recipes["Bulgogi"]) == "")
+    info = [{"day": "Mon", "title": "Lemon Chicken", "reminder": "Start at 5:30"},
+            {"day": "Tue", "title": "Miso Chicken", "reminder": "Start at 5:35"},
+            {"day": "Wed", "title": "Bulgogi", "reminder": ""}]
+    srv._add_day_before_reminders(info, recipes)
+    check("reminder: marinade start lands on the day before",
+          info[0]["reminder"] == "Start Miso Chicken tonight (needs 24 hours marinating). Start at 5:30", info[0])
+    check("reminder: cook day unchanged", info[1]["reminder"] == "Start at 5:35", info[1])
+    first = [{"day": "Sun", "title": "Miso Chicken", "reminder": ""}]
+    srv._add_day_before_reminders(first, recipes)
+    check("reminder: first night flags the head start on its own day",
+          first[0]["reminder"].startswith("Needs a head start: Miso Chicken"), first[0])
+    head = srv._tomorrow_head_start({"Mon": "Lemon Chicken", "Tue": "Miso Chicken"}, "Mon", recipes)
+    check("prep guide: tonight mode shows tomorrow's marinade",
+          head[:2] == ["\nFor tomorrow: Start Miso Chicken tonight (needs 24 hours marinating).",
+                       "- Marinate chicken 24 hours"], head)
+    check("prep guide: nothing extra when tomorrow has no long wait",
+          srv._tomorrow_head_start({"Tue": "Miso Chicken", "Wed": "Bulgogi"}, "Tue", recipes) == [])
+
 
 def check_github_sync():
     """Publish spool: Keanu (allisonbot) queues, the davidallison LaunchAgent publishes."""

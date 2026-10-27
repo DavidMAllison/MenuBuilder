@@ -56,7 +56,7 @@ from candidate_scoring import (
 )
 from github_sync import request_publish
 from gui_launch import request_gui_launch
-from intake_checks import buy_ahead_days, is_quick_blocked, run_intake_checks, condiment_links
+from intake_checks import buy_ahead_days, condiment_links, day_before_note, is_quick_blocked, run_intake_checks
 
 # ---------------------------------------------------------------------------
 # Config and paths
@@ -1812,6 +1812,25 @@ def _try_auto_activate(name: str, recipes: dict) -> bool:
 # Plan JSON generation
 # ---------------------------------------------------------------------------
 
+def _add_day_before_reminders(meals_info: list, recipes: dict) -> None:
+    """Put "Start X tonight (needs 24 hours marinating)" on the day *before* any
+    meal with a long required wait -- the LLM reminder for X's own day is too late
+    (Miso Chicken, Oct 2026). Deterministic, so it can't be dropped or misplaced."""
+    by_day = {m["day"]: m for m in meals_info}
+    for m in meals_info:
+        for title in m["title"].split(" + "):
+            key = _find_recipe_key(title, recipes)
+            note = day_before_note(title, recipes[key]) if key else ""
+            if not note:
+                continue
+            idx = DAYS_ORDER.index(m["day"])
+            prev = by_day.get(DAYS_ORDER[idx - 1]) if idx > 0 else None
+            if prev is not None:
+                prev["reminder"] = f"{note}. {prev['reminder']}".strip()
+            else:  # first night of the plan -- nothing earlier to hang it on
+                m["reminder"] = f"Needs a head start: {note[len('Start '):]}. {m['reminder']}".strip()
+
+
 def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> dict:
     """Build mealplan dict. week_start is Monday; Sunday is week_start - 1."""
     import anthropic as _anthropic
@@ -1910,6 +1929,7 @@ def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> 
     for m in meals_info:
         if not m["reminder"]:  # eating-out days already have reminder set
             m["reminder"] = day_reminders.get(m["day"], "")
+    _add_day_before_reminders(meals_info, recipes)
 
     return {
         "week_start": week_sunday.isoformat(),
@@ -4061,6 +4081,21 @@ def get_recipe_notes(name: str) -> dict:
 
 
 @mcp.tool()
+def _tomorrow_head_start(selected: dict, today_abbrev: str, recipes: dict) -> list:
+    """Lines for tomorrow's meal if it has to be started tonight (24h marinade)."""
+    idx = DAYS_ORDER.index(today_abbrev)
+    if idx + 1 >= len(DAYS_ORDER) or DAYS_ORDER[idx + 1] not in selected:
+        return []
+    out = []
+    for title in _day_meals(selected[DAYS_ORDER[idx + 1]]):
+        key = _find_recipe_key(title, recipes)
+        note = day_before_note(title, recipes[key]) if key else ""
+        if note:
+            out.append(f"\nFor tomorrow: {note}.")
+            out += [f"- {p}" for p in recipes[key].get("prep_components", [])]
+    return out
+
+
 def get_prep_guide(mode: str = "auto") -> dict:
     """
     On-demand prep guide for the current week's meal plan.
@@ -4132,9 +4167,11 @@ def get_prep_guide(mode: str = "auto") -> dict:
     # ── Tonight mode ──────────────────────────────────────────────────────────
     if mode == "tonight":
         tonight_meal = selected.get(today_abbrev)
+        # Tomorrow's 24h marinade has to start tonight, whatever tonight's dinner is.
+        head_start = "\n".join(_tomorrow_head_start(selected, today_abbrev, recipes))
         if not tonight_meal:
             return {
-                "prep_guide": f"No meal in the plan for today ({today_abbrev}).",
+                "prep_guide": f"No meal in the plan for today ({today_abbrev}).{head_start}",
                 "week_start": week_start_str,
                 "mode": "tonight",
                 "recipes_with_prep": [],
@@ -4143,7 +4180,7 @@ def get_prep_guide(mode: str = "auto") -> dict:
         key = _find_recipe_key(tonight_meal, recipes)
         if not key:
             return {
-                "prep_guide": f"No prep data found for {tonight_meal}.",
+                "prep_guide": f"No prep data found for {tonight_meal}.{head_start}",
                 "week_start": week_start_str,
                 "mode": "tonight",
                 "recipes_with_prep": [],
@@ -4152,7 +4189,7 @@ def get_prep_guide(mode: str = "auto") -> dict:
         prep  = recipes[key].get("prep_components", [])
         notes = recipes[key].get("prep_notes", "")
         if not prep:
-            guide = f"No advance prep needed for {tonight_meal} — cook as-is."
+            guide = f"No advance prep needed for {tonight_meal} — cook as-is.{head_start}"
             return {
                 "prep_guide": guide,
                 "week_start": week_start_str,
@@ -4165,6 +4202,8 @@ def get_prep_guide(mode: str = "auto") -> dict:
             lines.append(f"- {p}")
         if notes:
             lines.append(f"\nNote: {notes}")
+        if head_start:
+            lines.append(head_start)
         return {
             "prep_guide": "\n".join(lines),
             "week_start": week_start_str,
@@ -4202,6 +4241,8 @@ def get_prep_guide(mode: str = "auto") -> dict:
             continue
 
         entry = {"meal": name, "day": day, "prep": prep, "notes": notes}
+        if day_before_note(name, recipes[key]) and days_until >= 1:
+            entry["day"] = f"{day} — start {DAYS_ORDER[DAYS_ORDER.index(day) - 1]}"
         if _recipe_is_dayof(prep, notes, recipes[key]):
             prep_dayof.append(entry)
         else:

@@ -162,6 +162,16 @@ def buy_ahead_days(recipe: dict) -> int:
     return 1 if hours >= BUY_DAY_BEFORE_HOURS else 0
 
 
+def day_before_note(title: str, recipe: dict) -> str:
+    """"Start Miso Chicken tonight (needs 24 hours marinating)" for a recipe whose
+    required wait means it has to be started the day before; "" otherwise."""
+    if not buy_ahead_days(recipe):
+        return ""
+    m = re.search(r"\bplus\s+(.+)$", recipe.get("time") or "", re.IGNORECASE)
+    what = m.group(1).strip() if m else f"{_format_hours(float(recipe['advance_prep_hours']))} of prep"
+    return f"Start {title} tonight (needs {what})"
+
+
 def is_quick_blocked(recipe: dict) -> bool:
     """True when a required wait means the recipe can't be a quick-night pick."""
     return float(recipe.get("advance_prep_hours") or 0) >= ADVANCE_PREP_MIN_HOURS

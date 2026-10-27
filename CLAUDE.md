@@ -34,6 +34,8 @@
   - **Nutritional Info** (when available): Calories, fat, saturated fat, sodium, protein, fiber per serving
   - **Cost** (added Aug 4 2026): `avg_cost_per_serving` (float, `null` until priceable), `cost_coverage_pct`, `cost_ingredients_matched`/`_total`, `cost_last_calculated`. Computed from `/Users/Shared/grocery/price_history.json` by `compute_meal_costs.py` -- rerun manually after new receipts land, not part of the Sunday workflow. `avg_cost_per_serving` only populates once `cost_coverage_pct` >= 50%; as of Aug 4 2026 receipt coverage is thin enough that no recipe clears that bar yet, so all values are currently `null` and this is expected, not a bug.
   - **Soup/Stew** (added Aug 22 2026): `is_soup` (bool). One tag covers both soups and stews. Auto-set at intake by `_infer_is_soup()` in `fill_menu_ideas.py` -- title keyword match on soup/stew/chowder/bisque/gumbo/posole/pozole/minestrone/jjigae. `chili` is deliberately excluded from the keyword list (too often a spice modifier -- "chili-rubbed", "chili oil" -- rather than the dish); tag actual chili recipes manually. Backfilled across the existing collection Aug 22 2026; the heuristic is title-only so it can miss soups that don't say "soup" in the name (e.g. Pappa al Pomodoro) -- correct manually in `recipe_metadata.json` if you spot a miss.
+  - **Advance Prep** (added Oct 27 2026): `advance_prep_hours` (float) -- minimum *required* wait before serving (marinating, brining, soaking, chilling, rising). Set at intake by `intake_checks.run_intake_checks()`, which reads the instructions (sites' ld+json `totalTime` usually omits these -- Miso Chicken came in as "25 minutes" with a 24h marinade). The wait is also appended to `time` ("25 minutes plus 24 hours marinating") unless `time` already covers it. Effects: any value blocks `is_quick`; >= 4h dates the recipe's shopping items the day before and puts "Start X tonight (needs ...)" on the previous day's plan reminder and in the prep guide. Every `parse_minutes` reads active time only (stops at "plus", "+", "("). Backfilled on 40 recipes Oct 27 2026.
+  - **Sub-recipes** (added Oct 27 2026): `condiment_deps` (list of `condiments.json` names). Intake follows the source page's ingredient links; a linked page that is itself a recipe, on an ingredient line that requires making it ("Homemade X", no store-bought/or/preferably), is filed in `condiments.json` + `condiments/*.md` and listed here. The shopping list expands its ingredients; `build_recipe_md(condiments=...)` adds a "Make first" link. Sauces/rubs/marinades go in `condiments.json`, never as `recipe_metadata.json` dinners. Unlinked "homemade X" lines are noted in `intake_warnings`.
 - **Usage**: JSON is the single source of truth for all metadata and ingredients. Recipe files contain only recipe content (title, ingredients, instructions, notes) -- no metadata footer.
 - **Ingredients**: Each recipe entry has an `ingredients` array: `[{"name", "quantity", "unit", "category"}]`. Categories: Proteins, Produce, Dairy, Pantry/Asian, Dry Goods, Spices/Herbs. Populate when a recipe is first used in a meal plan.
 - **Status**: `"active"` (in collection, .md file exists) | `"idea"` (in `recipe_metadata.json`, sourced but not yet tried) | `"disliked"` (tried, didn't like — .md file deleted, entry kept as tombstone) | `"ignored"` (decided to skip without trying)
@@ -168,6 +170,7 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
 ## Tools
 - **WeeklyShoppingList.app** -- populates "Grocery" Reminders list from the meal plan. Run: `open /Applications/WeeklyShoppingList.app`
 - **WeeklyMealCalendar.app** -- adds dinner events to iCloud "Calendar" from meal plan. Run: `open /Applications/WeeklyMealCalendar.app`
+- **github_sync.py** -- publishes recipe/condiment `.md` files to the GitHub Pages repo. Keanu runs as allisonbot and can't write the repo or push, so intake paths call `request_publish()` (spool: `/Users/Shared/cooking-state/publish_requests/`) and the `com.menubuilder.githubsync` LaunchAgent publishes as davidallison (log: `github_sync.log`). The Review UI calls `publish()` directly. No fetch/rebase -- a rejected push is logged and retried every 10 min. Any new write path that creates a recipe `.md` must call `request_publish()`.
 - See `release-notes.md` for details on implemented features
 - See `backlog.md` for planned features
 
@@ -202,8 +205,8 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
 
 ### Time Accuracy
 - Always verify cook times from the actual recipe file, not from the metadata (some entries are inaccurate)
-- Note marinating time separately (e.g., "1 hour plus 1 hour marinating")
-- Recipes over 60 minutes should be classified as Weekend meal_type
+- Note marinating time separately (e.g., "1 hour plus 1 hour marinating") -- and set `advance_prep_hours`; the text alone doesn't stop a quick-night pick
+- Recipes over 60 minutes of *active* time should be classified as Weekend meal_type (a 24h marinade with a 25-minute cook is still a weeknight meal, started the night before)
 
 ## Menu Generation Workflow
 
