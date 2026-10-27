@@ -82,8 +82,8 @@ def resolve_health(r: dict, default: str = 'Moderate') -> str:
 def parse_minutes(time_str: str) -> int:
     if not time_str:
         return 999
-    # Active time only: "25 minutes plus 24 hours marinating" is a 25-minute cook.
-    time_str = re.split(r"\s+plus\s+", time_str, maxsplit=1)[0]
+    # Active time only: "25 minutes plus 24 hours marinating" / "20 min + 4 hours" is the first part.
+    time_str = re.split(r"\s*(?:\bplus\b|\+|\()", time_str, maxsplit=1)[0]
     mins = 0
     h = re.search(r'(\d+)\s*hour', time_str, re.IGNORECASE)
     if h:

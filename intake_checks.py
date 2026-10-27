@@ -133,15 +133,27 @@ def _format_hours(hours: float) -> str:
     return "1 hour" if h == 1 else f"{h} hours"
 
 
+_TIME_MENTIONS_WAIT = re.compile(r"\bplus\b|\+|marinat|brin|chill|soak|ris(e|ing)|rest|cur(e|ing)", re.IGNORECASE)
+
+
 def apply_advance_prep(entry: dict, prep: Optional[dict]) -> None:
-    """Record a required wait on the entry and make it visible in `time`."""
+    """Record a required wait on the entry and make it visible in `time`.
+
+    The wait is only appended when `time` doesn't already account for it --
+    either by mentioning it ("+ 4 hours marinating") or by already being at
+    least that long (Hot Smoked Salmon's "30 hours" includes its brine).
+    """
     if not prep:
         return
+    from candidate_scoring import parse_minutes  # lazy: candidate_scoring imports this module
     entry["advance_prep_hours"] = prep["hours"]
     time_str = (entry.get("time") or "").strip()
-    if " plus " not in time_str:
-        suffix = f"{_format_hours(prep['hours'])} {prep['label']}"
-        entry["time"] = f"{time_str} plus {suffix}" if time_str else suffix
+    if _TIME_MENTIONS_WAIT.search(time_str):
+        return
+    if time_str and parse_minutes(time_str) != 999 and parse_minutes(time_str) >= prep["hours"] * 60:
+        return
+    suffix = f"{_format_hours(prep['hours'])} {prep['label']}"
+    entry["time"] = f"{time_str} plus {suffix}" if time_str else suffix
 
 
 def buy_ahead_days(recipe: dict) -> int:
@@ -186,8 +198,10 @@ def detect_sub_recipes(source_url: str) -> list[dict]:
     """Recipes the source page's ingredient list links to (same site only).
 
     Each linked page is fetched and kept only if it carries Recipe ld+json, so
-    glossary links ("neutral oil", "sesame seeds") are dropped. Returns
-    [{"name", "url", "ld": <ld+json Recipe>}].
+    glossary links ("neutral oil", "sesame seeds") are dropped, and only if
+    its ingredient line makes it required (see _requires_sub_recipe), so
+    "corn tortillas (store-bought or homemade)" doesn't drag a tortilla
+    recipe onto the shopping list. Returns [{"name", "url", "line", "ld"}].
     """
     if not source_url:
         return []
@@ -197,23 +211,32 @@ def detect_sub_recipes(source_url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     host = urlparse(source_url).netloc
     own = source_url.rstrip("/")
-    hrefs: list[str] = []
+    links: dict[str, str] = {}  # href -> ingredient line text
     for sel in _INGREDIENT_LINK_SELECTORS:
         for a in soup.select(sel):
             href = urljoin(source_url, a.get("href", "")).split("#")[0].rstrip("/")
-            if urlparse(href).netloc == host and href != own and href not in hrefs:
-                hrefs.append(href)
+            row = a.find_parent("li") or a.parent
+            line = row.get_text(" ", strip=True) if row else a.get_text(strip=True)
+            if urlparse(href).netloc == host and href != own and href not in links \
+                    and _requires_sub_recipe(line):
+                links[href] = line
     found = []
-    for href in hrefs[:_MAX_LINKS]:
+    for href, line in list(links.items())[:_MAX_LINKS]:
         page = _fetch(href)
         ld = _ld_recipe(page) if page else None
         if ld and ld.get("name") and ld.get("recipeIngredient"):
-            found.append({"name": ld["name"].strip(), "url": href + "/", "ld": ld})
+            found.append({"name": ld["name"].strip(), "url": href + "/", "line": line, "ld": ld})
     return found
 
 
 _HOMEMADE_RE = re.compile(r"\bhomemade\b", re.IGNORECASE)
-_HAS_ALTERNATIVE_RE = re.compile(r"store[- ]?bought|\bor\b", re.IGNORECASE)
+_SUB_RECIPE_RE = re.compile(r"\bhomemade\b|\brecipe\b|\bbatch\b", re.IGNORECASE)
+_HAS_ALTERNATIVE_RE = re.compile(r"store[- ]?bought|\bor\b|preferabl|optional|substitut", re.IGNORECASE)
+
+
+def _requires_sub_recipe(line: str) -> bool:
+    """Ingredient line says to make it ("Homemade X", "1 batch X") with no buy-it option."""
+    return bool(_SUB_RECIPE_RE.search(line)) and not _HAS_ALTERNATIVE_RE.search(line)
 
 
 def unresolved_homemade(ingredients_raw: list, deps: list) -> list[str]:
@@ -350,8 +373,9 @@ def run_intake_checks(title: str, entry: dict, source_url: str = "", source_name
     """Mutate a new recipe entry in place before it's written. Never raises.
 
     Sets `time` (+ required wait), `advance_prep_hours`, `condiment_deps`, and
-    flags `needs_review` + `intake_warnings` for "homemade X" lines it couldn't
-    resolve. Returns new condiment .md paths the caller should publish.
+    `intake_warnings` for "homemade X" lines it couldn't resolve (a note, not
+    needs_review -- most turn out to be buyable, e.g. hummus). Returns new
+    condiment .md paths the caller should publish.
     """
     new_mds: list[Path] = []
     try:
@@ -372,7 +396,6 @@ def run_intake_checks(title: str, entry: dict, source_url: str = "", source_name
             entry["condiment_deps"] = deps
         missing = unresolved_homemade(entry.get("ingredients_raw", []), deps)
         if missing:
-            entry["needs_review"] = True
             entry["intake_warnings"] = [f"Homemade sub-recipe not found: {m}" for m in missing]
     except Exception:
         pass

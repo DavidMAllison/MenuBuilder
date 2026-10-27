@@ -90,8 +90,8 @@ def load_metadata() -> dict:
 def parse_minutes(s: str) -> int:
     if not s:
         return 60
-    # Active time only: "25 minutes plus 24 hours marinating" is a 25-minute cook.
-    s = re.split(r"\s+plus\s+", s, maxsplit=1)[0]
+    # Active time only: "25 minutes plus 24 hours marinating" / "20 min + 4 hours" is the first part.
+    s = re.split(r"\s*(?:\bplus\b|\+|\()", s, maxsplit=1)[0]
     mins = 0
     m = re.search(r"(\d+)\s*hour", s, re.I)
     if m:
