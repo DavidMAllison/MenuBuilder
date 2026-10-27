@@ -16,6 +16,7 @@ recipe file, import this.
 """
 
 import re
+from typing import Optional
 
 _SECTION_HEADER_RE = re.compile(r"^\*\*(.+):\*\*$")
 
@@ -26,6 +27,7 @@ def build_recipe_md(
     instructions: list,
     notes: str = "",
     needs_review: bool = False,
+    condiments: Optional[dict] = None,
 ) -> str:
     """Build canonical recipe markdown.
 
@@ -43,6 +45,11 @@ def build_recipe_md(
             when blank -- empty Notes sections are noise.
         needs_review: Adds a review banner after the title for
             auto-generated content that hasn't been human-verified.
+        condiments: {name: page_url} for sub-recipes this recipe depends on
+            (its `condiment_deps`). Adds a "Make first" line under
+            Ingredients and links each ingredient line that names one, so a
+            "5 Tbsp Homemade All-Purpose Miso Sauce" line leads to the
+            actual sauce recipe instead of a dead end.
     """
     lines = [f"# {title}", ""]
 
@@ -58,7 +65,19 @@ def build_recipe_md(
     required = [i for i in ingredients if not i.lower().startswith("(optional)")]
     optional = [i for i in ingredients if i.lower().startswith("(optional)")]
 
+    condiments = condiments or {}
+
+    def _link(text: str) -> str:
+        for name, url in condiments.items():
+            m = re.search(re.escape(name), text, re.IGNORECASE)
+            if m:
+                return f"{text[:m.start()]}[{m.group(0)}]({url}){text[m.end():]}"
+        return text
+
     lines += ["## Ingredients", ""]
+    if condiments:
+        links = ", ".join(f"[{name}]({url})" for name, url in condiments.items())
+        lines += [f"**Make first:** {links}", ""]
     for i, ing in enumerate(required):
         header = _SECTION_HEADER_RE.match(ing.strip())
         if header:
@@ -66,12 +85,12 @@ def build_recipe_md(
                 lines.append("")
             lines.append(ing.strip())
         else:
-            lines.append(f"- {ing}")
+            lines.append(f"- {_link(ing)}")
     if optional:
         lines += ["", "**Optional / For Serving:**", ""]
         for ing in optional:
             display = re.sub(r"^\(optional\)\s*", "", ing, flags=re.IGNORECASE)
-            lines.append(f"- {display}")
+            lines.append(f"- {_link(display)}")
 
     lines += ["", "## Instructions", ""]
     for i, step in enumerate(instructions, 1):
