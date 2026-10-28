@@ -178,9 +178,13 @@ def _load_activity() -> dict:
     path = (_TEST_DIR / "menu_activity.json") if _TEST_DIR else ACTIVITY_FILE
     if path.exists():
         try:
-            return json.loads(path.read_text())
+            activity = json.loads(path.read_text())
         except Exception:
-            pass
+            return {"state": "idle"}
+        # Migrate the pre-rename signoff state; saved on the next write
+        if activity.get("state") == LEGACY_SIGNOFF_STATE:
+            activity["state"] = SIGNOFF_STATE
+        return activity
     return {"state": "idle"}
 
 
@@ -2125,8 +2129,8 @@ def _do_finalize(activity: dict) -> dict:
 
 mcp = FastMCP("menubuilder")
 
-# Partner-signoff state. The legacy name is still what gets written until
-# Keanu accepts the new one; both are accepted on read during the switch.
+# Partner-signoff state. The legacy name is still accepted on read (and
+# migrated by _load_activity) until the rename finishes.
 SIGNOFF_STATE = "awaiting_partner_signoff"
 LEGACY_SIGNOFF_STATE = "awaiting_partner_signoff"
 SIGNOFF_STATES = (SIGNOFF_STATE, LEGACY_SIGNOFF_STATE)
@@ -3050,11 +3054,11 @@ def approve_menu(expected_selected_meals: dict = None) -> dict:
     except Exception as e:
         return {"error": f"Could not run send_menu_partner.py: {e}"}
 
-    activity["state"] = "awaiting_partner_signoff"
+    activity["state"] = SIGNOFF_STATE
     _save_activity(activity)
 
     return {
-        "state": "awaiting_partner_signoff",
+        "state": SIGNOFF_STATE,
         "message": "Menu sent to Partner via Keanu. Waiting for her reply.",
         "meals_sent": meals_json,
     }

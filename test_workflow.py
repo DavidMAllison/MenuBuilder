@@ -169,6 +169,15 @@ def check_partner_classify_and_chmod():
     check("signoff guard accepts both state names",
           set(srv.SIGNOFF_STATES) == {"awaiting_partner_signoff", "awaiting_partner_signoff"})
 
+    import json as _json
+    import tempfile
+    from pathlib import Path as _Path
+    from unittest import mock as _mock
+    with tempfile.TemporaryDirectory() as tmp, _mock.patch.object(srv, "_TEST_DIR", _Path(tmp)):
+        (_Path(tmp) / "menu_activity.json").write_text(_json.dumps({"state": "awaiting_partner_signoff"}))
+        got = srv._load_activity()["state"]
+    check("legacy signoff state migrated on load", got == "awaiting_partner_signoff", got)
+
     import os as _os
     from unittest import mock
     with mock.patch.object(_os, "chmod", side_effect=PermissionError(1, "Operation not permitted")):
