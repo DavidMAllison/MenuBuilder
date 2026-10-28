@@ -160,23 +160,7 @@ def check_partner_classify_and_chmod():
         got = srv.classify_partner_reply(text)
         check(f"classify_partner_reply({text[:40]!r})", got == want, f"got {got}, want {want}")
 
-    # Legacy names stay callable through the bridge until Keanu switches
-    for old, new in [("classify_partner_reply", "classify_partner_reply"),
-                     ("handle_partner_reply", "handle_partner_reply"),
-                     ("send_partner_recipe_batch", "send_partner_recipe_batch"),
-                     ("refresh_partner_recipe_queue", "refresh_partner_recipe_queue")]:
-        check(f"legacy alias {old} -> {new}", getattr(srv, old, None) is getattr(srv, new))
-    check("signoff guard accepts both state names",
-          set(srv.SIGNOFF_STATES) == {"awaiting_partner_signoff", "awaiting_partner_signoff"})
-
-    import json as _json
-    import tempfile
-    from pathlib import Path as _Path
-    from unittest import mock as _mock
-    with tempfile.TemporaryDirectory() as tmp, _mock.patch.object(srv, "_TEST_DIR", _Path(tmp)):
-        (_Path(tmp) / "menu_activity.json").write_text(_json.dumps({"state": "awaiting_partner_signoff"}))
-        got = srv._load_activity()["state"]
-    check("legacy signoff state migrated on load", got == "awaiting_partner_signoff", got)
+    check("legacy names removed", not hasattr(srv, "classify_partner_reply") and not hasattr(srv, "handle_partner_reply"))
 
     import os as _os
     from unittest import mock
