@@ -114,7 +114,7 @@ def check_needs_review_excluded():
 
 def check_eating_out_reconcile():
     """A "going out" note recorded after meals were picked must still win at finalize."""
-    act = {"schedule_notes": ["Going out Sunday \u2014 no dinner needed", "kid soccer Monday 5:00-6:30 PM"],
+    act = {"schedule_notes": ["Going out Sunday \u2014 no dinner needed", "Kid soccer Monday 5:00-6:30 PM"],
            "selected_meals": {"Sun": "Chicken Cacciatore", "Mon": "Some Recipe"}}
     changed = srv._reconcile_eating_out(act)
     check("reconcile: out-note overrides picked recipe", act["selected_meals"]["Sun"] == "Going Out to Eat" and changed == ["Sun"], f"{act}")
