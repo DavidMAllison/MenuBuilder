@@ -209,16 +209,7 @@
 - `test_output/` in `.gitignore`
 
 ### MCP Write Permission — Dual-User Context
-**Status**: Planned.
-
-`update_plan_meal` (and any other MCP tool that writes to `/Users/Shared/cooking/`) fails with `[Errno 1] Operation not permitted` when called from the Claude Code console. Root cause: the Sunday SMS workflow runs as `allisonbot` (via launchd), so plan files in `/Users/Shared/cooking/weeklyplan/` are owned by `allisonbot`. The Claude Code MCP server process runs as `davidallison` and cannot write those files even though they're `0o666` — likely a TCC restriction on `/Users/Shared/` for the MCP process.
-
-**Workaround**: edit the plan JSON directly (as Claude Code can write files) when a console-side swap is needed.
-
-**Fix options to investigate**:
-- Run the MCP server as `allisonbot` (via launchd) for all callers — single user context
-- Pre-create plan files as `davidallison`-owned on the console path, let SMS update in place
-- Check `/Users/Shared/cooking/` directory-level permissions (`ls -la /Users/Shared/cooking/`) — may need `chmod g+w` on the directory itself, not just the files
+**Status**: RESOLVED (verified Oct 28 2026). State files moved to `/Users/Shared/cooking-state/`, whose directory carries an inheritable `group:staff allow read,write,delete,append` ACL. allisonbot-owned plan/shopping files are writable by davidallison (checked `mealplan_2026-10-26.json`, `shopping_2026-10-19.csv`). No workaround needed.
 
 ### Meal Costing
 **Status**: Built Aug 4 2026 — no longer on hold. `meal_costing.py` + `compute_meal_costs.py` write `avg_cost_per_serving` (+ coverage stats) onto every active recipe in `recipe_metadata.json`, sourced from `/Users/Shared/grocery/price_history.json` plus a manually-maintained `protein_portion_overrides` table in `config.json` for bulk/portioned proteins (chicken thighs/breast, pork cuts, ribs, shrimp, etc. — see [[project_meal_costing]] memory for the full list and the matching bugs that were found/fixed along the way). Rerun `compute_meal_costs.py` manually after new receipts or override entries land — not wired into the Sunday workflow.
