@@ -545,9 +545,16 @@ def execute_swap(
         # Required waits (24h marinade) and linked sub-recipes -- same intake
         # checks as the Review UI and SMS URL paths. Before the .md write so
         # the file can link its sub-recipes.
-        checks = {"time": time_str, "instructions": instructions, "ingredients_raw": ingredients_raw}
+        prior = recipes.get(canonical_name) if isinstance(recipes.get(canonical_name), dict) else {}
+        checks = {"time": time_str, "instructions": instructions, "ingredients_raw": ingredients_raw,
+                  "cut_locked": prior.get("cut_locked")}
         new_condiment_mds = run_intake_checks(title, checks, incoming_url or "", source_name)
         time_str = checks["time"]
+        # The chicken-cut check may have rewritten these.
+        if (checks["ingredients_raw"], checks["instructions"]) != (ingredients_raw, instructions):
+            ingredients_raw, instructions = checks["ingredients_raw"], checks["instructions"]
+            recipe_data = {**recipe_data, "ingredients": ingredients_raw, "instructions": instructions}
+            parsed_ingredients = [_parse_ingredient(i) for i in ingredients_raw]
 
         _create_recipe_md(recipe_data, incoming_url or "", source_name,
                           condiments=condiment_links(checks))

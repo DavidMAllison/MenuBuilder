@@ -16,6 +16,13 @@ let Miso Chicken (Oct 2026) be planned as a quick weeknight dinner:
    condiments.json (+ .md) so it lands in `condiment_deps` -- which the
    shopping list already expands and the .md builder links.
 
+3. Chicken cut. Most boneless-chicken recipes work with breasts or thighs,
+   and which one is in the fridge shouldn't decide dinner. detect_cut_swap()
+   decides whether the cut matters; when it doesn't, apply_cut_swap() rewrites
+   the ingredient line to list both and the steps to give each cut's doneness
+   temperature, cook time and -- for acidic/enzymatic marinades -- marinating
+   time. Recipes with `cut_locked: true` (Miso Chicken) are left alone.
+
 Called from every path that writes a new recipe to recipe_metadata.json
 (Review UI add, SMS/MCP URL intake) via run_intake_checks(). Same house
 pattern as everywhere else: cheap keyword fast-path, LLM only when it fires,
@@ -64,14 +71,14 @@ _INGREDIENT_LINK_SELECTORS = (
 _MAX_LINKS = 6
 
 
-def _structured(prompt: str, schema: dict, client=None) -> Optional[dict]:
+def _structured(prompt: str, schema: dict, client=None, effort: str = "low") -> Optional[dict]:
     """One Sonnet call with a JSON-schema response. None on any failure."""
     try:
         client = client or _make_client()
         resp = client.messages.create(
             model=_MODEL,
             max_tokens=4000,
-            output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+            output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
             messages=[{"role": "user", "content": prompt}],
         )
         return json.loads(next(b.text for b in resp.content if b.type == "text"))
@@ -376,6 +383,141 @@ def ensure_condiment(sub: dict, source_name: str, client=None) -> Optional[tuple
 
 
 # ---------------------------------------------------------------------------
+# 3. Chicken cut
+# ---------------------------------------------------------------------------
+
+_CHICKEN_CUT_RE = re.compile(r"\bchicken\b.*\b(breasts?|thighs?)\b|\b(breasts?|thighs?)\b.*\bchicken\b", re.IGNORECASE)
+_CUT_RE = re.compile(r"\b(breast|thigh)s?\b", re.IGNORECASE)
+_CUT_MATTERS_RE = re.compile(r"bone[- ]in|skin[- ]on|with skin|\bsplit\b|whole chicken|drumstick|\bwings?\b|"
+                             r"\bleg quarters?\b|tenderloins?|cutlets?|\bground\b|\bminced\b|cut[- ]up",
+                             re.IGNORECASE)
+SWAPPED_CHICKEN_NAME = "boneless, skinless chicken breasts or thighs"
+
+
+def _cut_swap_candidate(title: str, ingredients_raw: list) -> Optional[int]:
+    """Index of the single chicken line when the recipe uses exactly one boneless
+    cut and its title doesn't name the cut; None otherwise (no LLM call)."""
+    if _CUT_RE.search(title or ""):
+        return None
+    lines = [(i, s) for i, s in enumerate(ingredients_raw or []) if _CHICKEN_CUT_RE.search(s or "")]
+    if len(lines) != 1:
+        return None
+    i, line = lines[0]
+    cuts = {m.lower() for m in _CUT_RE.findall(line)}
+    if len(cuts) != 1 or _CUT_MATTERS_RE.search(line):
+        return None
+    return i
+
+
+_CUT_PROMPT = """Recipe: {title}
+
+Ingredients:
+{ingredients}
+
+Instructions:
+{instructions}
+
+This recipe calls for one cut of boneless chicken (line [{index}]). Decide
+whether boneless, skinless breasts and thighs are interchangeable here, and if
+so rewrite it so the cook can use either.
+
+NOT swappable (return swappable false, no changes) when the cut matters:
+- the technique depends on it: butterflied, pounded thin, stuffed, rolled,
+  breaded cutlets, schnitzel/katsu-style;
+- a long braise, stew or slow-cooker cook (over ~30 minutes in liquid) where
+  breasts would dry out;
+- the recipe or notes explain why that cut was chosen.
+
+When swappable:
+- new_ingredient: rewrite line [{index}] to list the original cut first, then
+  the other, at the same total weight. If the original is a count ("4 (6- to
+  8-ounce) breasts"), give the other cut by weight, e.g. "4 (6- to 8-ounce)
+  boneless, skinless chicken breasts or 1 1/2 to 2 pounds boneless, skinless
+  chicken thighs, trimmed". Keep prep notes ("trimmed", "cut into 1-inch
+  pieces").
+- shop_quantity / shop_unit: total amount to buy, by weight ("1.5", "pounds").
+- step_changes: only the steps that must change, each with its full rewritten
+  text; keep every other word of those steps as written. Give both cuts'
+  doneness and timing where the recipe gives one: breasts 160F, thighs 175F,
+  thighs a few minutes longer -- e.g. "until registering 160 degrees for
+  breasts, about 6 minutes per side, or 175 degrees for thighs, about 7 to 8
+  minutes per side". Keep the recipe's own temperature for its original cut.
+- Marinating: if the chicken marinates in something acidic (citrus, vinegar,
+  wine, yogurt, buttermilk) or enzymatic (pineapple, papaya, kiwi), breasts
+  turn mushy sooner than thighs -- give a time for each cut, e.g. "Marinate
+  breasts 30 minutes to 2 hours, thighs up to 8 hours." Never raise the
+  minimum marinating time. For non-acidic marinades (soy, miso, oil, herbs,
+  spices) leave the time as written.
+- Index fields are the bracketed numbers above.
+"""
+
+_CUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "swappable": {"type": "boolean"},
+        "reason": {"type": "string"},
+        "new_ingredient": {"type": "string"},
+        "shop_quantity": {"type": "string"},
+        "shop_unit": {"type": "string"},
+        "step_changes": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"index": {"type": "integer"}, "text": {"type": "string"}},
+            "required": ["index", "text"],
+            "additionalProperties": False,
+        }},
+    },
+    "required": ["swappable", "reason", "new_ingredient", "shop_quantity", "shop_unit", "step_changes"],
+    "additionalProperties": False,
+}
+
+
+def detect_cut_swap(title: str, ingredients_raw: list, instructions: list, client=None) -> Optional[dict]:
+    """The model's verdict for a single-cut boneless chicken recipe, with
+    `index` (the chicken line) added; None when the recipe isn't a candidate or
+    the call fails. Check result["swappable"] before applying."""
+    index = _cut_swap_candidate(title, ingredients_raw)
+    if index is None or not instructions:
+        return None
+    result = _structured(_CUT_PROMPT.format(
+        title=title, index=index,
+        ingredients="\n".join(f"[{i}] {s}" for i, s in enumerate(ingredients_raw)),
+        instructions="\n".join(f"[{i}] {s}" for i, s in enumerate(instructions)),
+    ), _CUT_SCHEMA, client, effort="medium")
+    if result is None:
+        return None
+    result["index"] = index
+    return result
+
+
+def apply_cut_swap(entry: dict, swap: Optional[dict]) -> bool:
+    """Write a swappable verdict into the entry's ingredients_raw, instructions
+    and structured `ingredients` (the shopping-list name). All or nothing: a
+    verdict that doesn't hold together (bad index, a line that no longer names
+    both cuts) changes nothing. Returns True when applied."""
+    if not swap or not swap.get("swappable") or entry.get("cut_locked"):
+        return False
+    raw = list(entry.get("ingredients_raw") or [])
+    steps = list(entry.get("instructions") or [])
+    idx, line = swap.get("index"), (swap.get("new_ingredient") or "").strip()
+    if not isinstance(idx, int) or not 0 <= idx < len(raw) or {m.lower() for m in _CUT_RE.findall(line)} != {"breast", "thigh"}:
+        return False
+    changes = swap.get("step_changes") or []
+    if any(not 0 <= c.get("index", -1) < len(steps) or not (c.get("text") or "").strip() for c in changes):
+        return False
+    raw[idx] = line
+    for c in changes:
+        steps[c["index"]] = c["text"].strip()
+    entry["ingredients_raw"], entry["instructions"] = raw, steps
+    for ing in entry.get("ingredients") or []:
+        name = ing.get("name", "") if isinstance(ing, dict) else ""
+        if re.search(r"\bchicken\b", name, re.IGNORECASE) and _CUT_RE.search(name):
+            ing.update(name=SWAPPED_CHICKEN_NAME, quantity=swap.get("shop_quantity", ""),
+                       unit=swap.get("shop_unit", ""))
+            break
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Entry point for intake paths
 # ---------------------------------------------------------------------------
 
@@ -384,10 +526,18 @@ def run_intake_checks(title: str, entry: dict, source_url: str = "", source_name
 
     Sets `time` (+ required wait), `advance_prep_hours`, `condiment_deps`, and
     `intake_warnings` for "homemade X" lines it couldn't resolve (a note, not
-    needs_review -- most turn out to be buyable, e.g. hummus). Returns new
-    condiment .md paths the caller should publish.
+    needs_review -- most turn out to be buyable, e.g. hummus). May rewrite
+    `ingredients_raw`, `instructions` and `ingredients` for the chicken cut --
+    callers must write the .md and entry from these fields afterwards. Returns
+    new condiment .md paths the caller should publish.
     """
     new_mds: list[Path] = []
+    try:
+        # Before advance prep, so the wait is read from the final marinade wording.
+        apply_cut_swap(entry, detect_cut_swap(title, entry.get("ingredients_raw", []),
+                                              entry.get("instructions", [])))
+    except Exception:
+        pass
     try:
         apply_advance_prep(entry, detect_advance_prep(title, entry.get("instructions", [])))
     except Exception:

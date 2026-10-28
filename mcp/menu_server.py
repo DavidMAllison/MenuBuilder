@@ -416,6 +416,9 @@ def _classify_and_write(
         "ingredients_raw": ings_raw,
     }
     new_condiment_mds = run_intake_checks(title, checks, source_url, source_name)
+    # The chicken-cut check may have rewritten these.
+    ings_raw = checks["ingredients_raw"]
+    fetched_data = {**fetched_data, "ingredients": ings_raw, "instructions": checks["instructions"]}
 
     md_path = _write_recipe_md(title, fetched_data, source_url, source_name, source_credit,
                                condiments=condiment_links(checks))

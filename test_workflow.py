@@ -388,6 +388,63 @@ def check_lunch_test_mode():
         (srv._TEST_DIR / "Zzz_Test_Lunch_Bowl.md").unlink(missing_ok=True)
 
 
+def check_cut_swap():
+    """Chicken cut rule (Oct 2026): when breasts vs thighs doesn't matter, the recipe
+    lists both with each cut's doneness and marinating time. Offline -- the model
+    verdict is faked."""
+    from unittest import mock
+    import intake_checks as ic
+    from plan_utils import canonical_ing
+    cand = ic._cut_swap_candidate
+    check("cut: single boneless cut is a candidate",
+          cand("Thai Salad", ["1 lb rice", "4 boneless, skinless chicken breasts", "2 limes"]) == 1)
+    check("cut: title naming the cut isn't", cand("Crispy Chicken Thighs", ["2 lb chicken thighs"]) is None)
+    check("cut: bone-in isn't", cand("Roast", ["4 bone-in, skin-on chicken thighs"]) is None)
+    check("cut: already lists both isn't", cand("X", ["1 lb chicken breasts or thighs"]) is None)
+    check("cut: cutlets aren't", cand("X", ["4 chicken breast cutlets"]) is None)
+    check("cut: no LLM call for a non-candidate",
+          ic.detect_cut_swap("Beef Stew", ["2 lb chuck"], ["Brown it."]) is None)
+
+    verdict = {"swappable": True, "reason": "", "index": 0, "shop_quantity": "1.5", "shop_unit": "pounds",
+               "new_ingredient": "1 1/2 pounds boneless, skinless chicken breasts or thighs",
+               "step_changes": [{"index": 0, "text": "Marinate breasts 30 minutes to 2 hours, thighs up to 8 hours."},
+                                {"index": 2, "text": "Grill to 160 degrees for breasts or 175 degrees for thighs."}]}
+    base = {"ingredients_raw": ["1 1/2 pounds boneless, skinless chicken breasts", "2 limes"],
+            "instructions": ["Marinate 30 minutes to 2 hours.", "Heat grill.", "Grill to 160 degrees."],
+            "ingredients": [{"name": "boneless skinless chicken breasts", "quantity": "1.5", "unit": "pounds",
+                             "category": "Proteins"}]}
+    e = json.loads(json.dumps(base))
+    check("cut: verdict applied", ic.apply_cut_swap(e, verdict))
+    check("cut: ingredient line + changed steps only",
+          e["ingredients_raw"][0] == verdict["new_ingredient"] and e["instructions"][1] == "Heat grill."
+          and e["instructions"][0].startswith("Marinate breasts") and "175" in e["instructions"][2], str(e))
+    check("cut: shopping name lists both", e["ingredients"][0]["name"] == ic.SWAPPED_CHICKEN_NAME
+          and canonical_ing(e["ingredients"][0]["name"]) == "boneless skinless chicken breasts or thighs")
+    e = json.loads(json.dumps(base))
+    check("cut: bad step index changes nothing",
+          not ic.apply_cut_swap(e, {**verdict, "step_changes": [{"index": 9, "text": "x"}]}) and e == base)
+    check("cut: line without both cuts changes nothing",
+          not ic.apply_cut_swap(e, {**verdict, "new_ingredient": "1 lb chicken thighs"}) and e == base)
+    check("cut: cut_locked recipe left alone", not ic.apply_cut_swap({**e, "cut_locked": True}, verdict))
+    check("cut: not swappable changes nothing", not ic.apply_cut_swap(e, {**verdict, "swappable": False}))
+
+    # Intake writes the .md and entry from the rewritten fields.
+    def fake_structured(prompt, schema, client=None, effort="low"):
+        return {k: v for k, v in verdict.items() if k != "index"} if schema is ic._CUT_SCHEMA else None
+    data = {"title": "Zzz Lime Chicken", "time": "30 minutes", "cuisine": "",
+            "ingredients": base["ingredients_raw"], "instructions": base["instructions"]}
+    with mock.patch.object(ic, "_structured", side_effect=fake_structured), \
+         mock.patch.object(srv, "RECIPES_DIR", srv._TEST_DIR), \
+         mock.patch("anthropic.Anthropic", side_effect=Exception("offline")):
+        srv._classify_and_write("Zzz Lime Chicken", data, "", "")
+    e = srv._load_metadata().get("Zzz Lime Chicken", {})
+    md = (srv._TEST_DIR / "Zzz_Lime_Chicken.md").read_text()
+    check("cut: intake entry rewritten", e.get("ingredients_raw", [""])[0] == verdict["new_ingredient"]
+          and e.get("instructions", [""])[0].startswith("Marinate breasts"), str(e))
+    check("cut: intake .md rewritten", "breasts or thighs" in md and "175 degrees" in md, md)
+    (srv._TEST_DIR / "Zzz_Lime_Chicken.md").unlink(missing_ok=True)
+
+
 def check_recipe_lookup():
     """plan_utils.find_recipe_key: a name not in the collection must not resolve to a
     lookalike (Oct 2026: Radicchio Salad became Cumin-Cardamom Chicken ... Salad)."""
@@ -590,6 +647,7 @@ def run(week_start_str: str, keep: bool) -> int:
     check_swap_activation()
     check_test_mode_refresh()
     check_lunch_test_mode()
+    check_cut_swap()
     check_recipe_lookup()
     check_post_finalize_swaps()
     check_swap_meal_confirm(selected)

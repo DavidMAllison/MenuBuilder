@@ -142,8 +142,9 @@ def _avg_price_per_unit(entries: list):
 
 # Descriptors that show up in recipe ingredient phrasing but rarely in
 # receipt product names (or vice versa) -- stripped before token matching so
-# "boneless skinless chicken breasts" can match a receipt's "chicken breast".
-_INGREDIENT_STOPWORDS = {"boneless", "skinless", "bone", "skin", "in", "on", "fresh", "frozen"}
+# "boneless skinless chicken breasts" can match a receipt's "chicken breast",
+# and "chicken breasts or thighs" can match either cut's receipts.
+_INGREDIENT_STOPWORDS = {"boneless", "skinless", "bone", "skin", "in", "on", "fresh", "frozen", "or"}
 
 
 def _significant_tokens(text: str) -> set:

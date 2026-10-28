@@ -194,10 +194,12 @@ _ING_ALIASES: dict[str, str] = {
     "red onion":                "red onions",
     # Chicken thigh variants
     "boneless, skinless chicken thighs":             "boneless skinless chicken thighs",
-    "boneless skinless chicken thighs or breast cutlets": "boneless skinless chicken thighs",
-    "boneless skinless chicken breast or thighs":   "boneless skinless chicken thighs",
     "chicken thighs boneless skinless":             "boneless skinless chicken thighs",
     "skinless boneless chicken thighs":             "boneless skinless chicken thighs",
+    # Either cut (intake_checks.apply_cut_swap) -- one Grocery item, buyer picks
+    "boneless, skinless chicken breasts or thighs":  "boneless skinless chicken breasts or thighs",
+    "boneless skinless chicken breast or thighs":    "boneless skinless chicken breasts or thighs",
+    "boneless skinless chicken thighs or breast cutlets": "boneless skinless chicken breasts or thighs",
     # Chicken breast variants
     "boneless, skinless chicken breasts":           "boneless skinless chicken breasts",
     "boneless skinless chicken breast":             "boneless skinless chicken breasts",
