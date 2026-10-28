@@ -133,8 +133,9 @@ def test_parse_minutes():
 
 def test_build_specs(monkeypatch_state_dir=True):
     today = date.today()
-    future1 = today + timedelta(days=1)
-    future2 = today + timedelta(days=2)
+    # Real plans start on a Sunday; build_specs relies on that to leave Saturday off the lunch dates
+    future1 = today + timedelta(days=(6 - today.weekday()) % 7 or 7)
+    future2 = future1 + timedelta(days=1)
     past = today - timedelta(days=5)
 
     with tempfile.TemporaryDirectory() as d:
