@@ -82,7 +82,7 @@
   - Monitor fried food frequency (max once every 2 weeks)
 
 ## Food Inventory
-- Current inventory tracked in: `/Users/Shared/cooking/inventory.json` (path also in `config.json` as `inventory_path`)
+- Current inventory tracked in: `/Users/Shared/cooking-state/inventory.json` (path also in `config.json` as `inventory_path`)
 - **Update process**: Partner texts receipt photos to Keanu → GroceryAgent parses and appends/updates items in `inventory.json`
 - **Meal planning approach**:
   - Ideally recommend meals using existing inventory
@@ -214,10 +214,11 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
 
 **Before starting: check for active SMS session** -- call `get_workflow_state` (MCP tool). If state is not `idle` or `complete`, a Sunday SMS workflow is already in progress. Resume from the current state rather than starting fresh:
 - `awaiting_meal_logging` → pick up at step 1
-- `awaiting_schedule` → pick up at step 2
-- `awaiting_cuisine` → pick up at step 3 (candidates)
+- `awaiting_suggestions` → pick up at step 2 (meals logged; check schedule, then candidates)
 - `awaiting_meal_approval` → pick up at step 4
 - `awaiting_partner_signoff` → pick up at step 6
+- `awaiting_idea_activation` → step 6 (idea recipes on the menu need content before finalizing)
+- `awaiting_finalization` → pick up at step 7
 
 0. **Drain SMS feedback queue** -- `python3 ~/projects/personal/MenuBuilder/process_feedback_queue.py`. This reads `/Users/Shared/cooking-state/feedback_queue.json` and appends entries to `feedback_current.json`, then empties the queue. Run this before step 1 so queue feedback is available during meal logging. If the queue is empty, move on. (An hourly LaunchAgent already keeps this drained day-to-day -- this step is a final guarantee of freshness right before meal logging.)
    - Entries with `sentiment: "disliked"` should be flagged during step 1.
