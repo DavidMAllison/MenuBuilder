@@ -18,9 +18,9 @@ flowchart TD
     N --> O{User wants<br/>swaps?}
     O -->|Yes| P[Swap meals<br/>re-present]
     P --> O
-    O -->|No / Done| Q[Send day + meal list<br/>to Partner]
-    Q --> R{Partner has<br/>changes?}
-    R -->|Yes| S[Apply changes<br/>+ re-send to Partner]
+    O -->|No / Done| Q[Send day + meal list<br/>to the partner]
+    Q --> R{The partner has<br/>changes?}
+    R -->|Yes| S[Apply changes<br/>+ re-send to the partner]
     S --> R
     R -->|No / Done| T{Any ideas<br/>on the menu?}
     T -->|Yes| U[Get recipe content<br/>Create .md + activate]

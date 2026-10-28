@@ -3,7 +3,7 @@
 **Where**: `/Users/Shared/sms-assistant/agents/menu_workflow.py`
 **Why**: On 2026-07-19, `menu_session.json`'s `selected_meals` (what David saw/agreed to
 in chat) diverged from `menu_activity.json`'s `selected_meals` (what actually got sent
-to Partner) for 4 of 7 days. Likely cause: a concurrent write to the shared activity
+to the partner) for 4 of 7 days. Likely cause: a concurrent write to the shared activity
 file from another process (a debugging session was active around the same time —
 "some things have been fixed" appears in the transcript right before the divergent
 swaps). MenuBuilder's `approve_menu` MCP tool now accepts an optional
@@ -19,7 +19,7 @@ Current:
         result = call_menubuilder_tool("approve_menu")
         if "error" in result:
             log.error(f"approve_menu MCP error: {result['error']}")
-            return "Something went wrong sending the menu to Partner — check the logs."
+            return "Something went wrong sending the menu to the partner — check the logs."
         # Generate shopping list now that meals are locked
         sl_result = call_menubuilder_tool(
             "generate_shopping_list",
@@ -31,7 +31,7 @@ Current:
         # awaiting_partner_signoff is bridge-owned — hand state over to MenuBuilder
         session.pop("state", None)
         _save_session(session)
-        return "Menu sent to Partner."
+        return "Menu sent to the partner."
 ```
 
 Replace with:
@@ -60,7 +60,7 @@ Replace with:
             )
         if "error" in result:
             log.error(f"approve_menu MCP error: {result['error']}")
-            return "Something went wrong sending the menu to Partner — check the logs."
+            return "Something went wrong sending the menu to the partner — check the logs."
         # Generate shopping list now that meals are locked
         sl_result = call_menubuilder_tool(
             "generate_shopping_list",
@@ -72,12 +72,12 @@ Replace with:
         # awaiting_partner_signoff is bridge-owned — hand state over to MenuBuilder
         session.pop("state", None)
         _save_session(session)
-        return "Menu sent to Partner."
+        return "Menu sent to the partner."
 ```
 
 ## Change 2 — _handle_pending_url_swap (~line 461)
 
-This path never synced `session["selected_meals"]` after resolving Partner's
+This path never synced `session["selected_meals"]` after resolving the partner's
 similar-recipe choice, so its `approve_menu()` call at the end was always
 firing against a stale local mirror (a second, independent instance of the
 same bug class, unrelated to the concurrency theory above).
@@ -86,7 +86,7 @@ Current:
 ```python
 def _handle_pending_url_swap(text: str, session: dict, config: dict):
     """
-    Partner replied to the 'similar recipe exists' question.
+    The partner replied to the 'similar recipe exists' question.
     Pending context is in session["pending_url_swap"].
     """
     admin_handle = config["security"].get("menu_admin")
@@ -102,12 +102,12 @@ def _handle_pending_url_swap(text: str, session: dict, config: dict):
         new_recipe = result.get("recipe", url)
         _send_to_partner(f"Added and swapped {day} to {new_recipe}.", partner_handle)
         if admin_handle:
-            _send_outbox(admin_handle, f"Partner chose to add new recipe '{new_recipe}' for {day}.")
+            _send_outbox(admin_handle, f"The partner chose to add new recipe '{new_recipe}' for {day}.")
     else:
-        call_menubuilder_tool("swap_meal", day=day, reason="Partner request", replacement=existing)
+        call_menubuilder_tool("swap_meal", day=day, reason="partner request", replacement=existing)
         _send_to_partner(f"Got it — using {existing} for {day}.", partner_handle)
         if admin_handle:
-            _send_outbox(admin_handle, f"Partner chose existing recipe '{existing}' for {day}.")
+            _send_outbox(admin_handle, f"The partner chose existing recipe '{existing}' for {day}.")
 
     session.pop("pending_url_swap", None)
     _save_session(session)
@@ -118,7 +118,7 @@ Replace with:
 ```python
 def _handle_pending_url_swap(text: str, session: dict, config: dict):
     """
-    Partner replied to the 'similar recipe exists' question.
+    The partner replied to the 'similar recipe exists' question.
     Pending context is in session["pending_url_swap"].
     """
     admin_handle = config["security"].get("menu_admin")
@@ -134,12 +134,12 @@ def _handle_pending_url_swap(text: str, session: dict, config: dict):
         new_recipe = result.get("recipe", url)
         _send_to_partner(f"Added and swapped {day} to {new_recipe}.", partner_handle)
         if admin_handle:
-            _send_outbox(admin_handle, f"Partner chose to add new recipe '{new_recipe}' for {day}.")
+            _send_outbox(admin_handle, f"The partner chose to add new recipe '{new_recipe}' for {day}.")
     else:
-        call_menubuilder_tool("swap_meal", day=day, reason="Partner request", replacement=existing)
+        call_menubuilder_tool("swap_meal", day=day, reason="partner request", replacement=existing)
         _send_to_partner(f"Got it — using {existing} for {day}.", partner_handle)
         if admin_handle:
-            _send_outbox(admin_handle, f"Partner chose existing recipe '{existing}' for {day}.")
+            _send_outbox(admin_handle, f"The partner chose existing recipe '{existing}' for {day}.")
 
     session.pop("pending_url_swap", None)
 

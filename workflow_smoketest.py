@@ -425,11 +425,11 @@ def simulate_workflow():
     _results.append((True, "Step 4: menu proposal (mock)"))
     print(f"  {G('[PASS]')} Mock proposal accepted")
 
-    # Step 5 — Partner signoff (mock)
-    step(5, "Send proposed menu to Partner via SMS  [MOCK]")
+    # Step 5 — partner signoff (mock)
+    step(5, "Send proposed menu to the partner via SMS  [MOCK]")
     mock_reply("Looks great!")
     note("Would call handle_partner_reply → approve_menu if no swaps requested")
-    _results.append((True, "Step 5: Partner signoff (mock)"))
+    _results.append((True, "Step 5: partner signoff (mock)"))
     print(f"  {G('[PASS]')} Mock signoff accepted")
 
     # Step 6 — plan validation

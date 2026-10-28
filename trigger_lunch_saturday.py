@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Saturday 10 AM: Send Partner 3 lunch suggestions for the week.
+Saturday 10 AM: Send the partner 3 lunch suggestions for the week.
 
 Reads last week's pick from lunch_state.json to exclude it.
 Formats as plain text with each recipe name on its own line (iMessage

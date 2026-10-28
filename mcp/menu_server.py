@@ -12,8 +12,8 @@ Tools:
   get_meal_suggestions     — run candidate filter, auto-select 7 meals
   advance_to_meal_approval — hand off from local SMS phase to bridge phase with pre-selected meals
   swap_meal                — replace one day's meal (pre-signoff)
-  approve_menu             — send selected meals to Partner via Keanu
-  handle_partner_reply      — process Partner's approval or swap request
+  approve_menu             — send selected meals to the partner via Keanu
+  handle_partner_reply      — process the partner's approval or swap request
   activate_idea_recipe     — activate a pending idea from provided markdown content
   generate_shopping_list   — write shopping CSV from finalized meals (authoritative — sms-assistant calls this)
   finalize_plan            — generate plan + shopping CSV, launch apps
@@ -81,7 +81,8 @@ PENDING_FILE = Path("/Users/Shared/sms-assistant/menu_feedback_pending.json")
 LUNCH_STATE_FILE = STATE_DIR / "lunch_state.json"
 MENU_QUEUE_FILE = STATE_DIR / "menu_queue.json"
 
-PARTNER_HANDLE = _CONFIG.get("partner_handle", "")          # Partner
+PARTNER_HANDLE = _CONFIG.get("partner_handle", "")
+PARTNER_NAME = _CONFIG.get("partner_name", "Partner")
 ADMIN_HANDLE = _CONFIG.get("admin_handle", "")              # David (optional in config)
 
 GITHUB_BASE_URL = _CONFIG.get("github_pages_base_url", "")
@@ -191,7 +192,7 @@ def _save_activity(activity: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Menu queue I/O — Partner-facing "prioritize for next week" list, managed from
+# Menu queue I/O — partner-facing "prioritize for next week" list, managed from
 # the Recipe Review UI (recipe_review_server.py owns the write path there;
 # this side only reads it during plan generation and prunes it at finalize).
 # ---------------------------------------------------------------------------
@@ -339,7 +340,7 @@ def _extract_day_from_text(text: str) -> str:
     for word, abbrev in _DAY_ALIASES.items():
         # s? allows plural/possessive-ish phrasing ("Thursdays", "Mondays") --
         # missed "Make Thursdays a going out to eat night" on 2026-08-23,
-        # silently dropping Partner's request instead of extracting the day.
+        # silently dropping the partner's request instead of extracting the day.
         if re.search(r'\b' + word + r's?\b', lower):
             return abbrev
     return ""
@@ -1195,7 +1196,7 @@ def _select_meals(
     indulgent_count = 0
 
     # Queue-priority placement — recipes explicitly queued via the Recipe Review
-    # UI (Partner's "prioritize for next week" flow) get first claim on an open
+    # UI (the partner's "prioritize for next week" flow) get first claim on an open
     # day slot, before the normal randomized _pick() loop below runs. Only the
     # hard weekday/weekend rule applies here; the softer cuisine-family and
     # indulgent caps are intentionally skipped — a queued recipe is an explicit
@@ -1579,7 +1580,7 @@ def _match_named_dishes(
 
 def _ensure_url_in_library(url: str) -> Optional[str]:
     """
-    Given a URL from Partner's message, ensure the recipe is in the library.
+    Given a URL from the partner's message, ensure the recipe is in the library.
     - If a recipe already has this source_url, returns its name.
     - If not, fetches recipe data and adds it as a new active entry.
     - Returns the recipe name, or None if the URL couldn't be fetched.
@@ -2141,7 +2142,7 @@ def get_workflow_state() -> dict:
       awaiting_meal_logging   — last week meals loaded; record ratings or call done
       awaiting_suggestions    — feedback logged; call get_meal_suggestions
       awaiting_meal_approval  — meals proposed; review + swap or approve_menu
-      awaiting_partner_signoff — sent to Partner; waiting for her reply
+      awaiting_partner_signoff — sent to the partner; waiting for her reply
       awaiting_idea_activation — ideas on menu need content before finalizing
       complete                — plan written, apps launched, prep guide sent
 
@@ -2465,7 +2466,7 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
         }
 
     selected_meals is stored in the activity state. Use swap_meal() to adjust
-    individual days, then call approve_menu() to send to Partner.
+    individual days, then call approve_menu() to send to the partner.
 
     State after call: awaiting_meal_approval
     """
@@ -2660,7 +2661,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
     # to the auto-pick candidate logic below, which always hands back some filler
     # recipe — there was no way to actually blank a day. Detect that intent here
     # and write the existing "Going Out to Eat" placeholder instead, mirroring
-    # the pattern already used for Partner's eating-out replies (see
+    # the pattern already used for the partner's eating-out replies (see
     # _parse_eating_out_days / classify_partner_reply's "eating_out" intent).
     _CLEAR_DAY_SIGNALS = (
         "don't need a meal", "no meal needed", "skip this day", "skip it",
@@ -2960,7 +2961,7 @@ def swap_meal(day: str, reason: str, replacement: str = "", cuisine_direction: s
 @mcp.tool()
 def approve_menu(expected_selected_meals: dict = None) -> dict:
     """
-    Send the currently selected meals to Partner for approval via Keanu.
+    Send the currently selected meals to the partner for approval via Keanu.
 
     Calls send_menu_partner.py with the selected_meals from the active workflow.
     Writes to Keanu's outbox spool (cooking-state/outbox/) and creates menu_feedback_pending.json.
@@ -2970,7 +2971,7 @@ def approve_menu(expected_selected_meals: dict = None) -> dict:
             is current (e.g. the SMS session's local mirror of the plan it just
             showed the user). If provided and it doesn't match the actual
             activity state, the send is refused — this catches a plan getting
-            sent to Partner that the human never actually saw/confirmed, e.g. if
+            sent to the partner that the human never actually saw/confirmed, e.g. if
             a concurrent process (another debugging session, a duplicate MCP
             process) wrote to menu_activity.json without the caller's mirror
             being told to re-sync. Omit only for calls with no local mirror.
@@ -2978,7 +2979,7 @@ def approve_menu(expected_selected_meals: dict = None) -> dict:
     Returns:
         {
           "state": "awaiting_partner_signoff",
-          "message": "Menu sent to Partner via Keanu.",
+          "message": "Menu sent to <partner> via Keanu.",
           "meals_sent": [{"day": "Mon 5/26", "recipe": "..."}]
         }
 
@@ -2996,7 +2997,7 @@ def approve_menu(expected_selected_meals: dict = None) -> dict:
         return {
             "error": "selected_meals_mismatch",
             "message": (
-                "The plan changed since you last saw it — not sending to Partner. "
+                f"The plan changed since you last saw it — not sending to {PARTNER_NAME}. "
                 "Something else wrote to the workflow state in the meantime. "
                 "Re-fetch with get_workflow_state(), show the user the current "
                 "plan, and confirm before calling approve_menu again."
@@ -3036,7 +3037,7 @@ def approve_menu(expected_selected_meals: dict = None) -> dict:
                 "error": "menu_already_pending",
                 "message": (
                     "Nothing was actually sent -- a menu approval is already pending "
-                    "(stale menu_feedback_pending.json). Check whether Partner already "
+                    f"(stale menu_feedback_pending.json). Check whether {PARTNER_NAME} already "
                     "replied to the earlier send; if that pending file is stale/abandoned, "
                     "delete it, then call approve_menu again."
                 ),
@@ -3052,7 +3053,7 @@ def approve_menu(expected_selected_meals: dict = None) -> dict:
 
     return {
         "state": SIGNOFF_STATE,
-        "message": "Menu sent to Partner via Keanu. Waiting for her reply.",
+        "message": f"Menu sent to {PARTNER_NAME} via Keanu. Waiting for her reply.",
         "meals_sent": meals_json,
     }
 
@@ -3189,7 +3190,7 @@ def _process_recipe_url_core(url: str, day: str = "", force_add: bool = False) -
 @mcp.tool()
 def classify_partner_reply(reply: str) -> str:
     """
-    Classify Partner's reply to the proposed menu WITHOUT acting on it.
+    Classify the partner's reply to the proposed menu WITHOUT acting on it.
 
     Use this to decide whether an incoming message is actually her menu answer
     before consuming the pending-approval state; then call handle_partner_reply
@@ -3209,7 +3210,7 @@ def classify_partner_reply(reply: str) -> str:
 
 
 def _classify_partner_reply(reply: str) -> str:
-    """Classify Partner's reply intent via Haiku. Same pattern as _claude_swap
+    """Classify the partner's reply intent via Haiku. Same pattern as _claude_swap
     (same model, constrained-output prompt, graceful fallback on any error).
 
     Returns one of: approve, swap_request, eating_out, swap_plus_approve, unclear.
@@ -3250,7 +3251,7 @@ def _classify_partner_reply(reply: str) -> str:
 
 
 def _resend_menu_to_partner(new_selected: dict, week_start: date) -> list:
-    """Build meals_json for the updated selection and re-send it to Partner."""
+    """Build meals_json for the updated selection and re-send it to the partner."""
     day_to_date = _day_date_map(week_start)
     meal_urls = _selected_meal_urls(new_selected, _load_metadata())
     meals_json = [
@@ -3297,7 +3298,7 @@ def _finalize_or_request_idea_activation(activity: dict) -> dict:
         return {
             **activity,
             "message": (
-                f"Partner approved! But {len(failed_ideas)} idea recipe(s) couldn't be "
+                f"{PARTNER_NAME} approved! But {len(failed_ideas)} idea recipe(s) couldn't be "
                 f"auto-fetched. Activate them manually then call finalize_plan()."
             ),
             "pending_ideas": failed_ideas,
@@ -3308,10 +3309,10 @@ def _finalize_or_request_idea_activation(activity: dict) -> dict:
 
 def handle_partner_reply(reply: str) -> dict:
     """
-    Process Partner's reply to the proposed menu.
+    Process the partner's reply to the proposed menu.
 
     Args:
-        reply: Partner's text message (e.g. "looks good", "swap Tuesday to salmon",
+        reply: the partner's text message (e.g. "looks good", "swap Tuesday to salmon",
                "can we do something lighter on Wednesday?")
 
     Routing:
@@ -3367,7 +3368,7 @@ def handle_partner_reply(reply: str) -> dict:
                 "has_url": True,
                 "url": url,
                 "message": (
-                    f"Partner sent a recipe URL but didn't say which day it's for: {url}. "
+                    f"{PARTNER_NAME} sent a recipe URL but didn't say which day it's for: {url}. "
                     "Ask her which day, then call process_recipe_url(url=..., day=...)."
                 ),
             }
@@ -3381,7 +3382,7 @@ def handle_partner_reply(reply: str) -> dict:
                 "url": url,
                 "extracted_day": extracted_day,
                 "message": (
-                    f"Partner's link for {extracted_day} looks similar to "
+                    f"{PARTNER_NAME}'s link for {extracted_day} looks similar to "
                     f"\"{url_result['recipe']}\" ({url_result['match_score']:.0%} match) "
                     "already in the collection. Ask which one to use, then call "
                     f"swap_meal(day='{extracted_day}', replacement=...) or "
@@ -3394,7 +3395,7 @@ def handle_partner_reply(reply: str) -> dict:
                 "parsed": False,
                 "has_url": True,
                 "url": url,
-                "message": f"Couldn't fetch Partner's recipe link for {extracted_day}: {url_result['error']}",
+                "message": f"Couldn't fetch {PARTNER_NAME}'s recipe link for {extracted_day}: {url_result['error']}",
             }
 
         # status == "added" — recipe fetched, added, and swapped into the day
@@ -3406,7 +3407,7 @@ def handle_partner_reply(reply: str) -> dict:
         return {
             **activity,
             "message": (
-                f"Added Partner's recipe '{url_result['recipe']}' for {extracted_day}. "
+                f"Added {PARTNER_NAME}'s recipe '{url_result['recipe']}' for {extracted_day}. "
                 "Updated menu re-sent to her."
             ),
             "meals_sent": meals_json,
@@ -3429,7 +3430,7 @@ def handle_partner_reply(reply: str) -> dict:
             _save_activity(activity)
             return {
                 **activity,
-                "message": f"Partner says going out {eating_out_day}. Updated menu re-sent.",
+                "message": f"{PARTNER_NAME} says going out {eating_out_day}. Updated menu re-sent.",
                 "meals_sent": meals_json,
             }
         intent = "unclear"  # couldn't extract which day — fall through below
@@ -3453,7 +3454,7 @@ def handle_partner_reply(reply: str) -> dict:
             _save_activity(activity)
             return {
                 **activity,
-                "message": "Partner's swap applied. Updated menu re-sent to her.",
+                "message": f"{PARTNER_NAME}'s swap applied. Updated menu re-sent to her.",
                 "meals_sent": meals_json,
             }
         intent = "unclear"  # classifier saw a swap but nothing extractable
@@ -3463,7 +3464,7 @@ def handle_partner_reply(reply: str) -> dict:
         **activity,
         "parsed": False,
         "message": (
-            f"Could not automatically apply Partner's reply: {reply!r}. "
+            f"Could not automatically apply {PARTNER_NAME}'s reply: {reply!r}. "
             "Either it was unparseable or no recipe in the collection fits the "
             "request. Tell David what she asked for so he can pick a replacement "
             "or add a new recipe."
@@ -4144,7 +4145,7 @@ def sync_atk_recipes(target: int = 5, dry_run: bool = False, collection: str = "
 @mcp.tool()
 def get_lunch_pick() -> dict:
     """
-    Return Partner's current weekly lunch pick (name and URL).
+    Return the partner's current weekly lunch pick (name and URL).
 
     Returns:
         {"name": recipe_name, "url": github_pages_url, "status": "selected" | "none"}
@@ -4176,7 +4177,7 @@ def get_lunch_pick() -> dict:
 @mcp.tool()
 def get_lunch_suggestions(exclude: str = "") -> dict:
     """
-    Return 3 lunch suggestions for Partner.
+    Return 3 lunch suggestions for the partner.
 
     Filters recipes tagged lunch_suitable or meal_type=="lunch", avoids anything
     eaten in the last 4 weeks. URLs are GitHub Pages clickable links.
@@ -4202,7 +4203,7 @@ def get_lunch_suggestions(exclude: str = "") -> dict:
 @mcp.tool()
 def set_lunch_pick(recipe_name: str) -> dict:
     """
-    Record Partner's lunch pick for the week.
+    Record the partner's lunch pick for the week.
 
     Writes to /Users/Shared/cooking-state/lunch_state.json. The shopping list
     generator reads this file and appends lunch ingredients dated Saturday
@@ -4248,7 +4249,7 @@ def set_lunch_pick(recipe_name: str) -> dict:
 @mcp.tool()
 def log_lunch_feedback(recipe: str, sentiment: str, note: str = "") -> dict:
     """
-    Log Partner's feedback on last week's lunch and update tracking fields.
+    Log the partner's feedback on last week's lunch and update tracking fields.
 
     Updates times_eaten_lunch and last_lunch_date in recipe_metadata.json.
     Clears current_pick from lunch_state.json after logging.
@@ -4296,7 +4297,7 @@ def log_lunch_feedback(recipe: str, sentiment: str, note: str = "") -> dict:
 @mcp.tool()
 def add_lunch_recipe_url(url: str, force_add: bool = False) -> dict:
     """
-    Add a recipe URL Partner texted as a lunch recipe.
+    Add a recipe URL the partner texted as a lunch recipe.
 
     Same intake as process_recipe_url (ATK logged-in fetch, ld+json, Haiku
     extraction fallback, naked-stub guard, health classification, intake
@@ -4645,11 +4646,11 @@ def cleanup_test_data() -> dict:
 def send_partner_recipe_batch() -> dict:
     """
     Pick 5 fresh recipe candidates from the idea queue (favoring quick cook
-    times, since Partner is time-focused) and build a text + review link for
+    times, since the partner is time-focused) and build a text + review link for
     Keanu to send her. Excludes anything already in the collection or sent
     in a prior batch.
 
-    Callable by both David and Partner (idea_submitters) via the SMS bridge —
+    Callable by both David and the partner (idea_submitters) via the SMS bridge —
     the caller is responsible for actually sending the returned "message"
     text (this tool does not send iMessages itself, that only works from
     inside the sms-assistant process).
@@ -4688,7 +4689,7 @@ def send_partner_recipe_batch() -> dict:
 def refresh_partner_recipe_queue(notify_handle: str) -> dict:
     """
     Kick off a fresh idea-queue refresh (all 6 recipe agents) in the
-    background, then text notify_handle a new Partner batch once it finishes.
+    background, then text notify_handle a new partner batch once it finishes.
 
     Returns almost instantly rather than waiting for the refresh -- the SMS
     bridge that calls this has a 60s timeout, but fill_menu_ideas.py takes
@@ -4701,7 +4702,7 @@ def refresh_partner_recipe_queue(notify_handle: str) -> dict:
     Args:
         notify_handle: iMessage handle to text once the refresh finishes and
                        produces a batch. Passed in by Keanu at call time --
-                       Partner's number lives in its config, not here.
+                       The partner's number lives in its config, not here.
 
     Returns:
         {"status": "started"} once the background worker is launched, or

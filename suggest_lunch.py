@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-suggest_lunch.py -- Return 3 lunch suggestions for Partner.
+suggest_lunch.py -- Return 3 lunch suggestions for the partner.
 
 Filters recipes that are lunch_suitable or meal_type=="lunch", avoids
 anything cooked in the last 4 weeks, and returns name + GitHub Pages URL.

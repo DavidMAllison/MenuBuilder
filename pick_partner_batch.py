@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 pick_partner_batch.py -- Pick 5 fresh recipe candidates from the idea queue
-for Partner to review via the Review UI's filtered batch view.
+for the partner to review via the Review UI's filtered batch view.
 
 Selection:
   - Pulls from the same agent_results/*_agent_results.json queue as the
     Review UI's New view.
   - Excludes anything already in the active collection, and anything sent
     in a prior batch (tracked in partner_batch_sent.json).
-  - Partner is time-focused -- sorts by cook time ascending (parse_minutes),
+  - The partner is time-focused -- sorts by cook time ascending (parse_minutes),
     so quick weeknight-shaped recipes surface first; multi-hour recipes
     (slow cooker, ATK braises, etc.) only get picked if nothing shorter
     remains in the queue.
@@ -156,7 +156,7 @@ def pick_batch(candidates: list, n: int = BATCH_SIZE) -> list:
 def generate_batch(size: int = BATCH_SIZE, write: bool = True) -> Optional[dict]:
     """Gather, pick, and (by default) persist a batch. Returns the batch dict,
     or None if the queue has nothing fresh to offer. Shared by the CLI entry
-    point below and the sms-assistant tool that texts Partner the link."""
+    point below and the sms-assistant tool that texts the partner the link."""
     candidates = gather_candidates()
     if not candidates:
         return None

@@ -5,7 +5,7 @@ refresh_partner_recipe_queue() (mcp/menu_server.py).
 
 Runs fill_menu_ideas.py to completion (all 6 agents -- this takes minutes,
 which is exactly why it's detached rather than run inline in the MCP tool
-call), then generates a fresh Partner batch and drops it directly into
+call), then generates a fresh partner batch and drops it directly into
 Keanu's outbox spool so she gets notified without any callback into
 Keanu's own process -- this worker is spawned detached and outlives the
 short-lived bridge subprocess that started it.

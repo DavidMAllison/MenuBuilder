@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
 build_weekly_recipe_email.py -- Build the weekly "new recipe ideas" email
-(10 picks, sent to both David and Partner every Saturday morning).
+(10 picks, sent to both David and the partner every Saturday morning).
 
 Selection:
   - Reuses pick_partner_batch.gather_candidates() for the same agent_results/*.json
     queue + active-collection dedup it already does -- which also already excludes
-    anything previously sent in an Partner SMS batch (partner_batch_sent.json), so the
+    anything previously sent in a partner SMS batch (partner_batch_sent.json), so the
     same idea never shows up twice across the two channels.
   - Additionally excludes anything already sent in a prior weekly email
     (email_batch_sent.json).
-  - Picks are shuffled (not sorted by cook time -- that bias is specific to Partner's
+  - Picks are shuffled (not sorted by cook time -- that bias is specific to the partner's
     time-focused SMS batch) for cuisine/type variety.
 
 Writes:
@@ -71,7 +71,7 @@ def _email_sent_sets() -> tuple[set, set]:
 
 def gather_email_candidates() -> list:
     """Full-record candidates (ingredients/instructions intact), already deduped
-    against the active collection and Partner's SMS sent-log by gather_candidates();
+    against the active collection and the partner's SMS sent-log by gather_candidates();
     additionally excludes anything already sent in a prior weekly email."""
     candidates = pick_partner_batch.gather_candidates()
     sent_urls, sent_titles = _email_sent_sets()

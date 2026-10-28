@@ -417,7 +417,7 @@ def recipes():
 @app.route("/api/batch/<batch_id>")
 @login_required
 def batch_recipes(batch_id):
-    """Filtered view for the weekly Partner batch link -- only the picks from
+    """Filtered view for the weekly partner batch link -- only the picks from
     partner_recipe_batch.json, not the full New queue. Expires as soon as a
     newer batch is generated (the state file gets overwritten each run)."""
     if not PARTNER_BATCH_PATH.exists():
@@ -613,7 +613,7 @@ _EMAIL_ACTION_COPY = {
     "remove": ("Not Interested", "Remove this recipe from future recipe idea batches?"),
 }
 
-# The same email (same tokens) goes to both David and Partner, so a token can
+# The same email (same tokens) goes to both David and the partner, so a token can
 # legitimately get "used" by whichever of them clicks first -- worded as a
 # normal outcome, not a broken-link error, for whoever clicks second.
 _EMAIL_ACTION_USED_COPY = {
@@ -854,7 +854,7 @@ def this_week():
 @app.route("/api/lunch_pick")
 @login_required
 def lunch_pick_api():
-    """Return Partner's current weekly lunch pick with recipe detail."""
+    """Return the partner's current weekly lunch pick with recipe detail."""
     lunch_state_file = Path("/Users/Shared/cooking-state/lunch_state.json")
     if not lunch_state_file.exists():
         return jsonify({"status": "none"})
@@ -1159,7 +1159,7 @@ def move_queue_item():
 def dismiss_recipe():
     """Dismiss a recipe permanently -- durable, not just hidden from this session.
     Swept out of agent_results/*.json by fill_menu_ideas.py on its next run, and
-    excluded from Partner/email candidate gathering by pick_partner_batch.py."""
+    excluded from partner/email candidate gathering by pick_partner_batch.py."""
     body  = request.get_json()
     url   = (body.get("url", "") or "").rstrip("/")
     title = (body.get("title", "") or "").strip()

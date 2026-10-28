@@ -6,6 +6,7 @@
   "partner_handle": "+15550000000",
   "admin_handle": "+15550000001",
   "david_email": "you@example.com",
+  "partner_name": "Partner",
   "partner_email": "partner@example.com",
   "review_ui_base_url": "https://your-mac.local:5051",
   "ingredient_portion_overrides": {

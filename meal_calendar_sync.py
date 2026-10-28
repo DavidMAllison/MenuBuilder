@@ -13,12 +13,12 @@ second process to re-parse.
 Behavior preserved exactly from the AppleScript version:
   - Calendar named "Dinners" (NOT auto-created if missing -- matches the
     AppleScript, which assumed it already exists). Dedicated calendar so it
-    can be iCloud-shared with Partner without exposing David's default
+    can be iCloud-shared with the partner without exposing David's default
     calendar or risking the exact-time delete-and-recreate logic below
     colliding with an unrelated personal event (see Sep 14 2026 discussion).
   - Dinners at 6:00 PM: any existing event at that exact start time is
     deleted before creating the new one (safe re-run).
-  - Lunches at noon, titled "Partner's Lunch: <name>": matched for deletion
+  - Lunches at noon, titled "<partner_name>'s Lunch: <name>" (partner_name from config.json): matched for deletion
     by title prefix among events at that noon timestamp, not just by time,
     since other things could be scheduled at noon.
   - Event description built from health | "Cook time: X" | "Note: X" |
@@ -53,7 +53,8 @@ LOG_PATH = Path("/tmp/meal_calendar.log")
 CALENDAR_NAME = "Dinners"
 DINNER_HOUR = 18
 LUNCH_HOUR = 12
-LUNCH_TITLE_PREFIX = "Partner's Lunch"
+_CONFIG = json.loads((Path(__file__).parent / "config.json").read_text())
+LUNCH_TITLE_PREFIX = f"{_CONFIG.get('partner_name', 'Partner')}'s Lunch"
 
 EFFORT = {"low": "(low)", "medium": "(med)", "high": "(high)"}
 
@@ -280,7 +281,7 @@ def sync_calendar(plan_path: Optional[Path] = None, dry_run: bool = False) -> di
 
 def _delete_matching_events(store, cal, at_time: datetime, title_prefix, dry_run: bool, logger):
     """Delete events on `cal` starting exactly at `at_time`, optionally
-    restricted to a title prefix (the noon/"Partner's Lunch" case, since
+    restricted to a title prefix (the noon/"<partner_name>'s Lunch" case, since
     other things can be scheduled at noon -- matches the AppleScript's
     per-purpose delete-match logic exactly)."""
     day_start = datetime(at_time.year, at_time.month, at_time.day)

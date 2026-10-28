@@ -12,7 +12,7 @@ Build the Sunday 9 AM auto-generation workflow. A launchd plist (already created
 `~/Library/LaunchAgents/com.menubuilder.sundaymenu.plist`) fires at 9 AM every Sunday
 and runs `/Users/Shared/sms-assistant/trigger_menu.py`. The trigger starts the workflow
 and sends the opening message to David via SMS. The rest of the flow is sequential SMS
-back-and-forth until candidates are approved, then continues through Partner's approval
+back-and-forth until candidates are approved, then continues through the partner's approval
 and finalization.
 
 ---
@@ -316,7 +316,7 @@ def dispatch(text: str, session: dict, config: dict) -> str:
         if any(lowered == p or lowered.startswith(p + " ") for p in approval):
             result = call_menubuilder_tool("approve_menu")
             _sync_session_state(result.get("state", "awaiting_partner_signoff"))
-            return "Sent to Partner."
+            return "Sent to the partner."
         else:
             result = call_menubuilder_tool("swap_meal", reason=text)
             _sync_session_state(result.get("state", state))
@@ -331,7 +331,7 @@ def dispatch(text: str, session: dict, config: dict) -> str:
             )
 
     if state == "awaiting_partner_signoff":
-        return "Waiting on Partner's OK. I'll let you know when she replies."
+        return "Waiting on the partner's OK. I'll let you know when she replies."
 
     if state == "awaiting_idea_activation":
         pending = state_result.get("pending_idea", "")

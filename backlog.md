@@ -32,15 +32,15 @@
 
 ### Weekly Lunch Recommendation
 **Status**: COMPLETE Jun 13 2026.
-- Saturday 10 AM SMS → 3 suggestions → Partner picks → ingredients added to shopping list dated Saturday
+- Saturday 10 AM SMS → 3 suggestions → the partner picks → ingredients added to shopping list dated Saturday
 - Saturday 6 PM nudge if no reply
 - sms-assistant: `set_lunch_pick` + `log_lunch_feedback` wired in `tools.py` + system prompt updated
 
 ### Lunch Calendar Event
 **Status**: COMPLETE Jun 17 2026.
-- `WeeklyMealCalendar.app` creates "Partner's Lunch: [recipe]" events at noon (12–1 PM) for Sun–Fri of the current plan week
+- `WeeklyMealCalendar.app` creates "<partner_name>'s Lunch: [recipe]" events (name from config.json) at noon (12–1 PM) for Sun–Fri of the current plan week
 - Reads `/Users/Shared/cooking/lunch_state.json`; skips if no pick is set
-- Deletes any existing noon events with "Partner's Lunch" prefix before recreating (safe to re-run)
+- Deletes any existing noon events with the "<partner_name>'s Lunch" prefix before recreating (safe to re-run)
 - Saturday is excluded; only future dates are processed
 
 ### ATK / America's Test Kitchen
@@ -52,7 +52,7 @@
 ### Sunday Morning Auto-Generation
 **Status**: COMPLETE Jun 4 2026. First live test Jun 8 2026.
 - launchd plist at `~/Library/LaunchAgents/com.menubuilder.sundaymenu.plist` — 9 AM Sunday
-- Full SMS workflow: feedback logging → schedule check → candidate filter → menu proposal → Partner approval → finalize
+- Full SMS workflow: feedback logging → schedule check → candidate filter → menu proposal → partner approval → finalize
 
 ### Recipe Site MCP Servers
 - ATK: DONE (Jun 9 2026 — `sync_atk_recipes` MCP tool)

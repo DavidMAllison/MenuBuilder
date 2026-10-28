@@ -182,7 +182,7 @@ def test_build_specs(monkeypatch_state_dir=True):
 
         check("build_specs: lunch generated for the week", len(lunches) > 0, detail=str(lunches))
         if lunches:
-            check("build_specs: lunch title has 'Partner's Lunch' prefix", lunches[0].title.startswith("Partner's Lunch:"))
+            check("build_specs: lunch title has the partner lunch prefix", lunches[0].title.startswith(mcs.LUNCH_TITLE_PREFIX + ":"))
             check("build_specs: Saturday excluded from lunch dates", all(lu.dt.weekday() != 5 for lu in lunches))
 
 

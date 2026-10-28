@@ -21,7 +21,7 @@ to generate the REMINDERS section via Claude Sonnet).
 | Field | Required | Purpose |
 |---|---|---|
 | `metadata_path` | yes | Path to `recipe_metadata.json` |
-| `partner_handle` | yes | Partner's phone number for Keanu outbox |
+| `partner_handle` | yes | The partner's phone number for Keanu outbox |
 | `admin_handle` | optional | David's phone number — prep guide + plan summary |
 | `github_pages_base_url` | optional | Recipe URL prefix for GitHub Pages links |
 | `dropbox_recipe_base_url` | optional | Dropbox fallback URL prefix |
@@ -57,7 +57,7 @@ client — use the MCP tools exclusively.
 | `log_meal_feedback` | `feedback: str` | Records ratings; `"done"` finalizes and advances state |
 | `get_meal_suggestions` | `cuisine_direction`, `constraints` | Loads candidates, auto-selects 7 meals |
 | `swap_meal` | `day`, `reason`, `replacement?` | Replaces one day (auto-picks if no replacement given) |
-| `approve_menu` | — | Sends selected meals to Partner via Keanu |
+| `approve_menu` | — | Sends selected meals to the partner via Keanu |
 | `handle_partner_reply` | `reply: str` | Processes approval or swap; triggers finalization on approval |
 | `activate_idea_recipe` | `name`, `content`, `source_url?` | Activates a pending idea from markdown content |
 | `finalize_plan` | — | Generates plan + shopping CSV, launches apps, sends prep guide |

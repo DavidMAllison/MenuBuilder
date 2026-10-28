@@ -1,12 +1,12 @@
 """
-Send this week's proposed menu to Partner for approval via Keanu.
+Send this week's proposed menu to the partner for approval via Keanu.
 Accepts a meal list directly so it can be called before the plan file is written.
 
 Usage:
     python3 send_menu_partner.py --meals '[{"day": "Mon 5/19", "recipe": "Korean Chicken Bulgogi"}, ...]'
 
 Writes to Keanu's outbox (triggers the iMessage) and drops a pending flag file.
-Keanu captures Partner's reply and writes it to menu_feedback_response.json.
+Keanu captures the partner's reply and writes it to menu_feedback_response.json.
 MenuBuilder deletes the pending file once the menu is confirmed.
 """
 
@@ -41,7 +41,7 @@ def format_message(meals: list[dict]) -> str:
 def send_to_partner(meals: list[dict]) -> bool:
     """Returns True if a message was actually sent, False if it no-op'd."""
     if PENDING_FILE.exists():
-        print("A menu approval is already pending. Check if Partner has replied before sending again.")
+        print("A menu approval is already pending. Check if the partner has replied before sending again.")
         return False
 
     if not meals:
@@ -49,7 +49,7 @@ def send_to_partner(meals: list[dict]) -> bool:
         return False
 
     message = format_message(meals)
-    print("Sending to Partner:\n")
+    print("Sending to the partner:\n")
     print(message)
     print()
 
@@ -65,7 +65,7 @@ def send_to_partner(meals: list[dict]) -> bool:
         "partner_handle": PARTNER_HANDLE,
     }))
 
-    print("Menu sent to Partner via Keanu. Waiting for her reply.")
+    print("Menu sent to the partner via Keanu. Waiting for her reply.")
     return True
 
 

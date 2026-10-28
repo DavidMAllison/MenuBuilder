@@ -83,7 +83,7 @@
 
 ## Food Inventory
 - Current inventory tracked in: `/Users/Shared/cooking-state/inventory.json` (path also in `config.json` as `inventory_path`)
-- **Update process**: Partner texts receipt photos to Keanu → GroceryAgent parses and appends/updates items in `inventory.json`
+- **Update process**: the partner texts receipt photos to Keanu → GroceryAgent parses and appends/updates items in `inventory.json`
 - **Meal planning approach**:
   - Ideally recommend meals using existing inventory
   - Okay to suggest new things that require shopping, especially on weekends
@@ -173,6 +173,7 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
 - **WeeklyShoppingList.app** -- populates "Grocery" Reminders list from the meal plan. Run: `open /Applications/WeeklyShoppingList.app`
 - **WeeklyMealCalendar.app** -- adds dinner events to iCloud "Calendar" from meal plan. Run: `open /Applications/WeeklyMealCalendar.app`
 - **github_sync.py** -- publishes recipe/condiment `.md` files to the GitHub Pages repo. Keanu runs as allisonbot and can't write the repo or push, so intake paths call `request_publish()` (spool: `/Users/Shared/cooking-state/publish_requests/`) and the `com.menubuilder.githubsync` LaunchAgent publishes as davidallison (log: `github_sync.log`). The Review UI calls `publish()` directly. No fetch/rebase -- a rejected push is logged and retried every 10 min. Any new write path that creates a recipe `.md` must call `request_publish()`.
+- **No family names in tracked files** -- the partner's and kids' names, phones and emails never go in code, comments, docs, file names or commit messages (history was rewritten Oct 28 2026 to remove them). Say "partner"/"kid"; anything that must show the real name at runtime (calendar titles, texts) reads `partner_name` from gitignored `config.json`.
 - See `release-notes.md` for details on implemented features
 - See `backlog.md` for planned features
 
@@ -183,7 +184,7 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
 - **To start**: `cd /Users/Shared/sms-assistant && ./start.sh`
 - **Guardrails**: Phone number whitelist in `config/settings.yaml`. System prompt in `system_prompts/menu.txt`. Neither can be changed via SMS.
 - **Feedback queue**: Keanu writes recipe feedback to `/Users/Shared/cooking-state/feedback_queue.json`. Drained into `feedback_current.json` by `process_feedback_queue.py`, run at the start of each menu workflow (step 0) AND hourly via the `com.menubuilder.feedbacksync` LaunchAgent -- keeps SMS feedback in sync with any feedback given directly in a session, rather than sitting in the queue until Sunday. The hourly sync only drains the queue; it does not apply feedback to `recipe_metadata.json` -- that still happens at the Sunday review step per the rules below.
-- **Menu approval**: After sending the weekly menu via `send_menu_partner.py`, Keanu captures Partner's reply and writes it to `/Users/Shared/sms-assistant/menu_feedback_response.json`. MenuBuilder reads this file after approval.
+- **Menu approval**: After sending the weekly menu via `send_menu_partner.py`, Keanu captures the partner's reply and writes it to `/Users/Shared/sms-assistant/menu_feedback_response.json`. MenuBuilder reads this file after approval.
 
 ## Meal Plan Generation Rules
 
@@ -235,9 +236,9 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
    - **Budget context**: `suggest_meals.py` already prints this (`BUDGET: ...`) — no separate file read needed. If `suggested_weekly_spend` is low (tight week), prioritize inventory-heavy meals and avoid recipes that require many fresh or specialty ingredients. Mention the budget posture to the user before proposing candidates. (Real file: `/Users/Shared/grocery/grocery_budget_status.json` — the old `~/Dropbox/LLMContext/Personal/` copy is dead, frozen since the GroceryAgent pipeline moved; fixed Aug 4 2026.)
    - **Thin pool check**: If fewer than 5 candidates or the list is weak on variety, mention it and ask: "The idea pool is light on [cuisine] — want me to run an agent to add some options before we pick?" Do NOT run agents silently or by default. Agents are outside the workflow; they add latency and return unclassified recipes that need metadata before they can be scored.
 4. **Propose recipe names only** -- before presenting, verify the 7-meal list against the Variety Rules above (protein limits, max 2 per cuisine family, at least 1 newer recipe). Adjust candidates if needed, then present. Let user approve/swap before generating.
-5. **Send to Partner** -- `python3 ~/projects/personal/MenuBuilder/send_menu_partner.py` (day + meal name, each followed by its recipe link).
-   - **SMS link rule**: before the plan is finalized, every recipe name in a text is followed by its recipe URL. Once finalized, the text is only `Plan ready! <review_ui_base_url>` to David and Partner -- the site already lists the week's plan, so no day list or per-recipe links. Note: the site (`.local`) only works on home wifi; Cloudflare Tunnel fix on hold.
-6. **Partner approves** -- wait for her reply in `/Users/Shared/sms-assistant/menu_feedback_response.json`. Apply any changes.
+5. **Send to the partner** -- `python3 ~/projects/personal/MenuBuilder/send_menu_partner.py` (day + meal name, each followed by its recipe link).
+   - **SMS link rule**: before the plan is finalized, every recipe name in a text is followed by its recipe URL. Once finalized, the text is only `Plan ready! <review_ui_base_url>` to David and the partner -- the site already lists the week's plan, so no day list or per-recipe links. Note: the site (`.local`) only works on home wifi; Cloudflare Tunnel fix on hold.
+6. **The partner approves** -- wait for her reply in `/Users/Shared/sms-assistant/menu_feedback_response.json`. Apply any changes.
 7. **Generate meal plan** -- save `mealplan_YYYY-MM-DD.txt` (minimal format) + `shopping_YYYY-MM-DD.csv`
 8. **Run apps** -- `open /Applications/WeeklyShoppingList.app` then `open /Applications/WeeklyMealCalendar.app`
 9. **Send prep guide** -- via Keanu

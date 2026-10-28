@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Saturday 6 PM: Nudge Partner if she hasn't picked a lunch yet.
+Saturday 6 PM: Nudge the partner if she hasn't picked a lunch yet.
 
 Checks lunch_state.json — if status is not "selected" or set_date is
 not today, sends a short reminder. If she already replied, exits silently.
@@ -47,7 +47,7 @@ def main() -> None:
         sys.exit(1)
 
     if _already_picked():
-        print("Partner already picked lunch — no nudge needed.")
+        print("The partner already picked lunch — no nudge needed.")
         sys.exit(0)
 
     msg = "Hey — just a nudge! Did you want to pick a lunch for this week? Reply anytime or I'll leave it up to you."

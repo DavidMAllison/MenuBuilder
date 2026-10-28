@@ -70,18 +70,18 @@ github_sync.py                # Publish recipe/condiment .md to GitHub Pages. re
 prep_utils.py                 # Shared prep classification — prompt, classify_prep(), parse_md_instructions(); used by fill_menu_ideas and menu_server
 backfill_prep.py              # One-time (re-runnable) backfill of prep_components/prep_notes for all active recipes
 backfill_ingredients.py       # Re-runnable: Haiku batch-parses ingredients_raw → structured ingredients array for all active recipes
-suggest_lunch.py              # Scores lunch candidates for Partner — filters lunch_suitable recipes, avoids last 4 weeks
-trigger_lunch_saturday.py     # launchd Saturday 10 AM: sends 3 lunch options to Partner via Keanu
-trigger_lunch_nudge.py        # launchd Saturday 6 PM: nudges if Partner hasn't picked yet
+suggest_lunch.py              # Scores lunch candidates for the partner — filters lunch_suitable recipes, avoids last 4 weeks
+trigger_lunch_saturday.py     # launchd Saturday 10 AM: sends 3 lunch options to the partner via Keanu
+trigger_lunch_nudge.py        # launchd Saturday 6 PM: nudges if the partner hasn't picked yet
 save_to_recipeideas.py        # Save agent results to the recipeideas inbox
 generate_github_pages_data.py # Generate _data/recipes.json for GitHub Pages — run after metadata changes
 migrate_plan_to_json.py       # One-shot (re-runnable) migration of mealplan_*.txt → mealplan_*.json
 meal_costing.py               # Estimates avg_cost_per_serving for a recipe from grocery price history; conservative unit-family matching + ingredient_portion_overrides for bulk/portioned items
 compute_meal_costs.py         # Runs meal_costing across every active recipe, writes avg_cost_per_serving + coverage stats into recipe_metadata.json — rerun manually after new receipts land
-pick_partner_batch.py          # Selects 5 fresh idea-queue candidates for Partner's SMS batch review, excluding anything already sent or in the collection
+pick_partner_batch.py          # Selects 5 fresh idea-queue candidates for the partner's SMS batch review, excluding anything already sent or in the collection
 refresh_partner_queue_worker.py # Background worker spawned by the refresh_partner_recipe_queue MCP tool — runs all 6 recipe agents, then texts a fresh batch when done
 build_weekly_recipe_email.py  # Builds and sends the weekly 10-pick recipe-idea email via SMTP — no LLM call in the send path
-recipe_review_server.py       # Local recipe review web UI server (port 5051) — Flask, session auth, metadata cache, RAG search, Queue tab, Partner batch review, email-action click-through
+recipe_review_server.py       # Local recipe review web UI server (port 5051) — Flask, session auth, metadata cache, RAG search, Queue tab, partner batch review, email-action click-through
 eventkit_helpers.py           # Shared EventKit store/authorization helpers used by shopping_list_sync.py and meal_calendar_sync.py
 shopping_list_sync.py         # Writes shopping_YYYY-MM-DD.csv into the iOS Grocery Reminders list via EventKit (replaces WeeklyShoppingList.app)
 meal_calendar_sync.py         # Writes the week's meal plan into iCloud Calendar via EventKit (replaces WeeklyMealCalendar.app)
@@ -122,21 +122,21 @@ not every tool is listed.
 | `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week; each candidate carries `url`, plus `selected_meal_urls` so SMS recommendations can put a link after each recipe name |
 | `advance_to_meal_approval` | Writes selected meals into menu_activity.json; bridges local SMS phase to MCP bridge phase |
 | `swap_meal` | Pre-finalize only: replaces one day's meal (auto-picks, or a typed name — which first returns `needs_confirmation` with the matching recipe(s) + links; call again with `confirmed=true`); returns `new_recipe_url` + `selected_meal_urls`. Refuses with `plan_finalized` once the plan is finalized — use meal_swap |
-| `approve_menu` | Sends selected meals to Partner via Keanu for signoff (each recipe name followed by its link); optional `expected_selected_meals` refuses to send if the caller's local mirror has drifted from the actual workflow state |
-| `handle_partner_reply` | Processes Partner's approval or swap request; a recipe URL in her reply is fetched and swapped in directly instead of stranding the workflow; auto-activates idea recipes |
-| `classify_partner_reply` | Side-effect-free intent label for an Partner reply (approve / swap_request / eating_out / swap_plus_approve / unclear) — Keanu gates menu-reply capture on it so an unrelated text doesn't consume the pending approval. URL with no day → unclear |
+| `approve_menu` | Sends selected meals to the partner via Keanu for signoff (each recipe name followed by its link); optional `expected_selected_meals` refuses to send if the caller's local mirror has drifted from the actual workflow state |
+| `handle_partner_reply` | Processes the partner's approval or swap request; a recipe URL in her reply is fetched and swapped in directly instead of stranding the workflow; auto-activates idea recipes |
+| `classify_partner_reply` | Side-effect-free intent label for a partner reply (approve / swap_request / eating_out / swap_plus_approve / unclear) — Keanu gates menu-reply capture on it so an unrelated text doesn't consume the pending approval. URL with no day → unclear |
 | `activate_idea_recipe` | Activates a pending idea from pasted markdown content or URL auto-fetch; `content` is optional — if empty and `source_url` given, fetch is attempted first; returns `needs_content: True` if fetch fails |
-| `finalize_plan` | Generates plan + shopping CSV, launches apps, texts David and Partner `Plan ready! <review_ui_base_url>` (site link only — the site lists the plan). First forces "Going Out to Eat" on any day the schedule notes mark as out (unless a later `swap_meal` gave that day a real recipe) |
+| `finalize_plan` | Generates plan + shopping CSV, launches apps, texts David and the partner `Plan ready! <review_ui_base_url>` (site link only — the site lists the plan). First forces "Going Out to Eat" on any day the schedule notes mark as out (unless a later `swap_meal` gave that day a real recipe) |
 | `get_prep_guide` | On-demand prep guide — `mode=weekly` (remaining meals this week) or `mode=tonight` (tonight's dinner); applies food-safety classification automatically |
 | `get_recipe_notes` | Looks up standing family notes/feedback for a recipe by name (fuzzy match); read side of the `notes` field for any consumer, e.g. Keanu via SMS |
 | `generate_shopping_list` | Writes shopping CSV from a finalized meal dict (authoritative — sms-assistant calls this) |
-| `get_lunch_suggestions` | Returns 3 scored lunch candidates for Partner based on recency + variety |
-| `set_lunch_pick` | Saves Partner's lunch pick, adds ingredients to the week's shopping CSV |
+| `get_lunch_suggestions` | Returns 3 scored lunch candidates for the partner based on recency + variety |
+| `set_lunch_pick` | Saves the partner's lunch pick, adds ingredients to the week's shopping CSV |
 | `log_lunch_feedback` | Records post-week lunch feedback (liked/disliked/not_made) |
 | `add_lunch_recipe_url` | Adds a lunch recipe from a URL through the same intake as `process_recipe_url` (refuses incomplete pages; an exact URL already in the collection is marked lunch-suitable instead) |
 | `process_recipe_url` | Check for a similar existing recipe by URL or fuzzy title, add if new, optionally swap into a plan day (planning only — not after finalize); `force_add=true` skips similarity check. ATK links use atk_agent's logged-in fetch (paywall). An exact source-link match returns `status: exists` and is used directly — no confirmation |
 | `process_recipe_image` | Extract a recipe from a photo (cookbook page) via Claude vision and add to the collection; `force_add=true` re-runs with same image after user confirms |
-| `send_partner_recipe_batch` | Picks 5 fresh idea-queue candidates (favoring quick cook times) and builds a text + review link for Keanu to send Partner |
+| `send_partner_recipe_batch` | Picks 5 fresh idea-queue candidates (favoring quick cook times) and builds a text + review link for Keanu to send the partner |
 | `refresh_partner_recipe_queue` | Kicks off all 6 recipe agents in a detached background worker, then texts a fresh batch to `notify_handle` once it finishes |
 
 Runtime state written by both this project and the SMS assistant (`menu_activity.json`,

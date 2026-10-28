@@ -107,12 +107,12 @@ Items moved here when shipped. Kept for reference.
 
 ---
 
-### Workflow Fix: Promote Idea Recipes After Partner Approves (Not Before)
+### Workflow Fix: Promote Idea Recipes After the Partner Approves (Not Before)
 **Completed**: May 31, 2026
 
-- CLAUDE.md step 6 now explicitly gates recipe creation on Partner's approval
-- Send meal names only at step 6 — no URL fetching for `idea` meals until Partner signs off
-- If Partner swaps out an idea meal, skip its file creation entirely
+- CLAUDE.md step 6 now explicitly gates recipe creation on the partner's approval
+- Send meal names only at step 6 — no URL fetching for `idea` meals until the partner signs off
+- If the partner swaps out an idea meal, skip its file creation entirely
 
 ---
 

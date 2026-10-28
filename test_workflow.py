@@ -160,8 +160,6 @@ def check_partner_classify_and_chmod():
         got = srv.classify_partner_reply(text)
         check(f"classify_partner_reply({text[:40]!r})", got == want, f"got {got}, want {want}")
 
-    check("legacy names removed", not hasattr(srv, "classify_partner_reply") and not hasattr(srv, "handle_partner_reply"))
-
     import os as _os
     from unittest import mock
     with mock.patch.object(_os, "chmod", side_effect=PermissionError(1, "Operation not permitted")):

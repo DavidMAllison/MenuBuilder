@@ -6,6 +6,9 @@ import glob
 import re
 from datetime import date, timedelta
 
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")) as _f:
+    LUNCH_TITLE = json.load(_f).get("partner_name", "Partner") + "'s Lunch: "
+
 
 def find_latest():
     d = "/Users/Shared/cooking-state/weeklyplan/"
@@ -137,7 +140,7 @@ def main():
                         str(d.year),
                         str(d.month),
                         str(d.day),
-                        "Partner's Lunch: " + lunch_name,
+                        LUNCH_TITLE + lunch_name,
                         lunch_url,
                     ]))
     except Exception:

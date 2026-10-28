@@ -914,7 +914,7 @@ def main():
 
     # Sweep dismissed recipes out of agent_results/*.json -- covers entries written
     # just now AND ones sitting from earlier runs, since a dismiss can happen any
-    # time between fill_menu_ideas.py runs. Also keeps Partner's SMS batch and the
+    # time between fill_menu_ideas.py runs. Also keeps the partner's SMS batch and the
     # weekly email clean, since both read these same files directly.
     if args.include_dismissed:
         print("\n(--include-dismissed: skipping the dismissed-recipe sweep)")

@@ -47,3 +47,6 @@ cleanup_state.json
 *.jpeg
 *.jpg
 *.png
+
+# Local-only: hard-codes a family name
+WeeklyMealCalendar_backup.applescript

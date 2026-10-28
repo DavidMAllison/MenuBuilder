@@ -13,6 +13,11 @@ import json
 import re
 from datetime import date, timedelta
 from pathlib import Path
+
+try:
+    _PARTNER_NAME = json.loads((Path(__file__).parent / "config.json").read_text()).get("partner_name", "Partner")
+except (OSError, ValueError):
+    _PARTNER_NAME = "Partner"
 from typing import Callable, Optional
 
 from intake_checks import buy_ahead_days, day_before_note
@@ -299,7 +304,7 @@ def build_shopping_csv(selected: dict, week_start: date, recipes: dict,
                 if cing:
                     _add_structured(cing, f"{cdep} (for {name})", date_str)
 
-    # Append lunch ingredients if Partner has picked THIS week (set within 7 days of week_start)
+    # Append lunch ingredients if the partner has picked THIS week (set within 7 days of week_start)
     if lunch_state_file and lunch_state_file.exists():
         try:
             lunch = json.loads(lunch_state_file.read_text())
@@ -312,9 +317,9 @@ def build_shopping_csv(selected: dict, week_start: date, recipes: dict,
                     sat_date = (week_start - timedelta(days=2)).isoformat()
                     structured = recipes[key].get("ingredients", [])
                     if structured:
-                        _add_structured(structured, "Partner's lunch", sat_date)
+                        _add_structured(structured, f"{_PARTNER_NAME}'s lunch", sat_date)
                     else:
-                        _add_raw(recipes[key].get("ingredients_raw", []), "Partner's lunch", sat_date)
+                        _add_raw(recipes[key].get("ingredients_raw", []), f"{_PARTNER_NAME}'s lunch", sat_date)
         except Exception:
             pass
 
