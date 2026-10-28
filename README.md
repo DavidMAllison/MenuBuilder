@@ -132,7 +132,7 @@ not every tool is listed.
 | `get_lunch_suggestions` | Returns 3 scored lunch candidates for Partner based on recency + variety |
 | `set_lunch_pick` | Saves Partner's lunch pick, adds ingredients to the week's shopping CSV |
 | `log_lunch_feedback` | Records post-week lunch feedback (liked/disliked/not_made) |
-| `add_lunch_recipe_url` | Fetches a URL, parses it into a lunch-suitable recipe entry |
+| `add_lunch_recipe_url` | Adds a lunch recipe from a URL through the same intake as `process_recipe_url` (refuses incomplete pages; an exact URL already in the collection is marked lunch-suitable instead) |
 | `process_recipe_url` | Check for a similar existing recipe by URL or fuzzy title, add if new, optionally swap into a plan day (planning only — not after finalize); `force_add=true` skips similarity check. ATK links use atk_agent's logged-in fetch (paywall). An exact source-link match returns `status: exists` and is used directly — no confirmation |
 | `process_recipe_image` | Extract a recipe from a photo (cookbook page) via Claude vision and add to the collection; `force_add=true` re-runs with same image after user confirms |
 | `send_partner_recipe_batch` | Picks 5 fresh idea-queue candidates (favoring quick cook times) and builds a text + review link for Keanu to send Partner |

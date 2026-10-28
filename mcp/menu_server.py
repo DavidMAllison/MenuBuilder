@@ -352,6 +352,7 @@ def _classify_and_write(
     source_credit: str = "",
     needs_review: bool = False,
     recipes: Optional[dict] = None,
+    lunch: bool = False,
 ) -> dict:
     """
     Shared final stage of recipe intake: health classify, write .md, save metadata.
@@ -361,6 +362,7 @@ def _classify_and_write(
     source_credit:            plain-text attribution for book/non-URL recipes.
     needs_review:             True for image-extracted recipes (vision can misread).
     recipes:                  pass in if already loaded to avoid a double load.
+    lunch:                    tag the new entry for lunch (add_lunch_recipe_url).
 
     Returns {title, health, time} on success.
     """
@@ -443,6 +445,9 @@ def _classify_and_write(
         }
         if needs_review:
             entry["needs_review"] = True
+        if lunch:
+            entry.update(meal_type="lunch", lunch_suitable=True,
+                         times_eaten_lunch=0, last_lunch_date=None)
         for k in ("advance_prep_hours", "condiment_deps", "needs_review", "intake_warnings"):
             if checks.get(k):
                 entry[k] = checks[k]
@@ -453,7 +458,7 @@ def _classify_and_write(
     return {"title": title, "health": health, "time": checks["time"]}
 
 
-def _full_recipe_add(url: str, fetched_data: Optional[dict]) -> dict:
+def _full_recipe_add(url: str, fetched_data: Optional[dict], lunch: bool = False) -> dict:
     """
     Full parse-and-add pipeline for a new recipe URL.
     fetched_data may already be populated from a prior _fetch_recipe_data call.
@@ -519,7 +524,7 @@ def _full_recipe_add(url: str, fetched_data: Optional[dict]) -> dict:
 
     title = fetched_data["title"].strip()
     source_name = urlparse(url).netloc.replace("www.", "")
-    return _classify_and_write(title, fetched_data, url, source_name)
+    return _classify_and_write(title, fetched_data, url, source_name, lunch=lunch)
 
 
 # ---------------------------------------------------------------------------
@@ -4280,83 +4285,59 @@ def log_lunch_feedback(recipe: str, sentiment: str, note: str = "") -> dict:
 
 
 @mcp.tool()
-def add_lunch_recipe_url(url: str) -> dict:
+def add_lunch_recipe_url(url: str, force_add: bool = False) -> dict:
     """
-    Fetch a recipe URL Partner texted, create a .md file + metadata entry tagged for lunch.
+    Add a recipe URL Partner texted as a lunch recipe.
 
-    Fetches the URL, extracts title/ingredients/instructions, writes the .md file in
-    ~/Dropbox/LLMContext/cooking/recipes/, and adds a metadata entry with:
-      - meal_type: "lunch"
-      - lunch_suitable: true
-      - status: "active"
-      - needs_review: true (so it surfaces in the next review cycle)
+    Same intake as process_recipe_url (ATK logged-in fetch, ld+json, Haiku
+    extraction fallback, naked-stub guard, health classification, intake
+    checks, .md + publish), with the entry tagged meal_type "lunch" /
+    lunch_suitable. A page without full ingredients + instructions is refused
+    -- nothing is written.
+
+    If the exact URL is already in the collection, that recipe is marked
+    lunch_suitable instead of adding a duplicate. A similar-but-different
+    recipe returns status "similar_exists"; call again with force_add=true
+    once the user confirms it's a new recipe.
 
     Args:
         url: Full URL to the recipe page.
+        force_add: Skip the similarity check.
 
     Returns:
         {"ok": bool, "recipe": str, "url": str, "message": str}
+        (+ "status": "similar_exists" and "match_score" when a lookalike exists)
     """
-    from bs4 import BeautifulSoup as _BS
-
-    try:
-        resp = httpx.get(url, follow_redirects=True, timeout=20,
-                         headers={"User-Agent": "Mozilla/5.0"})
-        resp.raise_for_status()
-    except Exception as e:
-        return {"ok": False, "recipe": "", "url": url, "message": f"Fetch failed: {e}"}
-
-    soup = _BS(resp.text, "html.parser")
-    title_tag = soup.find("h1")
-    title = title_tag.get_text(strip=True) if title_tag else "Partner's Lunch Recipe"
-
-    body_text    = soup.get_text(separator="\n", strip=True)
-    instructions = body_text[:4000]
-
-    safe_name = re.sub(r"[^\w\s-]", "", title).strip().replace(" ", "_")
-    filename  = safe_name + ".md"
-    md_path   = RECIPES_DIR / filename
-
-    # No embedded attribution — source_url in metadata (set below) renders
-    # via the GitHub Pages template's .meta bar. NOT routed through
-    # recipe_md.py's build_recipe_md() — this is a raw scraped text blob,
-    # not a structured ingredient/instruction list. Don't reintroduce a
-    # Time/Servings/Adapted-from header if editing this.
-    md_content = f"# {title}\n\n## Instructions\n\n{instructions}\n"
-    md_path.write_text(md_content)
-
     recipes = _load_metadata()
+    fetched_data = (_fetch_atk_recipe(url) if _is_atk_url(url) else None) or _fetch_recipe_data(url)
 
-    if title not in recipes:
-        recipes[title] = {
-            "filename":          filename,
-            "source":            url,
-            "cuisine":           "American",
-            "meal_type":         "lunch",
-            "health":            "Heart-Healthy",
-            "status":            "active",
-            "lunch_suitable":    True,
-            "times_cooked":      0,
-            "times_eaten_lunch": 0,
-            "last_cooked_date":  None,
-            "last_lunch_date":   None,
-            "ingredients":       [],
-            "ingredients_raw":   [],
-            "instructions":      instructions[:2000],
-            "needs_review":      True,
-            "url":               url,
-        }
-        _save_metadata(recipes)
-    _publish([filename])
+    if not force_add:
+        match = _find_similar_recipe((fetched_data or {}).get("title", ""), url, recipes)
+        if match and match[1] == 1.0:
+            name = match[0]
+            if not recipes[name].get("lunch_suitable") and recipes[name].get("meal_type") != "lunch":
+                recipes[name]["lunch_suitable"] = True
+                _save_metadata(recipes)
+            return {"ok": True, "recipe": name, "url": _url_for_name(name, recipes),
+                    "message": f"'{name}' is already in the collection -- marked it for lunches."}
+        if match:
+            name, score = match
+            return {"ok": False, "status": "similar_exists", "recipe": name, "match_score": score,
+                    "url": _url_for_name(name, recipes),
+                    "message": (f"Similar recipe already in collection: \"{name}\" ({score:.0%} match). "
+                                "Ask the user: use the existing recipe, or add this as a new one? "
+                                "If new: call add_lunch_recipe_url again with force_add=true.")}
 
-    base_url = _CONFIG.get("github_pages_base_url", "https://davidmallison.github.io/menubuilder-recipes")
-    gh_url   = f"{base_url.rstrip('/')}/{safe_name}"
+    result = _full_recipe_add(url, fetched_data, lunch=True)
+    if "error" in result:
+        return {"ok": False, "recipe": "", "url": url, "message": result["error"]}
 
+    title = result["title"]
     return {
         "ok":      True,
         "recipe":  title,
-        "url":     gh_url,
-        "message": f"Added '{title}' as a lunch recipe. Marked needs_review=true. It will be on the recipe site within a minute or two.",
+        "url":     _url_for_name(title, _load_metadata()),
+        "message": f"Added '{title}' as a lunch recipe. It will be on the recipe site within a minute or two.",
     }
 
 

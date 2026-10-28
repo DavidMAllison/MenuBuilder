@@ -342,18 +342,50 @@ def check_test_mode_refresh():
 
 
 def check_lunch_test_mode():
-    """add_lunch_recipe_url writes the test copy in test mode, not production."""
+    """add_lunch_recipe_url goes through the full intake: complete entry tagged for
+    lunch, a thin page is refused, an exact URL already in the collection is reused.
+    Writes the test copy in test mode, not production."""
     from unittest import mock
-    html = "<html><body><h1>Zzz Test Lunch Bowl</h1><p>Mix it.</p></body></html>"
-    resp = mock.Mock(text=html, raise_for_status=lambda: None)
-    with mock.patch.object(srv.httpx, "get", return_value=resp), \
-         mock.patch.object(srv, "RECIPES_DIR", srv._TEST_DIR):
-        res = srv.add_lunch_recipe_url("https://example.com/zzz-lunch")
-    check("lunch intake ok in test mode", res.get("ok"), str(res))
-    check("lunch intake: entry in test copy", "Zzz Test Lunch Bowl" in srv._load_metadata())
-    check("lunch intake: production metadata untouched",
-          "Zzz Test Lunch Bowl" not in json.loads(srv.METADATA_PATH.read_text())["recipes"])
-    (srv._TEST_DIR / "Zzz_Test_Lunch_Bowl.md").unlink(missing_ok=True)
+    full = {"title": "Zzz Test Lunch Bowl", "time": "20 minutes", "servings": "2", "cuisine": "",
+            "ingredients": ["1 cup rice", "1 cucumber"], "instructions": ["Cook rice.", "Top with cucumber."]}
+    thin = {"title": "Zzz Thin Lunch", "time": "", "servings": "", "cuisine": "",
+            "ingredients": ["1 cup rice"], "instructions": [""]}
+    common = [mock.patch.object(srv, "_fetch_atk_recipe", return_value=None),
+              mock.patch.object(srv, "RECIPES_DIR", srv._TEST_DIR),
+              mock.patch.object(srv, "run_intake_checks", return_value=[]),
+              mock.patch("anthropic.Anthropic", side_effect=Exception("offline"))]
+    for pt in common:
+        pt.start()
+    try:
+        with mock.patch.object(srv, "_fetch_recipe_data", return_value=full):
+            res = srv.add_lunch_recipe_url("https://example.com/zzz-lunch")
+        check("lunch intake ok in test mode", res.get("ok"), str(res))
+        e = srv._load_metadata().get("Zzz Test Lunch Bowl", {})
+        check("lunch intake: complete entry", e.get("ingredients_raw") == full["ingredients"]
+              and e.get("instructions") == full["instructions"], str(e))
+        check("lunch intake: tagged for lunch", e.get("meal_type") == "lunch" and e.get("lunch_suitable")
+              and e.get("times_eaten_lunch") == 0 and "needs_review" not in e, str(e))
+        check("lunch intake: production metadata untouched",
+              "Zzz Test Lunch Bowl" not in json.loads(srv.METADATA_PATH.read_text())["recipes"])
+
+        with mock.patch.object(srv, "_fetch_recipe_data", return_value=thin), \
+             mock.patch.object(srv.httpx, "get", side_effect=Exception("blocked")):
+            res = srv.add_lunch_recipe_url("https://example.com/zzz-thin")
+        check("lunch intake: thin page refused, nothing written",
+              not res.get("ok") and "Zzz Thin Lunch" not in srv._load_metadata(), str(res))
+
+        recipes = srv._load_metadata()
+        name, entry = next((k, v) for k, v in recipes.items() if v.get("source_url") and v.get("status") == "active"
+                           and not v.get("lunch_suitable") and v.get("meal_type") != "lunch")
+        with mock.patch.object(srv, "_fetch_recipe_data", return_value=None):
+            res = srv.add_lunch_recipe_url(entry["source_url"])
+        check("lunch intake: exact URL reuses the existing recipe",
+              res.get("ok") and res.get("recipe") == name and srv._load_metadata()[name].get("lunch_suitable")
+              and len(srv._load_metadata()) == len(recipes), str(res))
+    finally:
+        for pt in common:
+            pt.stop()
+        (srv._TEST_DIR / "Zzz_Test_Lunch_Bowl.md").unlink(missing_ok=True)
 
 
 def check_recipe_lookup():
