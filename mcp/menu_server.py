@@ -2125,6 +2125,12 @@ def _do_finalize(activity: dict) -> dict:
 
 mcp = FastMCP("menubuilder")
 
+# Partner-signoff state. The legacy name is still what gets written until
+# Keanu accepts the new one; both are accepted on read during the switch.
+SIGNOFF_STATE = "awaiting_partner_signoff"
+LEGACY_SIGNOFF_STATE = "awaiting_partner_signoff"
+SIGNOFF_STATES = (SIGNOFF_STATE, LEGACY_SIGNOFF_STATE)
+
 
 @mcp.tool()
 def get_workflow_state() -> dict:
@@ -3342,7 +3348,7 @@ def handle_partner_reply(reply: str) -> dict:
     Returns the updated activity state plus any action-specific fields.
     """
     activity = _load_activity()
-    if activity.get("state") != "awaiting_partner_signoff":
+    if activity.get("state") not in SIGNOFF_STATES:
         return {"error": f"Not in awaiting_partner_signoff state (current: {activity.get('state')})"}
 
     lowered = reply.lower().strip()
@@ -4740,6 +4746,15 @@ def refresh_partner_recipe_queue(notify_handle: str) -> dict:
 
     return {"status": "started"}
 
+
+
+# Legacy names kept while Keanu switches to the partner names. Module attributes
+# serve the sms-assistant subprocess bridge (getattr); the mcp.tool registrations
+# serve MCP clients. Remove once Keanu calls only the new names.
+classify_partner_reply = mcp.tool(name="classify_partner_reply")(classify_partner_reply)
+send_partner_recipe_batch = mcp.tool(name="send_partner_recipe_batch")(send_partner_recipe_batch)
+refresh_partner_recipe_queue = mcp.tool(name="refresh_partner_recipe_queue")(refresh_partner_recipe_queue)
+handle_partner_reply = handle_partner_reply
 
 if __name__ == "__main__":
     mcp.run()
