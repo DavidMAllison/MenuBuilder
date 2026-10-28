@@ -179,7 +179,7 @@
 
 ### Recipe Review UI — Autonomous Data-Quality Agent
 **Status**: COMPLETE Jun 22 2026.
-- `--fix-metadata` flag added to `cleanup_agent.py`: auto-fixes cuisine normalization (variant → canonical), source inference from domain, meal_type mismatches (time > 60 min + Weeknight → Weekend, skips slow_cooker), and needs_review clearing when instructions pass quality check
+- `--fix-metadata` flag added to `cleanup_agent.py`: auto-fixes cuisine normalization (variant → canonical), source inference from domain, meal_type mismatches (time > 60 min + Weeknight → Weekend, skips slow_cooker). (Used to also auto-clear `needs_review` -- removed Oct 28 2026, see below.)
 - All fixes are auto-applied with no user review required
 - `fill_menu_ideas.py` runs `cleanup_agent.py --fix-metadata --fix-classify --apply` at completion as a post-run sweep
 - On-demand: `python3 cleanup_agent.py --fix-metadata`
@@ -210,6 +210,12 @@
 
 ### MCP Write Permission — Dual-User Context
 **Status**: RESOLVED (verified Oct 28 2026). State files moved to `/Users/Shared/cooking-state/`, whose directory carries an inheritable `group:staff allow read,write,delete,append` ACL. allisonbot-owned plan/shopping files are writable by davidallison (checked `mealplan_2026-10-26.json`, `shopping_2026-10-19.csv`). No workaround needed.
+
+### Unverified Recipes Kept Out of Planning
+**Status**: COMPLETE Oct 28 2026. Turkey Pesto Meatballs (instructions cut off after "heat oven to 450°F") reached a live plan Sep 28 because nothing downstream read `needs_review`, and `cleanup_agent.py --fix-metadata` auto-cleared the flag on a length check after every Saturday agent run.
+- `candidate_scoring.load_candidates()` skips `needs_review: true` (covers `suggest_meals.py` and the SMS workflow); `_select_meals` cuisine/dish-boost additions skip it too
+- `--fix-metadata` no longer clears the flag -- clear it by hand after reading the recipe
+- Turkey Pesto Meatballs removed (never cooked)
 
 ### Meal Costing
 **Status**: Built Aug 4 2026 — no longer on hold. `meal_costing.py` + `compute_meal_costs.py` write `avg_cost_per_serving` (+ coverage stats) onto every active recipe in `recipe_metadata.json`, sourced from `/Users/Shared/grocery/price_history.json` plus a manually-maintained `protein_portion_overrides` table in `config.json` for bulk/portioned proteins (chicken thighs/breast, pork cuts, ribs, shrimp, etc. — see [[project_meal_costing]] memory for the full list and the matching bugs that were found/fixed along the way). Rerun `compute_meal_costs.py` manually after new receipts or override entries land — not wired into the Sunday workflow.

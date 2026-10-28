@@ -1081,6 +1081,7 @@ def _resolve_dish_boost_names(direction_text: str, candidates: list) -> Optional
         name for name, meta in recipes.items()
         if meta.get("status") not in ("disliked", "ignored")
         and not meta.get("recommend_hold")
+        and not meta.get("needs_review")
         and str(meta.get("meal_type", "")).strip().lower() != "lunch"
         and not any(h in name.lower() for h in HIATUS_PROTEINS)
     ]
@@ -1119,6 +1120,7 @@ def _select_meals(
                 meta.get("times_cooked", 0) == 0
                 and meta.get("status") not in ("disliked", "ignored")
                 and not meta.get("recommend_hold")
+                and not meta.get("needs_review")
                 and str(meta.get("meal_type", "")).strip().lower() != "lunch"
                 and _direction_matches_cuisine(cuisine_val, c_lower)
                 and not any(c["name"] == name for c in pool)
@@ -1153,6 +1155,7 @@ def _select_meals(
                 and meta.get("times_cooked", 0) == 0
                 and meta.get("status") not in ("disliked", "ignored")
                 and not meta.get("recommend_hold")
+                and not meta.get("needs_review")
                 and str(meta.get("meal_type", "")).strip().lower() != "lunch"
                 and not any(c["name"] == name for c in pool)
             ):

@@ -86,6 +86,7 @@ def check_dish_boost():
          if meta.get("times_cooked", 0) == 0
          and meta.get("status") not in ("disliked", "ignored")
          and not meta.get("recommend_hold")
+         and not meta.get("needs_review")
          and str(meta.get("meal_type", "")).strip().lower() not in ("lunch", "weekend")),
         None,
     )
@@ -96,6 +97,19 @@ def check_dish_boost():
     selected, _ = srv._select_meals([], [], None, dish_boost_names=[target])
     check("_select_meals surfaces dish_boost_names entry",
           target in selected.values(), f"target={target!r} selected={selected}")
+
+
+def check_needs_review_excluded():
+    """A needs_review recipe (e.g. instructions cut off mid-recipe) must never
+    reach the candidate pool. Pure filter call on an in-memory dict -- no I/O."""
+    base = {"status": "active", "times_cooked": 0, "last_cooked_date": None,
+            "health": "Heart-Healthy", "meal_type": "Weeknight", "time": "30 minutes",
+            "cuisine": "Italian", "ingredients_raw": ["1 lb chicken"], "instructions": ["Cook it."]}
+    recipes = {"Zz Clean Recipe": dict(base), "Zz Flagged Recipe": dict(base, needs_review=True)}
+    candidates, _ = srv.cs.load_candidates(recipes, adult_names=set(), garden_herbs=[], inventory_items=[])
+    names = {c["name"] for c in candidates}
+    check("load_candidates keeps clean recipe", "Zz Clean Recipe" in names, f"{names}")
+    check("load_candidates drops needs_review recipe", "Zz Flagged Recipe" not in names, f"{names}")
 
 
 def check_eating_out_reconcile():
@@ -658,6 +672,7 @@ def run(week_start_str: str, keep: bool) -> int:
     # 4b. Dish/protein matching wiring (mocked Haiku call — deterministic, no network)
     check_dish_gate()
     check_dish_boost()
+    check_needs_review_excluded()
     check_eating_out_reconcile()
     check_sms_links(result.get("candidates", []), selected)
     check_partner_classify_and_chmod()

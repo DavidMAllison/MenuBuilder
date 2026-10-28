@@ -889,11 +889,15 @@ def fix_classify(apply: bool) -> None:
         print("\nRun with --fix-classify --apply to write these to recipe_metadata.json")
 
 # ---------------------------------------------------------------------------
-# Fix: metadata (cuisine, source, meal_type, needs_review) — no HTTP, no model
+# Fix: metadata (cuisine, source, meal_type) — no HTTP, no model
 # ---------------------------------------------------------------------------
 
 def fix_metadata(dry_run: bool) -> None:
-    """Auto-fix cuisine normalization, source inference, meal_type mismatches, needs_review clearing."""
+    """Auto-fix cuisine normalization, source inference, meal_type mismatches.
+
+    Never clears needs_review: a length check can't tell a short recipe from a
+    truncated one, and the flag keeps the recipe out of meal planning.
+    """
     config    = json.loads((MENUBUILDER_DIR / "config.json").read_text(encoding="utf-8"))
     canonical = set(config.get("cuisine_family_map", {}).keys())
 
@@ -903,7 +907,6 @@ def fix_metadata(dry_run: bool) -> None:
     cuisine_fixed        = 0
     source_fixed         = 0
     meal_type_fixed      = 0
-    needs_review_cleared = 0
 
     for key, r in recipes.items():
         if r.get("status") not in ("active",):
@@ -964,21 +967,13 @@ def fix_metadata(dry_run: bool) -> None:
                 print(f"  [meal_type] {r.get('title', key)[:50]}: Weeknight → Weekend ({time_str})")
                 meal_type_fixed += 1
 
-        # 5. needs_review — clear if instructions pass quality check
-        if r.get("needs_review"):
-            if not _is_stub_instructions(r.get("instructions")):
-                if not dry_run:
-                    recipes[key]["needs_review"] = False
-                print(f"  [needs_review] cleared: {r.get('title', key)[:55]}")
-                needs_review_cleared += 1
-
     prefix = "DRY RUN — " if dry_run else ""
     print(
         f"\n{prefix}Metadata fixes: {cuisine_fixed} cuisine, {source_fixed} source, "
-        f"{meal_type_fixed} meal_type, {needs_review_cleared} needs_review cleared"
+        f"{meal_type_fixed} meal_type"
     )
 
-    if not dry_run and (cuisine_fixed or source_fixed or meal_type_fixed or needs_review_cleared):
+    if not dry_run and (cuisine_fixed or source_fixed or meal_type_fixed):
         METADATA_PATH.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"Saved to {METADATA_PATH}")
 
@@ -1164,7 +1159,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Recipe collection cleanup agent")
     # Fix modes (stackable — any combination runs in order)
     parser.add_argument("--fix-safe",     action="store_true", help="Apply cached images + instructions")
-    parser.add_argument("--fix-metadata", action="store_true", help="Auto-fix cuisine, source, meal_type, needs_review (no HTTP, no model)")
+    parser.add_argument("--fix-metadata", action="store_true", help="Auto-fix cuisine, source, meal_type (no HTTP, no model)")
     parser.add_argument("--fix-classify", action="store_true", help="Run Haiku health/time classification")
     parser.add_argument("--apply",        action="store_true", help="With --fix-classify: write to metadata")
     # Scan filter

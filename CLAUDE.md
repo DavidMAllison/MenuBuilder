@@ -167,6 +167,7 @@ When adding a new chef or recipe site, consult **`recipe_source_patterns.md`** i
 
 ### JSON invariant — no naked entries
 **Every entry in `recipe_metadata.json` must have `ingredients_raw` and `instructions` populated.** No title-only or URL-only stubs. If an entry can't be written with full data, it doesn't get written at all — it stays in the inbox or is skipped by the agent. This rule applies at write time for all new entries going forward.
+- **`needs_review: true`** keeps a recipe out of meal planning (step counts can't tell a short recipe from a truncated one). Clear it by hand only after reading the full recipe -- nothing clears it automatically.
 
 ## Tools
 - **WeeklyShoppingList.app** -- populates "Grocery" Reminders list from the meal plan. Run: `open /Applications/WeeklyShoppingList.app`

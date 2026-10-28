@@ -360,6 +360,8 @@ def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,
             continue
         if r.get('recommend_hold'):
             continue
+        if r.get('needs_review'):
+            continue  # unverified content (e.g. truncated instructions) -- clear the flag after a read-through
         if is_hiatus(name):
             continue
         if str(r.get('meal_type', '')).strip().lower() == 'lunch':
