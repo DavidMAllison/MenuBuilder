@@ -445,6 +445,25 @@ def check_cut_swap():
     (srv._TEST_DIR / "Zzz_Lime_Chicken.md").unlink(missing_ok=True)
 
 
+def check_cuisine_list():
+    """ld+json recipeCuisine can be a list; the entry stores one string (Oct 2026:
+    ["Chinese", "Taiwanese"] crashed Keanu's similarity check)."""
+    from unittest import mock
+    from plan_utils import cuisine_name
+    check("cuisine: list -> first", cuisine_name(["Chinese", "Taiwanese"]) == "Chinese")
+    check("cuisine: string / empty / None", cuisine_name(" Thai ") == "Thai"
+          and cuisine_name([]) == "" and cuisine_name(None) == "")
+    data = {"title": "Zzz San Bei Ji", "time": "25 minutes", "cuisine": ["Chinese", "Taiwanese"],
+            "ingredients": ["1 lb tofu", "3 tbsp soy sauce"], "instructions": ["Fry.", "Braise."]}
+    with mock.patch.object(srv, "RECIPES_DIR", srv._TEST_DIR), \
+         mock.patch.object(srv, "run_intake_checks", return_value=[]), \
+         mock.patch("anthropic.Anthropic", side_effect=Exception("offline")):
+        srv._classify_and_write("Zzz San Bei Ji", data, "", "")
+    got = srv._load_metadata().get("Zzz San Bei Ji", {}).get("cuisine")
+    check("cuisine: intake stores a string", got == "Chinese", repr(got))
+    (srv._TEST_DIR / "Zzz_San_Bei_Ji.md").unlink(missing_ok=True)
+
+
 def check_recipe_lookup():
     """plan_utils.find_recipe_key: a name not in the collection must not resolve to a
     lookalike (Oct 2026: Radicchio Salad became Cumin-Cardamom Chicken ... Salad)."""
@@ -648,6 +667,7 @@ def run(week_start_str: str, keep: bool) -> int:
     check_test_mode_refresh()
     check_lunch_test_mode()
     check_cut_swap()
+    check_cuisine_list()
     check_recipe_lookup()
     check_post_finalize_swaps()
     check_swap_meal_confirm(selected)

@@ -56,7 +56,7 @@ from github_sync import request_publish
 from gui_launch import request_gui_launch
 from intake_checks import condiment_links, day_before_note, is_quick_blocked, run_intake_checks
 from plan_utils import (
-    add_day_before_reminders, build_shopping_csv, canonical_ing, day_date_map, day_meals,
+    add_day_before_reminders, build_shopping_csv, canonical_ing, cuisine_name, day_date_map, day_meals,
     display_ing, find_recipe_key, name_candidates,
 )
 
@@ -436,7 +436,7 @@ def _classify_and_write(
             "url": source_url,
             "filename": md_path.name,
             "time": time_str,
-            "cuisine": fetched_data.get("cuisine", ""),
+            "cuisine": cuisine_name(fetched_data.get("cuisine")),
             "health": health,
             "meal_type": "Weekend" if mins > 60 else "Weeknight",
             "times_cooked": 0,

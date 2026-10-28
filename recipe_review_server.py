@@ -36,6 +36,7 @@ from fill_menu_ideas import (  # noqa: E402
 )
 import github_sync  # noqa: E402
 from intake_checks import run_intake_checks  # noqa: E402
+from plan_utils import cuisine_name  # noqa: E402
 from prep_utils import classify_prep  # noqa: E402
 
 app = Flask(__name__, static_folder="recipe_review")
@@ -493,9 +494,7 @@ def _classify_and_add_recipe(recipe: dict) -> tuple[dict | None, tuple | None]:
     ing_map     = parse_ingredients_structured([r])
     title_en    = translate_title(title)
 
-    cuisine = recipe.get("cuisine", "")
-    if isinstance(cuisine, list):
-        cuisine = ", ".join(cuisine)
+    cuisine = cuisine_name(recipe.get("cuisine"))
     _register_cuisine(cuisine)
 
     prep_data = prep_map.get(title, {})

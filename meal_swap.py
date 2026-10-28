@@ -31,7 +31,7 @@ from github_sync import request_publish
 from gui_launch import request_gui_launch
 from intake_checks import condiment_links, run_intake_checks
 from plan_utils import (
-    add_day_before_reminders, build_shopping_csv, find_recipe_key, load_condiment_ingredients,
+    add_day_before_reminders, build_shopping_csv, cuisine_name, find_recipe_key, load_condiment_ingredients,
     name_candidates,
 )
 
@@ -569,7 +569,7 @@ def execute_swap(
             "title": canonical_name,
             "filename": f"{filename}.md",
             "source": source_name,
-            "cuisine": recipe_data.get("cuisine", "") or entry.get("cuisine", ""),
+            "cuisine": cuisine_name(recipe_data.get("cuisine")) or cuisine_name(entry.get("cuisine")),
             "meal_type": "Weekend" if parse_minutes(time_str) > 60 and parse_minutes(time_str) != 999 else "Weeknight",
             "health": health,
             "time": time_str,

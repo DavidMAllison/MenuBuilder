@@ -220,6 +220,16 @@ _ING_ALIASES: dict[str, str] = {
 }
 
 
+def cuisine_name(value) -> str:
+    """One cuisine string for recipe_metadata.json. ld+json recipeCuisine can be a
+    list (butterjoykitchen: ["Chinese", "Taiwanese"]); keep the first -- variety
+    rules map one cuisine to a family, and readers (Keanu's similarity check)
+    join it as a string."""
+    if isinstance(value, (list, tuple)):
+        value = next((v for v in value if isinstance(v, str) and v.strip()), "")
+    return value.strip() if isinstance(value, str) else ""
+
+
 def canonical_ing(name: str) -> str:
     lower = name.lower().strip()
     return _ING_ALIASES.get(lower, lower)
