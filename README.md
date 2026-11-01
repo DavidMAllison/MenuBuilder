@@ -49,7 +49,8 @@ ruff.toml                     # Lint config (pyflakes F + pycodestyle E4/E7/E9)
 requirements.txt              # Pinned dependency versions
 process_feedback_queue.py     # Drain SMS feedback queue into feedback_current.json
 meal_swap.py                  # Post-finalize swaps (Keanu calls directly): execute_swap (a recipe it adds gets a complete entry + intake checks; rebuilds the shopping CSV from the plan) and reorder_days (switch two nights, no decline cooldown, calendar-only resync)
-plan_utils.py                 # Shared by the MCP server and meal_swap: find_recipe_key (exact apart from case/punctuation — never guesses), name_candidates (what a typed name could mean, for confirming with a person), build_shopping_csv, day-before marinade reminders
+plan_utils.py                 # Shared by the MCP server and meal_swap: find_recipe_key (exact apart from case/punctuation — never guesses), name_candidates (what a typed name could mean, for confirming with a person), build_shopping_csv, day-before marinade reminders, is_condiment_title (sauce vs dinner, for the agent pipeline and suggest_meals)
+recipe_fetch.py               # Shared recipe-page fetch for every intake path (MCP server, meal_swap, intake_checks): ld+json Recipe → title/time/servings/ingredients/steps, HTML-decoded
 send_menu_partner.py          # Send weekly menu to partner for approval via Keanu
 show_inventory.py             # Opens browser with full inventory grouped by category
 recipe_agent.py               # Recipe search orchestrator — single entry point for all agents

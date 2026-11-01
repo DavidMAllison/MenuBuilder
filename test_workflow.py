@@ -185,7 +185,7 @@ def check_recipe_title_decoding():
     page = ('<script type="application/ld+json">{"@type": "Recipe", "name": "Lamb With Lemon, Rosemary, &amp; Garlic",'
             ' "recipeIngredient": ["1 cup salt &amp; pepper"], "recipeInstructions": ["Mix &amp; cook."]}</script>')
     resp = mock.MagicMock(text=page)
-    with mock.patch.object(srv.httpx, "get", return_value=resp):
+    with mock.patch("recipe_fetch.httpx.get", return_value=resp):
         data = srv._fetch_recipe_data("https://example.com/lamb")
     check("fetch: title HTML-decoded", data["title"] == "Lamb With Lemon, Rosemary, & Garlic", f"{data}")
     check("fetch: ingredients + steps HTML-decoded",

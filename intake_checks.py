@@ -37,10 +37,11 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
-import httpx
 from bs4 import BeautifulSoup
 
 from prep_utils import _make_client
+from recipe_fetch import fetch_html as _fetch
+from recipe_fetch import find_ld_recipe as _ld_recipe
 
 _CONFIG = json.loads((Path(__file__).parent / "config.json").read_text())
 _COOKING_DIR = Path(_CONFIG["metadata_path"].replace("~", str(Path.home()))).parent
@@ -48,7 +49,6 @@ CONDIMENTS_PATH = _COOKING_DIR / "condiments.json"
 CONDIMENTS_DIR = _COOKING_DIR / "condiments"
 PAGES_BASE = _CONFIG.get("github_pages_base_url", "").rstrip("/")
 
-_FETCH_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 _MODEL = "claude-sonnet-5-5"
 
 # A recipe whose required wait is at least this long can't be a "quick" night
@@ -187,29 +187,6 @@ def is_quick_blocked(recipe: dict) -> bool:
 # ---------------------------------------------------------------------------
 # 2. Sub-recipes
 # ---------------------------------------------------------------------------
-
-def _fetch(url: str) -> Optional[str]:
-    try:
-        resp = httpx.get(url, headers=_FETCH_HEADERS, timeout=20, follow_redirects=True)
-        resp.raise_for_status()
-        return resp.text
-    except Exception:
-        return None
-
-
-def _ld_recipe(html: str) -> Optional[dict]:
-    soup = BeautifulSoup(html, "html.parser")
-    for script in soup.find_all("script", type="application/ld+json"):
-        try:
-            data = json.loads(script.string or "")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        for item in (data if isinstance(data, list) else data.get("@graph", [data])):
-            t = item.get("@type", "") if isinstance(item, dict) else ""
-            if "Recipe" in (t if isinstance(t, list) else [t]):
-                return item
-    return None
-
 
 def detect_sub_recipes(source_url: str) -> list[dict]:
     """Recipes the source page's ingredient list links to (same site only).

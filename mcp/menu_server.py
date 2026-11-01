@@ -26,7 +26,6 @@ Tools:
 # ruff: noqa: E402  -- imports below need MENUBUILDER_DIR on sys.path first
 
 import difflib
-import html
 import json
 import os
 import random
@@ -40,7 +39,6 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
-from bs4 import BeautifulSoup
 
 MENUBUILDER_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(MENUBUILDER_DIR))
@@ -56,6 +54,8 @@ from candidate_scoring import (
 from github_sync import request_publish
 from gui_launch import request_gui_launch
 from intake_checks import condiment_links, day_before_note, is_quick_blocked, run_intake_checks
+from recipe_fetch import HEADERS as _FETCH_HEADERS
+from recipe_fetch import fetch_recipe as _fetch_recipe_data
 from plan_utils import (
     add_day_before_reminders, build_shopping_csv, canonical_ing, cuisine_name, day_date_map, day_meals,
     display_ing, find_recipe_key, name_candidates,
@@ -1798,24 +1798,6 @@ def _selected_meal_urls(selected: dict, recipes: dict) -> dict:
 # Idea recipe: fetch + activate
 # ---------------------------------------------------------------------------
 
-_FETCH_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
-
-
-def _parse_duration(iso: str) -> str:
-    if not iso:
-        return ""
-    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?", iso)
-    if not m:
-        return ""
-    h, mins = int(m.group(1) or 0), int(m.group(2) or 0)
-    parts = []
-    if h:
-        parts.append(f"{h} hour{'s' if h > 1 else ''}")
-    if mins:
-        parts.append(f"{mins} minute{'s' if mins > 1 else ''}")
-    return " ".join(parts)
-
-
 def _is_atk_url(url: str) -> bool:
     return (urlparse(url).hostname or "").endswith("americastestkitchen.com")
 
@@ -1833,45 +1815,6 @@ def _fetch_atk_recipe(url: str) -> Optional[dict]:
     if not r or not r.get("ingredients") or not r.get("instructions"):
         return None
     return r
-
-
-def _fetch_recipe_data(url: str) -> Optional[dict]:
-    """Fetch ld+json Recipe schema from URL. Returns structured dict or None."""
-    try:
-        resp = httpx.get(url, headers=_FETCH_HEADERS, timeout=20, follow_redirects=True)
-        resp.raise_for_status()
-    except Exception:
-        return None
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-    for script in soup.find_all("script", type="application/ld+json"):
-        try:
-            data = json.loads(script.string or "")
-        except (json.JSONDecodeError, AttributeError):
-            continue
-        candidates = data if isinstance(data, list) else data.get("@graph", [data])
-        for item in candidates:
-            if not isinstance(item, dict):
-                continue
-            t = item.get("@type", "")
-            if "Recipe" not in (t if isinstance(t, list) else [t]):
-                continue
-            instructions = [
-                text for text in (
-                    (s.get("text", "") if isinstance(s, dict) else s).strip()
-                    for s in item.get("recipeInstructions", [])
-                ) if text
-            ]
-            return {
-                "title": html.unescape(item.get("name", "")).strip(),
-                "time": _parse_duration(item.get("totalTime") or item.get("cookTime", "")),
-                "servings": str(item.get("recipeYield", "")),
-                "ingredients": [html.unescape(i) if isinstance(i, str) else i
-                                for i in item.get("recipeIngredient", [])],
-                "instructions": [html.unescape(s) for s in instructions],
-                "cuisine": item.get("recipeCuisine", ""),
-            }
-    return None
 
 
 def _publish(recipes: list = (), condiments: list = ()) -> None:

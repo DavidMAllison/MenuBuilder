@@ -4,6 +4,7 @@ plan_utils.py -- Plan helpers shared by the MCP server and meal_swap.py.
 meal_swap.execute_swap runs inside Keanu's process, which can't import the MCP
 server, so anything both need to agree on (recipe-name resolution, the shopping
 CSV, day-before reminders) lives here instead of being re-implemented in each.
+The agent pipeline and suggest_meals share is_condiment_title from here too.
 """
 
 import csv
@@ -389,3 +390,47 @@ def add_day_before_reminders(meals_info: list, recipes: dict) -> None:
                 prev["reminder"] = f"{note}. {prev['reminder']}".strip()
             else:  # first night of the plan -- nothing earlier to hang it on
                 m["reminder"] = f"Needs a head start: {note[len('Start '):]}. {m['reminder']}".strip()
+
+
+# Words whose presence as the final noun indicate a standalone condiment, not a meal
+_CONDIMENT_TERMINAL = {
+    "sauce", "salsa", "dressing", "marinade", "rub", "glaze", "vinaigrette",
+    "relish", "chutney", "gravy", "dip", "spread", "jam", "compote", "paste",
+    "aioli", "mayo", "mayonnaise", "pesto", "tapenade", "hummus", "tzatziki",
+    "brine", "pickle", "pickles", "oil",
+}
+
+# If any of these appear in the title it's a full dish, not a condiment
+_DISH_ANCHORS = {
+    "chicken", "beef", "pork", "lamb", "fish", "salmon", "tuna", "cod",
+    "halibut", "tilapia", "shrimp", "prawn", "scallop", "clam", "mussel",
+    "tofu", "paneer", "lentil", "lentils", "dal", "bean", "beans",
+    "chickpea", "chickpeas", "egg", "eggs", "pasta", "noodle", "noodles",
+    "rice", "quinoa", "farro", "barley", "stew", "soup", "salad", "taco",
+    "tacos", "bowl", "burger", "sandwich", "pizza", "casserole", "bake",
+    "roast", "chili", "curry", "wrap", "dumpling", "meatball", "meatloaf",
+    "sausage", "turkey", "duck", "tenderloin", "thigh", "breast", "chop",
+    "rib", "ribs", "fillet", "steak", "cutlet", "schnitzel",
+}
+
+
+def is_condiment_title(title: str) -> bool:
+    """Return True if the title describes a standalone condiment, not a dinner recipe.
+    Used by the agent pipeline (fill_menu_ideas) to route sauces to condiments.json
+    and by suggest_meals' needs-review report.
+
+    Logic: the last meaningful word is a condiment type AND no main dish anchor
+    (protein, grain, stew, etc.) appears anywhere in the title AND the sauce
+    isn't served "with"/"in" something -- "Cheese Ravioli with Pumpkin Cream
+    Sauce" and "Neapolitan Braciole in Sauce" are dinners (Nov 1 2026: eight
+    such dinners had been filed as condiments and skipped review).
+    """
+    words = re.sub(r"[^\w\s]", "", title.lower()).split()
+    if not words:
+        return False
+    if words[-1] not in _CONDIMENT_TERMINAL:
+        return False
+    if "with" in words or "in" in words:
+        return False
+    title_lower = title.lower()
+    return not any(anchor in title_lower for anchor in _DISH_ANCHORS)

@@ -16,7 +16,6 @@ Usage:
 """
 
 import argparse
-import html
 import json
 import os
 import re
@@ -25,8 +24,6 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-import httpx
-from bs4 import BeautifulSoup
 
 from github_sync import request_publish
 from gui_launch import request_gui_launch
@@ -35,6 +32,7 @@ from plan_utils import (
     add_day_before_reminders, build_shopping_csv, cuisine_name, find_recipe_key, load_condiment_ingredients,
     name_candidates,
 )
+from recipe_fetch import fetch_recipe as _fetch_recipe
 from recipe_md import recipe_filename
 
 
@@ -132,65 +130,6 @@ def _recipe_page_url(name: str, entry: dict) -> str:
 # ---------------------------------------------------------------------------
 # Recipe fetch and parse
 # ---------------------------------------------------------------------------
-
-_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-
-
-def _fetch_recipe(url: str) -> Optional[dict]:
-    """Fetch ld+json Recipe schema from URL. Returns None on failure."""
-    try:
-        resp = httpx.get(url, headers=_HEADERS, timeout=20, follow_redirects=True)
-        resp.raise_for_status()
-    except Exception:
-        return None
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-    for script in soup.find_all("script", type="application/ld+json"):
-        try:
-            data = json.loads(script.string or "")
-        except (json.JSONDecodeError, AttributeError):
-            continue
-        candidates = data if isinstance(data, list) else data.get("@graph", [data])
-        for item in candidates:
-            if not isinstance(item, dict):
-                continue
-            t = item.get("@type", "")
-            if "Recipe" not in (t if isinstance(t, list) else [t]):
-                continue
-            instructions = [
-                (s.get("text", "") if isinstance(s, dict) else s).strip()
-                for s in item.get("recipeInstructions", [])
-            ]
-            recipe_yield = item.get("recipeYield", "")
-            if isinstance(recipe_yield, list):
-                recipe_yield = recipe_yield[-1] if recipe_yield else ""
-
-            return {
-                "title": html.unescape(item.get("name", "")).strip(),
-                "time": _parse_duration(item.get("totalTime") or item.get("cookTime", "")),
-                "servings": str(recipe_yield).strip(),
-                "ingredients": [html.unescape(i) if isinstance(i, str) else i
-                                for i in item.get("recipeIngredient", [])],
-                "instructions": [html.unescape(s) for s in instructions],
-                "cuisine": item.get("recipeCuisine", ""),
-            }
-    return None
-
-
-def _parse_duration(iso: str) -> str:
-    if not iso:
-        return ""
-    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?", iso)
-    if not m:
-        return ""
-    h, mins = int(m.group(1) or 0), int(m.group(2) or 0)
-    parts = []
-    if h:
-        parts.append(f"{h} hour{'s' if h > 1 else ''}")
-    if mins:
-        parts.append(f"{mins} minute{'s' if mins > 1 else ''}")
-    return " ".join(parts)
-
 
 # ---------------------------------------------------------------------------
 # Ingredient parsing

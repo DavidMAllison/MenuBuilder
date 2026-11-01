@@ -14,11 +14,11 @@ import json
 import argparse
 import os
 import random
-import re
 from datetime import date
 from collections import Counter, defaultdict
 
 import candidate_scoring as cs
+from plan_utils import is_condiment_title as _is_condiment
 from candidate_scoring import (
     RECENCY_WEEKS, TRACKED_FRESH_HERBS, PANTRY_CATEGORIES,
     herbs_in_recipe, load_inventory_keywords, load_out_of_stock_proteins,
@@ -36,41 +36,12 @@ ADULT_NAMES = set(name.lower() for name in _CONFIG['adult_names'])
 BUDGET_PATH = '/Users/Shared/grocery/grocery_budget_status.json'
 GARDEN_HERBS = [h.lower() for h in _CONFIG.get('garden_herbs', [])]
 
-_CONDIMENT_TERMINAL = {
-    "sauce", "salsa", "dressing", "marinade", "rub", "glaze", "vinaigrette",
-    "relish", "chutney", "gravy", "dip", "spread", "jam", "compote", "paste",
-    "aioli", "mayo", "mayonnaise", "pesto", "tapenade", "hummus", "tzatziki",
-    "brine", "pickle", "pickles", "oil",
-}
-_DISH_ANCHORS = {
-    "chicken", "beef", "pork", "lamb", "fish", "salmon", "tuna", "cod",
-    "halibut", "tilapia", "shrimp", "prawn", "scallop", "clam", "mussel",
-    "tofu", "paneer", "lentil", "lentils", "dal", "bean", "beans",
-    "chickpea", "chickpeas", "egg", "eggs", "pasta", "noodle", "noodles",
-    "rice", "quinoa", "farro", "barley", "stew", "soup", "salad", "taco",
-    "tacos", "bowl", "burger", "sandwich", "pizza", "casserole", "bake",
-    "roast", "chili", "curry", "wrap", "dumpling", "meatball", "meatloaf",
-    "sausage", "turkey", "duck", "tenderloin", "thigh", "breast", "chop",
-    "rib", "ribs", "fillet", "steak", "cutlet", "schnitzel",
-}
-
-
 def load_budget():
     try:
         with open(BUDGET_PATH) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
-
-
-def _is_condiment(title: str) -> bool:
-    """Return True if title describes a standalone condiment rather than a dinner recipe."""
-    words = re.sub(r"[^\w\s]", "", title.lower()).split()
-    if not words or words[-1] not in _CONDIMENT_TERMINAL:
-        return False
-    if "with" in words or "in" in words:  # "Ravioli with Pumpkin Sauce" is a dinner
-        return False
-    return not any(anchor in title.lower() for anchor in _DISH_ANCHORS)
 
 
 # Cuisine → family grouping for cap enforcement at step 4.
