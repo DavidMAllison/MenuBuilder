@@ -68,6 +68,8 @@ def _is_condiment(title: str) -> bool:
     words = re.sub(r"[^\w\s]", "", title.lower()).split()
     if not words or words[-1] not in _CONDIMENT_TERMINAL:
         return False
+    if "with" in words or "in" in words:  # "Ravioli with Pumpkin Sauce" is a dinner
+        return False
     return not any(anchor in title.lower() for anchor in _DISH_ANCHORS)
 
 

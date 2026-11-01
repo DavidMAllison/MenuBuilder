@@ -194,6 +194,17 @@ def check_recipe_title_decoding():
           recipe_filename(data["title"]))
 
 
+def check_condiment_titles():
+    """A dish served with/in a sauce is a dinner, not a condiment for condiments.json."""
+    import fill_menu_ideas
+    import suggest_meals
+    for fn in (fill_menu_ideas._is_condiment, suggest_meals._is_condiment):
+        mod = fn.__module__
+        check(f"{mod}: sauce title is a condiment", fn("Red Enchilada Sauce") and fn("Nước Chấm Dipping Sauce"))
+        check(f"{mod}: dish 'with ... Sauce' is a dinner", not fn("Cheese Ravioli with Pumpkin Cream Sauce"))
+        check(f"{mod}: dish 'in Sauce' is a dinner", not fn("Neapolitan Braciole in Sauce"))
+
+
 def check_sms_links(candidates, selected):
     """Pre-finalize texts carry a link after each recipe; finalized text is just the site link."""
     check("get_meal_suggestions candidates carry url",
@@ -748,6 +759,7 @@ def run(week_start_str: str, keep: bool) -> int:
     check_eating_out_day_lists()
     check_home_dish_nights()
     check_recipe_title_decoding()
+    check_condiment_titles()
     check_sms_links(result.get("candidates", []), selected)
     check_partner_classify_and_chmod()
     check_intake_checks()

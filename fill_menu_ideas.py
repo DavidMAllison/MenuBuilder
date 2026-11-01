@@ -571,12 +571,17 @@ def _is_condiment(title: str) -> bool:
     """Return True if the title describes a standalone condiment, not a dinner recipe.
 
     Logic: the last meaningful word is a condiment type AND no main dish anchor
-    (protein, grain, stew, etc.) appears anywhere in the title.
+    (protein, grain, stew, etc.) appears anywhere in the title AND the sauce
+    isn't served "with"/"in" something -- "Cheese Ravioli with Pumpkin Cream
+    Sauce" and "Neapolitan Braciole in Sauce" are dinners (Nov 1 2026: eight
+    such dinners had been filed as condiments and skipped review).
     """
     words = re.sub(r"[^\w\s]", "", title.lower()).split()
     if not words:
         return False
     if words[-1] not in _CONDIMENT_TERMINAL:
+        return False
+    if "with" in words or "in" in words:
         return False
     title_lower = title.lower()
     return not any(anchor in title_lower for anchor in _DISH_ANCHORS)
