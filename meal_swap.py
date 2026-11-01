@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import html
 import json
 import os
 import re
@@ -34,6 +35,7 @@ from plan_utils import (
     add_day_before_reminders, build_shopping_csv, cuisine_name, find_recipe_key, load_condiment_ingredients,
     name_candidates,
 )
+from recipe_md import recipe_filename
 
 
 def _chmod_shared(path) -> None:
@@ -164,11 +166,12 @@ def _fetch_recipe(url: str) -> Optional[dict]:
                 recipe_yield = recipe_yield[-1] if recipe_yield else ""
 
             return {
-                "title": item.get("name", "").strip(),
+                "title": html.unescape(item.get("name", "")).strip(),
                 "time": _parse_duration(item.get("totalTime") or item.get("cookTime", "")),
                 "servings": str(recipe_yield).strip(),
-                "ingredients": item.get("recipeIngredient", []),
-                "instructions": instructions,
+                "ingredients": [html.unescape(i) if isinstance(i, str) else i
+                                for i in item.get("recipeIngredient", [])],
+                "instructions": [html.unescape(s) for s in instructions],
                 "cuisine": item.get("recipeCuisine", ""),
             }
     return None
@@ -270,9 +273,9 @@ def _create_recipe_md(recipe: dict, source_url: str, source_name: str,
     persists source_url to recipe_metadata.json, and the GitHub Pages
     template renders attribution from there. See recipe_md.py for the
     canonical builder every intake path shares."""
-    from recipe_md import build_recipe_md
+    from recipe_md import build_recipe_md, recipe_filename
     title = recipe["title"]
-    path = _recipes_dir() / (title.replace(" ", "_") + ".md")
+    path = _recipes_dir() / recipe_filename(title)
     content = build_recipe_md(
         title=title,
         ingredients=recipe.get("ingredients", []),
@@ -529,8 +532,9 @@ def execute_swap(
     else:
         parsed_ingredients = list(raw)
 
-    # Build GitHub Pages URL
-    filename = title.replace(" ", "_")
+    # Build GitHub Pages URL -- an active recipe keeps the file it already has
+    existing_file = "" if needs_activation else (recipes.get(canonical_name) or {}).get("filename", "")
+    filename = (existing_file or recipe_filename(title)).removesuffix(".md")
     recipe_url = f"{github_base}/{filename}" if github_base else ""
 
     # --- Activate recipe if needed (Scenario B or C) ---

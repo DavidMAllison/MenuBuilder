@@ -123,6 +123,77 @@ def check_eating_out_reconcile():
     check("reconcile: later swap_meal override respected", srv._reconcile_eating_out(act2) == [] and act2["selected_meals"]["Sun"] == "Real Recipe")
 
 
+def check_eating_out_day_lists():
+    """A comma list of days in one out-note marks every day, not just the last."""
+    out = srv._parse_eating_out_days("", ["Thursday, Friday, and Saturday are going out to eat — no dinner needed"])
+    check("eating out: comma day list all marked", sorted(out) == ["Fri", "Sat", "Thu"], f"{out}")
+    out = srv._parse_eating_out_days("", ["Going out Friday, kid soccer practice Monday 5:00-6:30 PM"])
+    check("eating out: separate fact after a comma stays out", out == ["Fri"], f"{out}")
+    out = srv._parse_eating_out_days("", ["Going out for lemon chicken somewhere"])
+    check("eating out: day names match whole words only", out == [], f"{out}")
+
+
+def check_home_dish_nights():
+    """Nights the notes already decide are kept: exact recipe used, anything else
+    kept in the user's words, lookalikes offered but never picked."""
+    from unittest import mock
+    recipes = {
+        "Rotisserie Leg of Lamb": {"status": "active", "filename": "Rotisserie_Leg_of_Lamb.md",
+                                   "health": "Moderate", "time": "2 hours"},
+        "Air-Fryer Marinated Pork Gyros": {"status": "active", "filename": "Air-Fryer_Marinated_Pork_Gyros.md",
+                                           "health": "Moderate", "time": "40 minutes"},
+    }
+    sel, notes = srv._resolve_home_dishes({"Sun": "rotisserie leg of lamb", "Mon": "gyros from the lamb leftovers"}, recipes)
+    check("home dish: exact name uses the recipe", sel["Sun"] == "Rotisserie Leg of Lamb", f"{sel}")
+    check("home dish: other wording kept as given", sel["Mon"] == "gyros from the lamb leftovers", f"{sel}")
+    check("home dish: recipe shown back with its link", "Rotisserie_Leg_of_Lamb" in notes[0], f"{notes}")
+
+    with mock.patch("anthropic.Anthropic", side_effect=AssertionError("no LLM call expected")):
+        got = srv._parse_home_dish_days(["Going out Thursday", "busy week"])
+    check("home dish: no day outside out-notes -> no LLM call", got == {}, f"{got}")
+
+    fake = mock.MagicMock()
+    fake.messages.create.return_value.content = [mock.MagicMock(text='{"Sun": "rotisserie lamb", "Xyz": "bad"}')]
+    with mock.patch("anthropic.Anthropic", return_value=fake):
+        got = srv._parse_home_dish_days(["Sunday: rotisserie lamb. Thursday going out"])
+    check("home dish: model reading kept, bad days dropped", got == {"Sun": "rotisserie lamb"}, f"{got}")
+
+    cand = [{"name": f"Zz Recipe {i}", "cuisine": f"C{i}", "health": "Heart-Healthy", "score": i,
+             "minutes": 30, "is_quick": True, "meal_type": "Weeknight", "protein": f"p{i}"} for i in range(10)]
+    with mock.patch.object(srv, "_load_menu_queue", return_value=[]):
+        selected, _ = srv._select_meals(cand, [], None, eating_out_days=["Thu"],
+                                        home_dishes={"Sun": "rotisserie lamb", "Thu": "ignored"})
+    check("home dish: night kept in selection", selected.get("Sun") == "rotisserie lamb", f"{selected}")
+    check("home dish: eating out still wins its night", selected.get("Thu") == "Going Out to Eat", f"{selected}")
+
+    with mock.patch.object(srv, "_load_metadata", return_value=recipes), \
+         mock.patch("anthropic.Anthropic", side_effect=Exception("offline")):
+        plan = srv._build_plan_json({"Sun": "Rotisserie Leg of Lamb", "Mon": "gyros from the lamb leftovers",
+                                     "Thu": "Going Out to Eat"}, date(2026, 11, 2), [])
+    by_day = {m["day"]: m for m in plan["meals"]}
+    check("plan: own-words night has no health/time/link",
+          by_day["Mon"]["health"] == "" and by_day["Mon"]["time"] == "" and by_day["Mon"]["url"] == "", f"{by_day['Mon']}")
+    check("plan: own-words night isn't called going out", "going out" not in by_day["Mon"]["reminder"].lower(), f"{by_day['Mon']}")
+    check("plan: going-out night keeps its reminder", by_day["Thu"]["reminder"].startswith("Going out"), f"{by_day['Thu']}")
+    check("plan: decided recipe night is a normal recipe", by_day["Sun"]["health"] == "Moderate", f"{by_day['Sun']}")
+
+
+def check_recipe_title_decoding():
+    """Fetched titles/ingredients are HTML-decoded and filenames drop punctuation."""
+    from unittest import mock
+    from recipe_md import recipe_filename
+    page = ('<script type="application/ld+json">{"@type": "Recipe", "name": "Lamb With Lemon, Rosemary, &amp; Garlic",'
+            ' "recipeIngredient": ["1 cup salt &amp; pepper"], "recipeInstructions": ["Mix &amp; cook."]}</script>')
+    resp = mock.MagicMock(text=page)
+    with mock.patch.object(srv.httpx, "get", return_value=resp):
+        data = srv._fetch_recipe_data("https://example.com/lamb")
+    check("fetch: title HTML-decoded", data["title"] == "Lamb With Lemon, Rosemary, & Garlic", f"{data}")
+    check("fetch: ingredients + steps HTML-decoded",
+          data["ingredients"] == ["1 cup salt & pepper"] and data["instructions"] == ["Mix & cook."], f"{data}")
+    check("filename: punctuation dropped", recipe_filename(data["title"]) == "Lamb_With_Lemon_Rosemary_Garlic.md",
+          recipe_filename(data["title"]))
+
+
 def check_sms_links(candidates, selected):
     """Pre-finalize texts carry a link after each recipe; finalized text is just the site link."""
     check("get_meal_suggestions candidates carry url",
@@ -674,6 +745,9 @@ def run(week_start_str: str, keep: bool) -> int:
     check_dish_boost()
     check_needs_review_excluded()
     check_eating_out_reconcile()
+    check_eating_out_day_lists()
+    check_home_dish_nights()
+    check_recipe_title_decoding()
     check_sms_links(result.get("candidates", []), selected)
     check_partner_classify_and_chmod()
     check_intake_checks()

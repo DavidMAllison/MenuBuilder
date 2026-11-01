@@ -119,7 +119,7 @@ not every tool is listed.
 | `cancel_workflow` | Resets an in-progress workflow to idle — abandon a build started by mistake, or stand down when a plan was already built through another channel. Idempotent |
 | `start_menu_workflow` | Drains feedback queue, loads last week, initializes activity |
 | `log_meal_feedback` | Records last-week ratings; `"done"` finalizes and advances state |
-| `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week; each candidate carries `url`, plus `selected_meal_urls` so SMS recommendations can put a link after each recipe name |
+| `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week; each candidate carries `url`, plus `selected_meal_urls` so SMS recommendations can put a link after each recipe name. Nights the schedule notes already decide ("Sunday: rotisserie lamb") are kept: an exact recipe name uses that recipe, anything else stays in the user's words with no link or shopping, and `home_dish_notes` lists recipes it might mean |
 | `advance_to_meal_approval` | Writes selected meals into menu_activity.json; bridges local SMS phase to MCP bridge phase |
 | `swap_meal` | Pre-finalize only: replaces one day's meal (auto-picks, or a typed name — which first returns `needs_confirmation` with the matching recipe(s) + links; call again with `confirmed=true`); returns `new_recipe_url` + `selected_meal_urls`. Refuses with `plan_finalized` once the plan is finalized — use meal_swap |
 | `approve_menu` | Sends selected meals to the partner via Keanu for signoff (each recipe name followed by its link); optional `expected_selected_meals` refuses to send if the caller's local mirror has drifted from the actual workflow state |

@@ -26,6 +26,7 @@ Tools:
 # ruff: noqa: E402  -- imports below need MENUBUILDER_DIR on sys.path first
 
 import difflib
+import html
 import json
 import os
 import random
@@ -1012,6 +1013,30 @@ _DEFAULT_CUISINE_FAMILY_CAP = 2
 _PICK_CHOICE_SIZE = 3
 
 
+_DAY_WORDS = "|".join(sorted(DAY_NAME_MAP, key=len, reverse=True))
+_DAY_WORD_RE = re.compile(rf"\b({_DAY_WORDS})\b", re.IGNORECASE)
+# "Thursday, Friday, and Saturday" -> "Thursday and Friday and Saturday", so the
+# clause split below doesn't cut a day list apart and strand the early days
+# in clauses without the signal (Nov 1 2026: only Saturday went out)
+_DAY_LIST_COMMA_RE = re.compile(rf"\b({_DAY_WORDS})\s*,\s*(?:and\s+)?(?=(?:{_DAY_WORDS})\b)", re.IGNORECASE)
+_OUT_SIGNALS = ("eating out", "going out", "out to eat", "out to dinner", "eat out")
+
+
+def _schedule_clauses(text: str) -> list:
+    """Split a schedule note into single-fact clauses, keeping day lists whole."""
+    return re.split(r"[;,.\n]", _DAY_LIST_COMMA_RE.sub(r"\1 and ", text))
+
+
+def _days_in(text: str) -> list:
+    """Day abbreviations named in text, whole words only ("lemon" isn't Monday)."""
+    days = []
+    for m in _DAY_WORD_RE.finditer(text):
+        abbrev = DAY_NAME_MAP[m.group(1).lower()]
+        if abbrev not in days:
+            days.append(abbrev)
+    return days
+
+
 def _parse_eating_out_days(constraints: str, schedule_notes: list) -> list:
     """Extract day abbreviations for eating-out days from constraints + schedule notes.
 
@@ -1021,19 +1046,93 @@ def _parse_eating_out_days(constraints: str, schedule_notes: list) -> list:
     (including unrelated practice-night days). Scope the day lookup to the
     clause containing the signal instead.
     """
-    out_signals = ("eating out", "going out", "out to eat", "out to dinner", "eat out")
     eating_out = []
     texts = [constraints] + list(schedule_notes)
     for text in texts:
         if not text:
             continue
-        for clause in re.split(r"[;,.\n]", text):
-            lower = clause.lower()
-            if any(sig in lower for sig in out_signals):
-                for day_name, abbrev in DAY_NAME_MAP.items():
-                    if day_name in lower and abbrev not in eating_out:
+        for clause in _schedule_clauses(text):
+            if any(sig in clause.lower() for sig in _OUT_SIGNALS):
+                for abbrev in _days_in(clause):
+                    if abbrev not in eating_out:
                         eating_out.append(abbrev)
     return eating_out
+
+
+_HOME_DISH_PROMPT = """Schedule notes for a family's dinner week:
+{notes}
+
+Which nights do the notes say the family is already cooking or eating something
+specific at home? For example "Sunday: rotisserie lamb", "making tacos Tuesday",
+"Monday: gyros from the lamb leftovers".
+
+Rules:
+- Skip going out, restaurants and takeout -- those are handled elsewhere.
+- Skip activities that aren't food (practice, games, appointments).
+- Use the dish wording from the notes, minus asides like "no need to plan".
+
+Return a JSON object only, day abbreviation to dish, e.g.
+{{"Sun": "rotisserie lamb", "Mon": "gyros from the lamb leftovers"}}, or {{}} if none."""
+
+
+def _parse_home_dish_days(schedule_notes: list) -> dict:
+    """{day: dish} for nights the notes say are already decided at home.
+
+    Keyword gate, then Haiku: no call unless some clause names a day without
+    an eating-out signal. A regex can't tell "Monday: gyros" from "Monday:
+    soccer until 6:30", so the reading is left to the model.
+    """
+    notes = [n for n in schedule_notes if n]
+    if not any(
+        _days_in(clause) and not any(sig in clause.lower() for sig in _OUT_SIGNALS)
+        for n in notes for clause in _schedule_clauses(n)
+    ):
+        return {}
+    import anthropic as _anthropic
+    try:
+        client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{"role": "user", "content": _HOME_DISH_PROMPT.format(notes="\n".join(notes))}],
+        )
+        text = resp.content[0].text.strip()
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+        parsed = json.loads(text)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        day: str(dish).strip()
+        for day, dish in parsed.items()
+        if day in DAYS_ORDER and str(dish).strip()
+    }
+
+
+def _resolve_home_dishes(home_dishes: dict, recipes: dict) -> tuple[dict, list]:
+    """What each decided night puts in selected_meals, plus notes to show the user.
+
+    An exact collection title becomes that recipe (link + shopping). Anything
+    else stays in the user's own words -- no link, no shopping, no first-cook
+    question next week. Recipes it could mean are listed for the user to swap
+    in, never picked for them.
+    """
+    selected, notes = {}, []
+    for day, dish in home_dishes.items():
+        key = _find_recipe_key(dish, recipes)
+        if key:
+            selected[day] = key
+            notes.append(f"{day}: {key} - {_url_for_name(key, recipes)}")
+            continue
+        selected[day] = dish
+        confirm = _confirm_recipe(dish, recipes)
+        if confirm:
+            notes.append(f"{day}: kept as \"{dish}\" (no recipe). {confirm['message']} "
+                         "Swap it in if one of those is right.")
+        else:
+            notes.append(f"{day}: kept as \"{dish}\" (no recipe in the collection).")
+    return selected, notes
 
 
 def _reconcile_eating_out(activity: dict) -> list:
@@ -1102,8 +1201,10 @@ def _select_meals(
     cuisine_direction: Optional[str],
     eating_out_days: Optional[list] = None,
     dish_boost_names: Optional[list] = None,
+    home_dishes: Optional[dict] = None,
 ) -> tuple[dict, list]:
-    """Returns (selected_meals, queue_recipe_names_placed)."""
+    """Returns (selected_meals, queue_recipe_names_placed). home_dishes
+    ({day: name}, from _resolve_home_dishes) are nights already decided."""
     pool = list(candidates)
     eating_out_set = set(eating_out_days or [])
 
@@ -1190,8 +1291,10 @@ def _select_meals(
 
     cuisine_slots = _parse_cuisine_slots(cuisine_direction or "")
     quick_set = {d.lower() for d in quick_days}
-    # Pre-fill eating-out days so _pick skips them
+    # Pre-fill eating-out and already-decided days so _pick skips them
     selected: dict = {day: "Going Out to Eat" for day in eating_out_set}
+    for day, name in (home_dishes or {}).items():
+        selected.setdefault(day, name)
     cuisine_family_counts: dict = {}
     indulgent_count = 0
 
@@ -1760,11 +1863,12 @@ def _fetch_recipe_data(url: str) -> Optional[dict]:
                 ) if text
             ]
             return {
-                "title": item.get("name", "").strip(),
+                "title": html.unescape(item.get("name", "")).strip(),
                 "time": _parse_duration(item.get("totalTime") or item.get("cookTime", "")),
                 "servings": str(item.get("recipeYield", "")),
-                "ingredients": item.get("recipeIngredient", []),
-                "instructions": instructions,
+                "ingredients": [html.unescape(i) if isinstance(i, str) else i
+                                for i in item.get("recipeIngredient", [])],
+                "instructions": [html.unescape(s) for s in instructions],
                 "cuisine": item.get("recipeCuisine", ""),
             }
     return None
@@ -1792,8 +1896,8 @@ def _write_recipe_md(title: str, recipe_data: dict, source_url: str, source_name
     since callers already have them at the call site. See recipe_md.py for
     the canonical builder every intake path shares.
     """
-    from recipe_md import build_recipe_md
-    filename = title.replace(" ", "_") + ".md"
+    from recipe_md import build_recipe_md, recipe_filename
+    filename = recipe_filename(title)
     path = RECIPES_DIR / filename
     content = build_recipe_md(
         title=title,
@@ -1872,11 +1976,18 @@ def _build_plan_json(selected: dict, week_start: date, schedule_notes: list) -> 
         dt = day_to_date.get(day)
         date_iso = dt.isoformat() if dt else ""
 
-        # Eating-out / placeholder
-        if len(names) == 1 and any(kw in names[0].lower() for kw in _SKIP_FEEDBACK_KEYWORDS):
+        # Eating-out / placeholder, or a night the user decided that isn't a
+        # collection recipe ("rotisserie lamb") -- no health, time or link
+        if len(names) == 1 and (
+            any(kw in names[0].lower() for kw in _SKIP_FEEDBACK_KEYWORDS)
+            or not _find_recipe_key(names[0], recipes)
+        ):
+            lower = names[0].lower()
+            is_out = "leftover" not in lower and any(kw in lower for kw in _SKIP_FEEDBACK_KEYWORDS)
             meals_info.append({
                 "day": day, "date": date_iso, "title": names[0],
-                "health": "", "time": "", "url": "", "urls": [], "reminder": "Going out to eat — no dinner to cook",
+                "health": "", "time": "", "url": "", "urls": [],
+                "reminder": "Going out to eat — no dinner to cook" if is_out else "",
             })
             continue
 
@@ -2456,13 +2567,19 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
                            per-day guarantee; use swap_meal() for exact placement.
         constraints: Schedule notes (e.g. "practice Monday and Wednesday, game Friday").
                      Days mentioned with activity keywords become quick-meal slots.
+                     Nights the notes already decide ("Sunday: rotisserie lamb")
+                     are kept as given -- see home_dish_notes.
 
     Returns:
         {
           "candidates": top-20 eligible recipes (name/cuisine/health/minutes/meal_type),
           "selected_meals": {day: recipe_name} auto-proposed for the week,
           "quick_days": days flagged for quick meals,
-          "week_start": "YYYY-MM-DD"
+          "week_start": "YYYY-MM-DD",
+          "home_dish_notes": (if any) one line per already-decided night -- the
+                             recipe used with its link, or the user's own wording
+                             plus collection recipes it might mean. Show these
+                             to the user.
         }
 
     selected_meals is stored in the activity state. Use swap_meal() to adjust
@@ -2488,11 +2605,10 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
     quick_days = list(activity.get("quick_days", []))
     if constraints:
         quick_signals = ("game", "practice", "busy", "quick", "early", "tournament")
-        for clause in re.split(r"[;,.\n]", constraints):
-            c_lower = clause.lower()
-            if any(s in c_lower for s in quick_signals):
-                for day_name, abbrev in DAY_NAME_MAP.items():
-                    if day_name in c_lower and abbrev not in quick_days:
+        for clause in _schedule_clauses(constraints):
+            if any(s in clause.lower() for s in quick_signals):
+                for abbrev in _days_in(clause):
+                    if abbrev not in quick_days:
                         quick_days.append(abbrev)
     activity["quick_days"] = quick_days
 
@@ -2500,6 +2616,13 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
         constraints, activity.get("schedule_notes", [])
     )
     activity["eating_out_days"] = eating_out_days
+
+    home_dish_days = {
+        d: dish for d, dish in _parse_home_dish_days(activity.get("schedule_notes", [])).items()
+        if d not in eating_out_days
+    }
+    home_dishes, home_dish_notes = _resolve_home_dishes(home_dish_days, _load_metadata())
+    activity["home_dishes"] = home_dishes
 
     candidates = _load_candidates()
     dish_boost_names = _resolve_dish_boost_names(raw_cuisine_direction, candidates)
@@ -2515,6 +2638,7 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
         cuisine_direction or activity.get("cuisine_direction"),
         eating_out_days=eating_out_days,
         dish_boost_names=dish_boost_names,
+        home_dishes=home_dishes,
     )
     activity["selected_meals"] = selected
     activity["state"] = "awaiting_meal_approval"
@@ -2548,6 +2672,8 @@ def get_meal_suggestions(cuisine_direction: str = "", constraints: str = "") -> 
         result["cuisine_direction_note"] = cuisine_note
     if dish_note:
         result["dish_direction_note"] = dish_note
+    if home_dish_notes:
+        result["home_dish_notes"] = home_dish_notes
     if queue_recipes_included:
         result["queue_recipes_included"] = queue_recipes_included
     return result

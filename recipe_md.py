@@ -21,6 +21,13 @@ from typing import Optional
 _SECTION_HEADER_RE = re.compile(r"^\*\*(.+):\*\*$")
 
 
+def recipe_filename(title: str) -> str:
+    """The .md filename for a recipe title. Punctuation is dropped so the
+    GitHub Pages URL stays clean ("Lemon, Rosemary, & Garlic" ->
+    "Lemon_Rosemary_Garlic")."""
+    return "_".join(re.sub(r"[^\w\s-]", "", title).split()) + ".md"
+
+
 def build_recipe_md(
     title: str,
     ingredients: list,
