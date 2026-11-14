@@ -78,8 +78,7 @@ def load_candidates(quick_nights=False):
 
     # Small jitter so near-equal candidates rotate week to week instead of the
     # same argmin winning forever (matches mcp/menu_server.py's _load_candidates);
-    # kept below the health bonus (15) and far below the never-cooked age bonus
-    # (~104) so big factors still rule. Plain shuffle-before-stable-sort only
+    # kept below the health bonus (15) so big factors still rule. Plain shuffle-before-stable-sort only
     # reorders exact score ties, which are rare, so without this the top
     # scorer in each protein group was deterministic week over week.
     for c in candidates:

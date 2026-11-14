@@ -10,6 +10,8 @@ paths (Phase 4.3, architecture_review_and_fix_plan.md).
 """
 
 import json
+import math
+import random
 import re
 
 from intake_checks import is_quick_blocked
@@ -19,6 +21,14 @@ RECENCY_WEEKS = 3          # avoid meals cooked within this many weeks
 DECLINE_COOLDOWN_WEEKS = RECENCY_WEEKS  # avoid resurfacing a swapped-out/not_cooked meal this soon
 QUICK_THRESHOLD = 35       # minutes -- "quick" meals for practice nights
 SPRING_SUMMER = (4, 9)     # months April-September: prioritize grill
+# Anything unmade this long is fully "due". Was 52 -- a never-cooked recipe
+# counted as a year overdue, ~90 points ahead of every proven meal, so weekday
+# picks only ever came from the ~55 never-cooked Heart-Healthy recipes
+AGE_CAP_WEEKS = 8
+TIMES_COOKED_PENALTY_CAP = 5  # so a family favorite isn't buried for being cooked a lot
+# Score points per e-fold of pick weight in weighted_pick(): Heart-Healthy's
+# 15 points is ~6x the odds, an inventory match (7) ~2.4x
+PICK_TEMPERATURE = 8.0
 TRACKED_FRESH_HERBS = ['cilantro', 'mint', 'dill', 'parsley', 'tarragon', 'chives']
 
 # Proteins currently excluded from candidates entirely. Empty for now --
@@ -295,7 +305,7 @@ def candidate_score(c: dict) -> float:
     """Lower score = better candidate."""
     s = 0.0
     # Prefer not-recently-cooked (older = better)
-    s -= min(c.get('age_weeks', 0), 52) * 2
+    s -= min(c.get('age_weeks', 0), AGE_CAP_WEEKS) * 2
     # Prefer heart-healthy
     health = c.get('health', 'Moderate')
     if health == 'Heart-Healthy':
@@ -303,7 +313,7 @@ def candidate_score(c: dict) -> float:
     elif health == 'Indulgent':
         s += 10
     # Prefer less-cooked (new/underused recipes)
-    s += c.get('times_cooked', 0) * 2
+    s += min(c.get('times_cooked', 0), TIMES_COOKED_PENALTY_CAP) * 2
     # Prefer grill in season
     if c.get('is_grill') and c.get('is_grill_season'):
         s -= 4
@@ -339,6 +349,15 @@ def candidate_score(c: dict) -> float:
     if c.get('preference_flagged'):
         s += 25
     return s
+
+
+def weighted_pick(cands: list, temperature: float = PICK_TEMPERATURE) -> dict:
+    """Random pick across all of cands, weighted by c['score'] (lower = likelier).
+    Every candidate keeps a real chance -- unlike taking the top few by score,
+    which locks in whichever group the score happens to put first."""
+    best = min(c['score'] for c in cands)
+    weights = [math.exp((best - c['score']) / temperature) for c in cands]
+    return random.choices(cands, weights=weights, k=1)[0]
 
 
 def load_candidates(recipes: dict, *, adult_names: set, garden_herbs: list,

@@ -99,6 +99,29 @@ def check_dish_boost():
           target in selected.values(), f"target={target!r} selected={selected}")
 
 
+def check_selection_variety():
+    """Picks spread across the whole pool, proven meals included. The old
+    52-week age bonus put every never-cooked recipe ~90 points ahead of any
+    proven one and _pick() took the top 3 -- proven meals were never picked."""
+    from unittest import mock
+    cand = []
+    for i in range(80):
+        new = i % 2 == 0
+        c = {"name": f"Zz Recipe {i}", "cuisine": f"C{i}", "health": "Heart-Healthy",
+             "minutes": 30, "is_quick": True, "meal_type": "Weeknight", "protein": f"p{i}",
+             "times_cooked": 0 if new else 3, "age_weeks": 999 if new else 10}
+        c["score"] = srv.cs.candidate_score(c)
+        cand.append(c)
+    picks = []
+    with mock.patch.object(srv, "_load_menu_queue", return_value=[]):
+        for _ in range(26):
+            selected, _ = srv._select_meals(cand, [], None)
+            picks += [n for n in selected.values() if n.startswith("Zz")]
+    proven = sum(1 for n in picks if int(n.split()[-1]) % 2)
+    check("selection: proven recipes get picked", proven >= len(picks) // 5, f"{proven}/{len(picks)}")
+    check("selection: picks spread across the pool", len(set(picks)) >= 50, f"{len(set(picks))} distinct")
+
+
 def check_needs_review_excluded():
     """A needs_review recipe (e.g. instructions cut off mid-recipe) must never
     reach the candidate pool. Pure filter call on an in-memory dict -- no I/O."""
@@ -754,6 +777,7 @@ def run(week_start_str: str, keep: bool) -> int:
     # 4b. Dish/protein matching wiring (mocked Haiku call — deterministic, no network)
     check_dish_gate()
     check_dish_boost()
+    check_selection_variety()
     check_needs_review_excluded()
     check_eating_out_reconcile()
     check_eating_out_day_lists()

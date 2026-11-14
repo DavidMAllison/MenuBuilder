@@ -948,8 +948,8 @@ def _load_candidates() -> list:
     )
 
     # Small jitter so near-equal candidates rotate week to week instead of
-    # the same argmin winning forever; kept below the health bonus (15) and
-    # far below the never-cooked age bonus (~104) so big factors still rule
+    # the same argmin winning forever; kept below the health bonus (15) so big
+    # factors still rule. _pick() samples by score, so this mostly shuffles order
     for c in candidates:
         c["score"] = cs.candidate_score(c) + random.uniform(-4, 4)
 
@@ -1008,9 +1008,6 @@ def _parse_cuisine_slots(direction: str) -> dict:
 # Max meals per cuisine family per week unless the direction explicitly
 # quantifies that family (e.g. "three Mexican") via _parse_cuisine_slots
 _DEFAULT_CUISINE_FAMILY_CAP = 2
-
-# Each day picks randomly among this many top-ranked eligible candidates
-_PICK_CHOICE_SIZE = 3
 
 
 _DAY_WORDS = "|".join(sorted(DAY_NAME_MAP, key=len, reverse=True))
@@ -1239,7 +1236,9 @@ def _select_meals(
                     "is_quick": (minutes <= QUICK_THRESHOLD or meta.get("cooking_method") == "slow_cooker")
                                 and not is_quick_blocked(meta),
                     "meal_type": meta.get("meal_type", "Weeknight"),
-                    "score": -100,
+                    "times_cooked": 0,
+                    "score": cs.candidate_score({"health": meta.get("health", "Moderate"),
+                                                 "age_weeks": cs.AGE_CAP_WEEKS}),
                 })
         random.shuffle(new_matches)
         pool[:0] = new_matches
@@ -1273,7 +1272,9 @@ def _select_meals(
                     "is_quick": (minutes <= QUICK_THRESHOLD or meta.get("cooking_method") == "slow_cooker")
                                 and not is_quick_blocked(meta),
                     "meal_type": meta.get("meal_type", "Weeknight"),
-                    "score": -100,
+                    "times_cooked": 0,
+                    "score": cs.candidate_score({"health": meta.get("health", "Moderate"),
+                                                 "age_weeks": cs.AGE_CAP_WEEKS}),
                 })
         random.shuffle(new_dish_matches)
         pool[:0] = new_dish_matches
@@ -1353,18 +1354,30 @@ def _select_meals(
         if not entry.get("day", ""):
             _try_place_queue_entry(entry, DAYS_ORDER)
 
-    def _pick(days_subset, require_quick=False, require_weekend=False):
+    direction_lower = (cuisine_direction or "").lower()
+    if direction_lower == "what we've got":
+        direction_lower = ""
+
+    def _tier(c):
+        # Same precedence the pool sort encodes: dish match > cuisine match > rest
+        return (0 if c["name"].lower() in dish_boost_set else 1,
+                0 if direction_lower and _direction_matches_cuisine(c.get("cuisine", ""), direction_lower) else 1)
+
+    def _pick(days_subset, require_quick=False, require_weekend=False, require_new=False):
         nonlocal indulgent_count
         for day in days_subset:
             if day in selected:
                 continue
-            # Collect the top eligible candidates, then choose one at random —
-            # always taking the first meant the same argmin won every week
+            # Weighted pick across every eligible candidate in the best tier.
+            # Picking among only the top 3 by score kept weekday picks inside
+            # the same ~55 recipes week after week
             eligible = []
             for c in pool:
                 if c["name"] in selected.values():
                     continue
                 if require_quick and not c["is_quick"]:
+                    continue
+                if require_new and c.get("times_cooked", 0) != 0:
                     continue
                 meal_type_norm = str(c.get("meal_type", "")).strip().lower()
                 if require_weekend and meal_type_norm != "weekend":
@@ -1382,11 +1395,10 @@ def _select_meals(
                 if cuisine_family_counts.get(fam, 0) >= slot_cap and len(pool) > len(days_subset) * 2:
                     continue
                 eligible.append(c)
-                if len(eligible) >= _PICK_CHOICE_SIZE:
-                    break
             if not eligible:
                 continue
-            c = random.choice(eligible)
+            best_tier = min(_tier(c) for c in eligible)
+            c = cs.weighted_pick([c for c in eligible if _tier(c) == best_tier])
             fam = _CUISINE_FAMILY_MAP.get(c.get("cuisine", ""), c.get("cuisine", ""))
             selected[day] = c["name"]
             cuisine_family_counts[fam] = cuisine_family_counts.get(fam, 0) + 1
@@ -1396,6 +1408,18 @@ def _select_meals(
     _pick(["Sat", "Sun"], require_weekend=True)
     quick_abbrevs = [a for a in DAYS_ORDER if a.lower() in quick_set or a[:3].lower() in quick_set]
     _pick(quick_abbrevs, require_quick=True)
+
+    # New-recipe pressure (CLAUDE.md: at least 1 untried meal a week) is its
+    # own slot now, not a score bonus -- the old 52-week age bonus did this by
+    # crowding proven meals out of every slot
+    if not any(recipes.get(n, {}).get("times_cooked", 1) == 0 for n in selected.values()):
+        open_days = [d for d in DAYS_ORDER if d not in selected]
+        random.shuffle(open_days)
+        for day in open_days:
+            _pick([day], require_new=True)
+            if day in selected:
+                break
+
     _pick(DAYS_ORDER)
 
     # Last-resort fill for any day _pick() couldn't satisfy (thin pool after caps).
