@@ -118,7 +118,7 @@ not every tool is listed.
 |---|---|
 | `get_workflow_state` | Returns current workflow step and state data; flags `stale_code_warning` if `menu_server.py` changed on disk since this process started (run `restart_mcp.sh`) |
 | `cancel_workflow` | Resets an in-progress workflow to idle — abandon a build started by mistake, or stand down when a plan was already built through another channel. Idempotent |
-| `start_menu_workflow` | Drains feedback queue, loads last week, initializes activity |
+| `start_menu_workflow` | Drains feedback queue, loads last week, initializes activity. Refuses a week that already has a plan file unless `replan=True` |
 | `log_meal_feedback` | Records last-week ratings; `"done"` finalizes and advances state |
 | `get_meal_suggestions` | Scores candidates, auto-selects 7 meals for the week; each candidate carries `url`, plus `selected_meal_urls` so SMS recommendations can put a link after each recipe name. Nights the schedule notes already decide ("Sunday: rotisserie lamb") are kept: an exact recipe name uses that recipe, anything else stays in the user's words with no link or shopping, and `home_dish_notes` lists recipes it might mean |
 | `advance_to_meal_approval` | Writes selected meals into menu_activity.json; bridges local SMS phase to MCP bridge phase |

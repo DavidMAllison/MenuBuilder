@@ -884,6 +884,16 @@ def run(week_start_str: str, keep: bool) -> int:
         check("plan meals have required fields",
               all("day" in m and "title" in m and "date" in m for m in meals))
 
+    # 5b. A finished week can't be restarted by accident (Nov 15: Keanu's Sunday
+    # trigger restarted one and its "last week" became that week's own plan)
+    again = srv.start_menu_workflow(week_start=week_start_str)
+    check("start refused for an already-planned week", again.get("already_planned") is True, str(again))
+    check("refused start leaves state complete", srv._load_activity().get("state") == "complete",
+          str(srv._load_activity().get("state")))
+    again = srv.start_menu_workflow(week_start=week_start_str, replan=True)
+    check("replan=True rebuilds a planned week", again.get("state") == "awaiting_meal_logging",
+          str(again.get("state")))
+
     # 6. Disable test mode + verify cleanup
     srv.set_test_mode(False)
     check("_TEST_DIR cleared after disable", srv._TEST_DIR is None)

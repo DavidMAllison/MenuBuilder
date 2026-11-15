@@ -2261,7 +2261,7 @@ def cancel_workflow() -> dict:
 
 
 @mcp.tool()
-def start_menu_workflow(week_start: str = "") -> dict:
+def start_menu_workflow(week_start: str = "", replan: bool = False) -> dict:
     """
     Initialize a new weekly menu build workflow.
 
@@ -2276,6 +2276,13 @@ def start_menu_workflow(week_start: str = "") -> dict:
                     Use this to plan future weeks (e.g. "2026-07-13" for the week
                     starting July 13). If a non-Monday date is provided, it is
                     normalized to the Monday of that week.
+        replan: Rebuild a week that already has a finalized plan file. Without
+                it the call is refused -- an automated trigger restarting a
+                finished week would read that week's own plan as "last week"
+                and log its uncooked meals as cooked (Nov 15 2026).
+
+    Refused (nothing written) when mealplan_<week>.json already exists and
+    replan is False: {"error": ..., "already_planned": True, "week_start", "plan_path"}.
 
     Returns the new activity state including:
         week_start:  ISO date of the Monday (e.g. "2026-06-29")
@@ -2284,6 +2291,27 @@ def start_menu_workflow(week_start: str = "") -> dict:
 
     State after call: awaiting_meal_logging
     """
+    if week_start:
+        try:
+            ws = date.fromisoformat(week_start)
+            # Normalize to Monday of the given week
+            if ws.weekday() != 0:
+                ws = ws - timedelta(days=ws.weekday())
+        except ValueError:
+            return {"error": f"Invalid week_start date: {week_start!r}. Use YYYY-MM-DD format."}
+    else:
+        ws = _get_week_start()
+
+    plan_dir = (_TEST_DIR / "weeklyplan") if _TEST_DIR else WEEKLYPLAN_DIR
+    existing_plan = plan_dir / f"mealplan_{ws.isoformat()}.json"
+    if existing_plan.exists() and not replan:
+        return {
+            "error": f"The week of {ws.isoformat()} is already planned. Pass replan=True to rebuild it.",
+            "already_planned": True,
+            "week_start": ws.isoformat(),
+            "plan_path": str(existing_plan),
+        }
+
     cmd = [sys.executable, str(MENUBUILDER_DIR / "process_feedback_queue.py")]
     try:
         subprocess.run(cmd, capture_output=True, text=True, timeout=20)
@@ -2323,17 +2351,6 @@ def start_menu_workflow(week_start: str = "") -> dict:
                             meal["sms_feedback"] = "already logged"
     except Exception:
         pass
-
-    if week_start:
-        try:
-            ws = date.fromisoformat(week_start)
-            # Normalize to Monday of the given week
-            if ws.weekday() != 0:
-                ws = ws - timedelta(days=ws.weekday())
-        except ValueError:
-            return {"error": f"Invalid week_start date: {week_start!r}. Use YYYY-MM-DD format."}
-    else:
-        ws = _get_week_start()
 
     week_sunday = ws - timedelta(days=1)
     week_saturday = ws + timedelta(days=5)
