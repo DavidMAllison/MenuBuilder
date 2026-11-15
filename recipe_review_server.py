@@ -36,7 +36,7 @@ from fill_menu_ideas import (  # noqa: E402
 )
 import github_sync  # noqa: E402
 from intake_checks import run_intake_checks  # noqa: E402
-from plan_utils import cuisine_name  # noqa: E402
+from plan_utils import cuisine_name, current_plan_file  # noqa: E402
 from prep_utils import classify_prep  # noqa: E402
 
 app = Flask(__name__, static_folder="recipe_review")
@@ -752,16 +752,7 @@ def this_week():
     if not weeklyplan_dir.exists():
         return jsonify({"found": False, "meals": []})
 
-    today = date.today()
-    dated = []
-    for f in weeklyplan_dir.glob("mealplan_*.json"):
-        try:
-            d = date.fromisoformat(f.stem.replace("mealplan_", ""))
-            dated.append((d, f))
-        except ValueError:
-            continue
-    dated.sort(key=lambda x: x[0], reverse=True)
-    plan_file = next((f for d, f in dated if d <= today + timedelta(days=1)), None)
+    plan_file = current_plan_file(weeklyplan_dir)
     if not plan_file:
         return jsonify({"found": False, "meals": []})
 

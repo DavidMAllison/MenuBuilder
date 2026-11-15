@@ -57,8 +57,8 @@ from intake_checks import condiment_links, day_before_note, is_quick_blocked, ru
 from recipe_fetch import HEADERS as _FETCH_HEADERS
 from recipe_fetch import fetch_recipe as _fetch_recipe_data
 from plan_utils import (
-    add_day_before_reminders, build_shopping_csv, canonical_ing, cuisine_name, day_date_map, day_meals,
-    display_ing, find_recipe_key, name_candidates,
+    add_day_before_reminders, build_shopping_csv, canonical_ing, cuisine_name, current_plan_file, day_date_map,
+    day_meals, display_ing, find_recipe_key, name_candidates,
 )
 
 # ---------------------------------------------------------------------------
@@ -3777,8 +3777,9 @@ def get_current_plan() -> dict:
     """
     Return the current week's meal plan.
 
-    Finds the most recent mealplan_YYYY-MM-DD.json that covers today
-    (plan filename is Monday; week starts Sunday, so Sunday is included).
+    Uses plan_utils.current_plan_file: the plan whose Sun-Sat week covers
+    today, else the next upcoming one (a plan finalized Saturday shows right
+    away), else the latest past one.
 
     Returns:
         {
@@ -3798,21 +3799,12 @@ def get_current_plan() -> dict:
     the old .txt files used, URLs included). Callers that want a clean version
     can strip URLs themselves.
 
-    "found": false is returned when no plan covers today.
+    "found": false is returned when there are no plan files at all.
     """
     if not WEEKLYPLAN_DIR.exists():
         return {"found": False}
 
-    today = date.today()
-    dated = []
-    for f in WEEKLYPLAN_DIR.glob("mealplan_*.json"):
-        try:
-            d = date.fromisoformat(f.stem.replace("mealplan_", ""))
-            dated.append((d, f))
-        except ValueError:
-            continue
-    dated.sort(key=lambda x: x[0], reverse=True)
-    plan_file = next((f for d, f in dated if d <= today + timedelta(days=1)), None)
+    plan_file = current_plan_file(WEEKLYPLAN_DIR)
     if not plan_file:
         return {"found": False}
 
@@ -3863,16 +3855,7 @@ def update_plan_meal(day: str, title: str, confirmed: bool = False) -> dict:
     if not WEEKLYPLAN_DIR.exists():
         return {"success": False, "day": day, "title": title, "error": "No weeklyplan directory found."}
 
-    today = date.today()
-    dated = []
-    for f in WEEKLYPLAN_DIR.glob("mealplan_*.json"):
-        try:
-            d = date.fromisoformat(f.stem.replace("mealplan_", ""))
-            dated.append((d, f))
-        except ValueError:
-            continue
-    dated.sort(key=lambda x: x[0], reverse=True)
-    plan_file = next((f for d, f in dated if d <= today + timedelta(days=1)), None)
+    plan_file = current_plan_file(WEEKLYPLAN_DIR)
     if not plan_file:
         return {"success": False, "day": day, "title": title, "error": "No current meal plan found."}
 

@@ -49,6 +49,29 @@ def day_date_map(week_start: date) -> dict:
 _NAME_STOPWORDS = {"with", "and", "the", "style", "easy", "quick", "simple", "recipe"}
 
 
+def current_plan_file(plan_dir: Path, today: Optional[date] = None) -> Optional[Path]:
+    """The plan to show as "this week": the one whose week covers today, else
+    the next upcoming one, else the latest past one. Files are named by the
+    Monday and the week runs Sun-Sat. The old "file date <= tomorrow" rule hid
+    a plan finalized on Saturday until Sunday and showed a stale week instead.
+    Not for last week's meal logging -- that must never pick an upcoming plan."""
+    today = today or date.today()
+    weeks = []
+    for f in plan_dir.glob("mealplan_*.json"):
+        try:
+            monday = date.fromisoformat(f.stem.replace("mealplan_", ""))
+        except ValueError:
+            continue
+        weeks.append((monday - timedelta(days=1), monday + timedelta(days=5), f))
+    covering = [w for w in weeks if w[0] <= today <= w[1]]
+    if covering:
+        return max(covering)[2]
+    upcoming = [w for w in weeks if w[0] > today]
+    if upcoming:
+        return min(upcoming)[2]
+    return max(weeks)[2] if weeks else None
+
+
 def _norm_name(s: str) -> str:
     # Drop plan annotations ("[Heart-Healthy] *NEW*"), then punctuation, so
     # "Honey Tahini" == "Honey-Tahini" and "&" == "and" differences don't matter.

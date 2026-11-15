@@ -122,6 +122,29 @@ def check_selection_variety():
     check("selection: picks spread across the pool", len(set(picks)) >= 50, f"{len(set(picks))} distinct")
 
 
+def check_current_plan_file():
+    """A plan finalized Saturday shows as this week right away; a week with its
+    own plan keeps it through Saturday; with no current or upcoming plan, the
+    latest past one."""
+    import tempfile
+    from plan_utils import current_plan_file
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        check("current plan: no files -> None", current_plan_file(d, date(2026, 11, 14)) is None)
+        for name in ("mealplan_2026-11-02.json", "mealplan_2026-11-16.json", "mealplan_2026-11-16_feedback.json"):
+            (d / name).write_text("{}")
+        cases = [
+            (date(2026, 11, 14), "mealplan_2026-11-16.json"),  # Sat, gap week: upcoming, not 2 weeks stale
+            (date(2026, 11, 15), "mealplan_2026-11-16.json"),  # Sun, first day of the week
+            (date(2026, 11, 7), "mealplan_2026-11-02.json"),   # Sat with its own plan: keep it
+            (date(2026, 11, 4), "mealplan_2026-11-02.json"),   # midweek
+            (date(2026, 11, 30), "mealplan_2026-11-16.json"),  # nothing current/upcoming: latest past
+        ]
+        for today, want in cases:
+            got = current_plan_file(d, today)
+            check(f"current plan on {today}", got is not None and got.name == want, f"got {got and got.name}")
+
+
 def check_needs_review_excluded():
     """A needs_review recipe (e.g. instructions cut off mid-recipe) must never
     reach the candidate pool. Pure filter call on an in-memory dict -- no I/O."""
@@ -778,6 +801,7 @@ def run(week_start_str: str, keep: bool) -> int:
     check_dish_gate()
     check_dish_boost()
     check_selection_variety()
+    check_current_plan_file()
     check_needs_review_excluded()
     check_eating_out_reconcile()
     check_eating_out_day_lists()
